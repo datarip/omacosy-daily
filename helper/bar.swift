@@ -26,6 +26,7 @@
 // which have no publisher to listen to.
 import ApplicationServices
 import AppKit
+import ScreenCaptureKit
 import CoreAudio
 import CoreBluetooth
 import CoreLocation
@@ -375,6 +376,64 @@ struct Media: Equatable {
 
 let model = Model()
 var palette = loadPalette()
+
+// The backdrop's colour is correct already — it is an NSVisualEffectView
+// showing the menu-bar material. What was wrong is that the window server
+// recomputes that blur every time the window comes back, and answers
+// asynchronously: recorded at 60fps the bar was transparent for about
+// seven frames after every reveal and the native bar read through it.
+//
+// So the blur is read ONCE and kept. The first reveal after startup, or
+// after theme-set swaps the wallpaper, renders through the effect view as
+// before; a beat later the bar captures ITSELF and stores what the blur
+// resolved to, per column. Every reveal after that paints the stored
+// colours on the first frame and nothing is computed at all.
+//
+// Capturing our own window rather than the display is deliberate: a
+// display capture does not include the menu bar, and reading the desktop
+// instead means guessing at the material the menu bar applies on top.
+//
+// Per column, not one average: the strip sits over a window at one end and
+// the desktop at the other, and the material tracks that.
+func captureOwnStrip(_ surface: BarSurface) {
+    guard surface.backdropStrip.isEmpty, !stripCaptureInFlight,
+          surface.revealed, surface.window.isVisible else { return }
+    stripCaptureInFlight = true
+    let wanted = screenID(surface.screen)
+    Task { @MainActor in
+        defer { stripCaptureInFlight = false }
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(
+                  false, onScreenWindowsOnly: true),
+              let display = content.displays.first(where: { $0.displayID == wanted })
+        else { return }
+        // The DISPLAY, cropped to the strip, not this window. Blending is
+        // .behindWindow, so the blur is composited by the window server
+        // BEHIND the window: capturing the window alone returns the pills on
+        // transparency and none of the colour we are here for.
+        let cfg = SCStreamConfiguration()
+        cfg.sourceRect = CGRect(x: 0, y: 0, width: CGFloat(display.width), height: barHeight)
+        cfg.width = 96          // bands across the bar
+        cfg.height = 4
+        cfg.showsCursor = false
+        guard let cg = try? await SCScreenshotManager.captureImage(
+                  contentFilter: SCContentFilter(display: display, excludingWindows: []),
+                  configuration: cfg) else { return }
+        let bitmap = NSBitmapImageRep(cgImage: cg)
+        var columns: [NSColor] = []
+        for x in 0..<bitmap.pixelsWide {
+            var r = 0.0, g = 0.0, b = 0.0, n = 0.0
+            for y in 0..<bitmap.pixelsHigh {
+                guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                r += c.redComponent; g += c.greenComponent; b += c.blueComponent; n += 1
+            }
+            if n > 0 { columns.append(NSColor(srgbRed: r/n, green: g/n, blue: b/n, alpha: 1)) }
+        }
+        guard !columns.isEmpty else { return }
+        surface.backdropStrip = columns
+    }
+}
+
+var stripCaptureInFlight = false
 
 // SLOW path: who lives where. Three CLI calls — and it runs only when a
 // window is created or destroyed, never on a workspace switch.
@@ -2542,6 +2601,19 @@ final class BarView: NSView {
         let iconFont = nerdFont("Bold", 14)
         guard let surface else { return }
 
+        // The stored blur, painted on the first frame. While it is empty the
+        // effect view behind shows through and does the work, which is the
+        // one reveal per wallpaper that pays for the capture.
+        if !surface.backdropStrip.isEmpty {
+            let band = bounds.width / CGFloat(surface.backdropStrip.count)
+            for (i, colour) in surface.backdropStrip.enumerated() {
+                colour.setFill()
+                // half a point of overlap so no seam shows between bands
+                NSRect(x: CGFloat(i) * band - 0.5, y: 0,
+                       width: band + 1, height: bounds.height).fill()
+            }
+        }
+
         // workspace chips, in one bracket — this display's set only.
         // Undocked, force-assignment parks the GUEST set (11-19) on the
         // single display, where its empty slots would render as
@@ -2851,6 +2923,9 @@ final class BarSurface {
     let window: BarWindow
     let view: BarView
     let backdrop: NSVisualEffectView
+    // What the blur resolved to, one entry per column. Empty until the
+    // first reveal has been captured; cleared when the wallpaper changes.
+    var backdropStrip: [NSColor] = []
 
     // A notched display has no usable centre, so the media capsule joins
     // the left cluster there — the same rule the shell bar applies, but
@@ -3132,6 +3207,11 @@ func setRevealed(_ show: Bool, on surface: BarSurface) {
         CATransaction.commit()
     }
     updateBarVisibility(surface)
+    // Give the window server time to resolve the blur, then keep the answer.
+    // Does nothing once a strip is stored, so this runs once per wallpaper.
+    if show, surface.backdropStrip.isEmpty {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { captureOwnStrip(surface) }
+    }
 }
 
 // Notched displays only. The bar is visible at rest and hiding it reclaims
@@ -3213,6 +3293,11 @@ func updateBarVisibility(_ surface: BarSurface, covered: Set<CGDirectDisplayID>?
         surface.window.orderOut(nil)
         if openPopup != nil { closePopup() }
     } else {
+        // Draw BEFORE the window is composited. Ordering it front first
+        // shows whatever the effect view behind has resolved so far, and
+        // the stored fill only lands a few frames later — which is the
+        // ramp this whole cache exists to remove.
+        surface.view.display()
         surface.window.orderFrontRegardless()
     }
 }
@@ -3579,6 +3664,9 @@ watch(FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".config/omarchy/current").path, create: false) {
     let t0 = DispatchTime.now().uptimeNanoseconds
     palette = loadPalette()
+    // theme-set swaps the wallpaper, so the stored blur no longer describes
+    // it. Dropped here; the next reveal renders live and is captured again.
+    for surface in surfaces { surface.backdropStrip.removeAll() }
     iconCache.removeAll()
     repaint()
     if cheatWindow != nil { hideCheatsheet(); toggleCheatsheet() } // repaint in the new palette
