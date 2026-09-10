@@ -389,47 +389,74 @@ var palette = loadPalette()
 // resolved to, per column. Every reveal after that paints the stored
 // colours on the first frame and nothing is computed at all.
 //
-// Capturing our own window rather than the display is deliberate: a
-// display capture does not include the menu bar, and reading the desktop
-// instead means guessing at the material the menu bar applies on top.
+// Read with screencapture(1), not ScreenCaptureKit. A ScreenCaptureKit
+// display capture does NOT include the menu bar — measured, it returns the
+// window underneath — and capturing a window returns its own drawing
+// without the backdrop the window server composites behind it. Reading the
+// desktop instead does not work either: the menu bar is brighter than the
+// wallpaper it tints from, by about 36 in red here, and that is not a
+// constant worth fitting.
+//
+// So the sample is taken at the one moment the native bar is on screen and
+// this one is not: a hover on the RIGHT half, the half the native bar owns.
 //
 // Per column, not one average: the strip sits over a window at one end and
 // the desktop at the other, and the material tracks that.
 func captureOwnStrip(_ surface: BarSurface) {
-    guard surface.backdropStrip.isEmpty, !stripCaptureInFlight,
-          surface.revealed, surface.window.isVisible else { return }
+    guard !stripCaptureInFlight, !surface.revealed, !surface.window.isVisible
+    else { return }
     stripCaptureInFlight = true
-    let wanted = screenID(surface.screen)
-    Task { @MainActor in
-        defer { stripCaptureInFlight = false }
-        guard let content = try? await SCShareableContent.excludingDesktopWindows(
-                  false, onScreenWindowsOnly: true),
-              let display = content.displays.first(where: { $0.displayID == wanted })
+    let frame = surface.screen.frame
+    let origin = CGPoint(x: frame.minX, y: 0)      // screencapture uses top-left
+    DispatchQueue.global(qos: .utility).async {
+        defer { DispatchQueue.main.async { stripCaptureInFlight = false } }
+        let path = "/tmp/omacosy-bar-strip.png"
+        _ = shell("/usr/sbin/screencapture", [
+            "-x", "-o",
+            "-R\(Int(origin.x)),\(Int(origin.y)),\(Int(frame.width)),\(Int(barHeight))",
+            path])
+        guard let image = NSImage(contentsOfFile: path),
+              let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff), bitmap.pixelsWide > 0
         else { return }
-        // The DISPLAY, cropped to the strip, not this window. Blending is
-        // .behindWindow, so the blur is composited by the window server
-        // BEHIND the window: capturing the window alone returns the pills on
-        // transparency and none of the colour we are here for.
-        let cfg = SCStreamConfiguration()
-        cfg.sourceRect = CGRect(x: 0, y: 0, width: CGFloat(display.width), height: barHeight)
-        cfg.width = 96          // bands across the bar
-        cfg.height = 4
-        cfg.showsCursor = false
-        guard let cg = try? await SCScreenshotManager.captureImage(
-                  contentFilter: SCContentFilter(display: display, excludingWindows: []),
-                  configuration: cfg) else { return }
-        let bitmap = NSBitmapImageRep(cgImage: cg)
-        var columns: [NSColor] = []
-        for x in 0..<bitmap.pixelsWide {
-            var r = 0.0, g = 0.0, b = 0.0, n = 0.0
-            for y in 0..<bitmap.pixelsHigh {
-                guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                r += c.redComponent; g += c.greenComponent; b += c.blueComponent; n += 1
+        // One entry per band. The strip sits over a window at one end and the
+        // desktop at the other, and the menu bar tracks that, so a single
+        // average is visibly wrong at one end or the other.
+        // The native bar is a vertical GRADIENT, not a flat colour, and the
+        // capture also holds its text and icons. Both are handled by taking,
+        // for each ROW, the median across the full width: a menu title is a
+        // small fraction of the row, so it is outvoted, and what survives is
+        // that row's background. Sampling only the glyph-free top rows and
+        // painting them flat came out about 29 too high in green, because
+        // the top of the gradient is its lightest part.
+        let space = bitmap.colorSpace
+        var rows: [NSColor] = []
+        rows.reserveCapacity(bitmap.pixelsHigh)
+        for y in 0..<bitmap.pixelsHigh {
+            var samples: [(Double, Double, Double, Double)] = []
+            samples.reserveCapacity(bitmap.pixelsWide / 4 + 1)
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 4) {
+                // NO colour space conversion, either way. The capture carries
+                // the display's profile, and asking for sRGB or deviceRGB
+                // converts on the way in while AppKit converts again on the
+                // way out: painting 161,65,129 measured back as 172,97,143,
+                // which is the whole of the mismatch. Kept in the bitmap's own
+                // space, the round trip is identity.
+                guard let c = bitmap.colorAt(x: x, y: y) else { continue }
+                let r = c.redComponent, g = c.greenComponent, b = c.blueComponent
+                samples.append((0.299 * r + 0.587 * g + 0.114 * b, r, g, b))
             }
-            if n > 0 { columns.append(NSColor(srgbRed: r/n, green: g/n, blue: b/n, alpha: 1)) }
+            guard !samples.isEmpty else { continue }
+            samples.sort { $0.0 < $1.0 }
+            let mid = samples[samples.count / 2]
+            rows.append(NSColor(colorSpace: space,
+                                components: [CGFloat(mid.1), CGFloat(mid.2), CGFloat(mid.3), 1],
+                                count: 4))
         }
+        let columns = rows
+        try? FileManager.default.removeItem(atPath: path)
         guard !columns.isEmpty else { return }
-        surface.backdropStrip = columns
+        DispatchQueue.main.async { surface.backdropStrip = columns }
     }
 }
 
@@ -2605,12 +2632,13 @@ final class BarView: NSView {
         // effect view behind shows through and does the work, which is the
         // one reveal per wallpaper that pays for the capture.
         if !surface.backdropStrip.isEmpty {
-            let band = bounds.width / CGFloat(surface.backdropStrip.count)
+            // Stored top-down, drawn bottom-up: the view is not flipped.
+            let band = bounds.height / CGFloat(surface.backdropStrip.count)
             for (i, colour) in surface.backdropStrip.enumerated() {
                 colour.setFill()
-                // half a point of overlap so no seam shows between bands
-                NSRect(x: CGFloat(i) * band - 0.5, y: 0,
-                       width: band + 1, height: bounds.height).fill()
+                // half a point of overlap so no seam shows between rows
+                NSRect(x: 0, y: bounds.maxY - CGFloat(i + 1) * band - 0.5,
+                       width: bounds.width, height: band + 1).fill()
             }
         }
 
@@ -3207,11 +3235,6 @@ func setRevealed(_ show: Bool, on surface: BarSurface) {
         CATransaction.commit()
     }
     updateBarVisibility(surface)
-    // Give the window server time to resolve the blur, then keep the answer.
-    // Does nothing once a strip is stored, so this runs once per wallpaper.
-    if show, surface.backdropStrip.isEmpty {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { captureOwnStrip(surface) }
-    }
 }
 
 // Notched displays only. The bar is visible at rest and hiding it reclaims
@@ -3248,7 +3271,20 @@ func pointerAtScreenTop() {
             // Left half asks for this bar. Right half is left alone, so the
             // native bar arrives by itself and its status-item-only apps
             // are reachable.
-            if surface.latchedBar { setRevealed(true, on: surface) }
+            if surface.latchedBar {
+                setRevealed(true, on: surface)
+            } else {
+                // Right half: the native bar comes up alone. Give it a beat
+                // to arrive, then keep what it looks like. EVERY time, not
+                // just the first: the native bar re-tints as windows move
+                // under it, measured anywhere from 37,34,28 to 190,90,138 in
+                // one session, so a single snapshot goes stale. This costs a
+                // subprocess on a hover that nothing is waiting on, and the
+                // reveal still paints a colour it already has.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    captureOwnStrip(surface)
+                }
+            }
         } else if surface.latchedBar {
             // Notched, left half: nothing to reveal, the bar is already
             // there. The one case that still has to work is fullscreen,
