@@ -313,9 +313,18 @@ case "split-hint":
     // directly: it already sits in its slot, no waiting needed. The
     // slow settle-wait survives only as the fallback when there is no
     // fresh state to chain from (first window in a burst).
-    // State is one line: "wid w h ts". A 3s TTL bounds how stale a
-    // chain can get (manual resizes, closes, and workspace switches
-    // invalidate predictions; a burst of opens never lives that long).
+    // State is one line: "wid w h ts maxWid count". A 3s TTL bounds how
+    // stale a chain can get (manual resizes, closes, and workspace
+    // switches invalidate predictions; a burst of opens never lives that
+    // long).
+    //
+    // The TTL bounds staleness in TIME, not in LAYOUT, so two more
+    // fields bound it in layout. `maxWid` is the highest id ever hinted:
+    // ids only increase, so an id above it is a genuinely new window,
+    // while an id at or below it is a window seen before and therefore a
+    // refocus that must be measured. `count` is the focused workspace's
+    // tiled window count: one fresh spawn raises it by exactly one, and
+    // anything else means the stored slot is void however recent it is.
     func frame() -> (CGFloat, CGFloat, CGFloat, CGFloat)? {
         guard let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, wid) as? [[String: Any]],
             let b = list.first?[kCGWindowBounds as String] as? [String: CGFloat],
@@ -397,18 +406,89 @@ case "split-hint":
     let splitWidthMultiplier: CGFloat = 1.4
     let statePath = "/tmp/omacosy-split-state-\(getuid())"
     let now = Date().timeIntervalSince1970
-    var state: (wid: UInt32, w: CGFloat, h: CGFloat)?
+    let aerospaceBin = ["/opt/homebrew/bin/aerospace", "/usr/local/bin/aerospace"]
+        .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "aerospace"
+    // nil rather than an empty list on failure, so a caller can tell a
+    // query that failed from a workspace that is genuinely empty.
+    func aerospaceLines(_ argv: [String]) -> [Substring]? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: aerospaceBin)
+        p.arguments = argv
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return nil }
+        let d = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0, let text = String(data: d, encoding: .utf8) else { return nil }
+        return text.split(separator: "\n")
+    }
+    // Tiled windows only: a floating window occupies no slot, so it
+    // cannot invalidate one. Measured at 14ms, and reached only when a
+    // prediction is otherwise about to fire.
+    //
+    // `--workspace focused` rather than the hinted window's own
+    // workspace, which would cost a second query. The two agree except
+    // across a workspace switch, and there disagreeing is the wanted
+    // answer: the stored slot is not on screen any more.
+    //
+    // -1 on failure. It matches no real count, so a prediction is
+    // refused and the frame gets measured instead.
+    func tiledCount() -> Int {
+        guard let lines = aerospaceLines(
+            ["list-windows", "--workspace", "focused", "--format", "%{window-layout}"])
+        else { return -1 }
+        return lines.filter { $0 != "floating" }.count
+    }
+    // Every id AeroSpace can currently see. Used to seed maxWid when
+    // there is no state to chain from, so a window that existed before
+    // this run does not pass for new on the strength of its id alone.
+    func highestKnownWid() -> UInt32 {
+        guard let lines = aerospaceLines(["list-windows", "--all", "--format", "%{window-id}"])
+        else { return 0 }
+        return lines.compactMap { UInt32($0) }.max() ?? 0
+    }
+    var state: (wid: UInt32, w: CGFloat, h: CGFloat, count: Int)?
+    // maxWid is read past the TTL on purpose. An expired line still
+    // proves the ids in it were seen, and letting it lapse would make a
+    // long-idle window look new on its next refocus.
+    var maxWid: UInt32 = 0
     if let line = try? String(contentsOfFile: statePath, encoding: .utf8) {
         let f = line.split(separator: " ").compactMap { Double($0) }
-        if f.count == 4, now - f[3] < 3 { state = (UInt32(f[0]), CGFloat(f[1]), CGFloat(f[2])) }
+        if f.count == 6 {
+            maxWid = UInt32(f[4])
+            if now - f[3] < 3 {
+                state = (UInt32(f[0]), CGFloat(f[1]), CGFloat(f[2]), Int(f[5]))
+            }
+        }
     }
+    // No chain to ride, so this run measures whatever happens below and
+    // cannot mispredict. What it can do is leave maxWid too low for the
+    // NEXT run: /tmp is cleared on reboot, and a fresh file knows no ids
+    // at all, so every window already open would read as new once. The
+    // seed costs one query on a path that is about to spend ~400ms
+    // settling.
+    if state == nil { maxWid = max(maxWid, highestKnownWid()) }
     var w: CGFloat
     var h: CGFloat
     var how: String
-    if let s = state, wid > s.wid {
+    // Carried out of the predicted branch so the state write below does
+    // not query a second time for a number it already has.
+    var count: Int?
+    if let s = state, wid > s.wid, wid > maxWid, tiledCount() == s.count + 1 {
         // fresh spawn inside a burst: its slot is the half left over
-        // from the split we just issued on the previous window
+        // from the split we just issued on the previous window.
+        // `wid > s.wid` alone only says this id beats the last one
+        // hinted, which any older window with a higher id also does, so
+        // `wid > maxWid` is what actually establishes "never seen".
+        //
+        // `+ 1` because this window is the one that just arrived, so it
+        // is already in the count. Exactly one more than the stored
+        // count is what a single fresh spawn looks like. A close and an
+        // open inside the TTL nets back to the stored count and is
+        // refused, which is the case this guard exists for.
         if s.w >= s.h * splitWidthMultiplier { w = s.w / 2; h = s.h } else { w = s.w; h = s.h / 2 }
+        count = s.count + 1
         how = "predicted"
     } else if let s = state, chainAlive(s.wid), let f = frame(),
         readSettled(f), soloAndFull(f) {
@@ -445,15 +525,17 @@ case "split-hint":
     // left/down/left cadence on a 3440-wide display without changing
     // behavior on displays where the half is already taller than wide.
     let dir = w >= h * splitWidthMultiplier ? "horizontal" : "vertical"
-    let aerospaceBin = ["/opt/homebrew/bin/aerospace", "/usr/local/bin/aerospace"]
-        .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "aerospace"
     let split = Process()
     split.executableURL = URL(fileURLWithPath: aerospaceBin)
     split.arguments = ["split", "--window-id", idStr, dir]
     split.standardError = FileHandle.nullDevice
     try? split.run()
     split.waitUntilExit()
-    try? "\(wid) \(w) \(h) \(now)".write(toFile: statePath, atomically: true, encoding: .utf8)
+    // The measured paths pay for the count here, after `split`, where
+    // they have already spent 400ms settling and are not racing
+    // anything. The predicted path reuses the one it just checked.
+    try? "\(wid) \(w) \(h) \(now) \(max(wid, maxWid)) \(count ?? tiledCount())"
+        .write(toFile: statePath, atomically: true, encoding: .utf8)
     if let d = "\(Date().timeIntervalSince1970) wid=\(idStr) \(Int(w))x\(Int(h)) (\(how)) -> \(dir == "horizontal" ? "h" : "v") rc=\(split.terminationStatus)\n".data(using: .utf8),
         let fh = FileHandle(forWritingAtPath: "/tmp/omacosy-split-hint.log") ?? {
             FileManager.default.createFile(atPath: "/tmp/omacosy-split-hint.log", contents: nil)
