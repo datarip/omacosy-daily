@@ -323,6 +323,77 @@ case "split-hint":
             let w = b["Width"], let h = b["Height"] else { return nil }
         return (x, y, w, h)
     }
+    // A window that has just CLOSED leaves its hint in the state file
+    // for the 3s TTL. The survivor then takes focus with a LOWER window
+    // id, so it misses the `predicted` branch and lands in `read` —
+    // whose comment assumes a settled frame. It is not settled:
+    // AeroSpace has not re-expanded the survivor yet, so `read` returns
+    // its old half-size slot.
+    func chainAlive(_ id: UInt32) -> Bool {
+        guard let l = CGWindowListCopyWindowInfo(.optionIncludingWindow, id)
+            as? [[String: Any]] else { return false }
+        return !l.isEmpty
+    }
+    // chainAlive is not enough on its own. Measured: the SAME window
+    // logs as (read) at 708x883 and then 1424x495 seconds apart, chain
+    // alive both times — a LIVE window mid-relayout returns whatever
+    // frame it holds at that instant. Two samples 50ms apart. Equal
+    // means at rest, so the frame means what it says. Different means a
+    // relayout is in flight, the read fails, and the chain falls
+    // through to the settle loop, which already waits for movement to
+    // stop. The 50ms is paid only on hover and keyboard refocus;
+    // bursts of opens take `predicted` and never reach here.
+    func readSettled(_ first: (CGFloat, CGFloat, CGFloat, CGFloat)) -> Bool {
+        usleep(50_000)
+        guard let again = frame() else { return false }
+        return again == first
+    }
+    // Measure against the display the window is ON: the main display
+    // would misjudge a sole window sitting on a secondary one. Window
+    // bounds and display bounds share the same top-left global space,
+    // so the centre point resolves directly.
+    func displayBounds(under f: (CGFloat, CGFloat, CGFloat, CGFloat)) -> CGRect {
+        let centre = CGPoint(x: f.0 + f.2 / 2, y: f.1 + f.3 / 2)
+        var id = CGDirectDisplayID()
+        var matched: UInt32 = 0
+        guard CGGetDisplaysWithPoint(centre, 1, &id, &matched) == .success,
+            matched > 0 else { return CGDisplayBounds(CGMainDisplayID()) }
+        return CGDisplayBounds(id)
+    }
+    // Gaps mean a full slot never reaches the display bounds exactly:
+    // the shipped config takes 42px off the top and 8px off each other
+    // edge. 120 clears that on both axes and still rejects the
+    // half-slots this guard exists to catch.
+    let fullSlotSlack: CGFloat = 120
+    // CGWindowListCopyWindowInfo STILL LISTS a window that has just
+    // closed, so chainAlive and readSettled can both pass on a frame
+    // that is already history. AeroSpace, not the window server, knows
+    // the layout. Only reached when a read is otherwise about to be
+    // trusted, so bursts of opens never pay for the subprocess.
+    func soloAndFull(_ f: (CGFloat, CGFloat, CGFloat, CGFloat)) -> Bool {
+        let bin = ["/opt/homebrew/bin/aerospace", "/usr/local/bin/aerospace"]
+            .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "aerospace"
+        let pr = Process()
+        pr.executableURL = URL(fileURLWithPath: bin)
+        pr.arguments = ["list-windows", "--workspace", "focused"]
+        let pipe = Pipe()
+        pr.standardOutput = pipe
+        pr.standardError = FileHandle.nullDevice
+        guard (try? pr.run()) != nil else { return true }
+        let out = pipe.fileHandleForReading.readDataToEndOfFile()
+        pr.waitUntilExit()
+        let count = String(data: out, encoding: .utf8)?
+            .split(separator: "\n").filter { !$0.isEmpty }.count ?? 0
+        // More than one window: the frame is one slot among several and
+        // cannot be checked this way, so trust it.
+        guard count == 1 else { return true }
+        // Sole window: its slot must span the display minus gaps. Both
+        // axes — 1424x495 is full width on a 1440-wide display and is
+        // still a leftover from before the close.
+        let display = displayBounds(under: f)
+        return f.2 >= display.width - fullSlotSlack
+            && f.3 >= display.height - fullSlotSlack
+    }
     let splitWidthMultiplier: CGFloat = 1.4
     let statePath = "/tmp/omacosy-split-state-\(getuid())"
     let now = Date().timeIntervalSince1970
@@ -339,7 +410,8 @@ case "split-hint":
         // from the split we just issued on the previous window
         if s.w >= s.h * splitWidthMultiplier { w = s.w / 2; h = s.h } else { w = s.w; h = s.h / 2 }
         how = "predicted"
-    } else if state != nil, let f = frame() {
+    } else if let s = state, chainAlive(s.wid), let f = frame(),
+        readSettled(f), soloAndFull(f) {
         // an existing window refocused mid-burst: its frame is settled
         (w, h) = (f.2, f.3)
         how = "read"
