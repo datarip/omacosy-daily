@@ -2901,14 +2901,23 @@ final class BarSurface {
         window.acceptsMouseMovedEvents = true // tracking areas need the moves
         // Raised over the native bar the strip holds two bars, and this one
         // is transparent, so native titles read through the gaps between
-        // pills. The backdrop is the native menu-bar material rather than a
-        // colour: it follows light and dark mode, picks up the wallpaper
-        // tint with no sampling, and cannot drift out of step with
-        // theme-set. macos-defaults.sh already asks macOS for the blurred
-        // menu bar appearance, so this is the same surface, not a new one.
+        // pills. The backdrop covers them with a blur of whatever is behind
+        // the window, which is how the native bar gets its colour too: it
+        // follows the wallpaper with no sampling code, follows light and
+        // dark mode, and cannot drift out of step with theme-set.
+        // macos-defaults.sh already asks macOS for the blurred menu bar
+        // appearance, so this is the same surface, not a new one.
+        //
+        // .windowBackground rather than .menu, measured. .menu is the
+        // material for a dropdown menu and lands 41 apart from the native
+        // menu bar in sRGB on this machine; .windowBackground lands 14,
+        // the closest of the ten materials tried. The two cannot be made
+        // identical because the native bar is drawn by the window server
+        // rather than by AppKit.
+        //
         // Hidden unless the bar is raised, so the resting bar is unchanged.
         backdrop = NSVisualEffectView(frame: NSRect(origin: .zero, size: frame.size))
-        backdrop.material = .menu
+        backdrop.material = .windowBackground
         backdrop.blendingMode = .behindWindow
         backdrop.state = .active
         backdrop.autoresizingMask = [.width, .height]
