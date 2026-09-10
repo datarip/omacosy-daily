@@ -403,7 +403,11 @@ var palette = loadPalette()
 // Per column, not one average: the strip sits over a window at one end and
 // the desktop at the other, and the material tracks that.
 func captureOwnStrip(_ surface: BarSurface) {
-    guard !stripCaptureInFlight, !surface.revealed, !surface.window.isVisible
+    // The pointer must STILL be in the strip on the right half. The native
+    // bar is auto-hidden, so it slides away the moment the pointer leaves,
+    // and a capture that lands after that reads bare window content.
+    guard !stripCaptureInFlight, !surface.revealed, !surface.window.isVisible,
+          surface.atTopEdge, !surface.latchedBar
     else { return }
     stripCaptureInFlight = true
     let frame = surface.screen.frame
@@ -456,6 +460,14 @@ func captureOwnStrip(_ surface: BarSurface) {
         let columns = rows
         try? FileManager.default.removeItem(atPath: path)
         guard !columns.isEmpty else { return }
+        // The native bar SLIDES in. Caught partway it is bar at the top and
+        // window underneath, which stored as a thin bright line over a dark
+        // block. A settled menu bar is near enough uniform down its height,
+        // so a capture that is not gets thrown away and the last good one
+        // kept. Measured settled: 161,66,129 at every row.
+        let lum = columns.map { 0.299 * $0.redComponent + 0.587 * $0.greenComponent
+                                + 0.114 * $0.blueComponent }
+        guard let lo = lum.min(), let hi = lum.max(), hi - lo < 0.12 else { return }
         DispatchQueue.main.async { surface.backdropStrip = columns }
     }
 }
