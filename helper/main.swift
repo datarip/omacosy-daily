@@ -4,6 +4,9 @@
 //   cursor set <x> <y>      warp it there (no synthetic movement, so
 //                           focus-follows-mouse cannot react)
 //   displays                per display (arrangement order): "index<TAB>notched"
+//   safe-top                the built-in display's notch inset in points
+//                           (0 = no notch); install.sh sizes the top gap
+//                           from it
 //   wallpaper <path>        set the desktop picture on every screen
 //   audio list              output devices: "*<TAB>name" (current) / "-<TAB>name"
 //   audio set <name>        make <name> the default output device
@@ -128,6 +131,21 @@ case "displays":
         let notched = scr.safeAreaInsets.top > 0 ? 1 : 0
         print("\(i + 1)\t\(notched)")
     }
+
+case "safe-top":
+    // A notched display reports usable space starting below the camera
+    // strip, so anything measured from there is already clear of it and
+    // needs a smaller gap than a flat panel. Print the offset macOS
+    // reports for the built-in display, in points, 0 where there is no
+    // notch; install.sh turns it into aerospace's outer.top. Read from
+    // the screen rather than matched against a table of models, which
+    // would go stale on hardware that does not exist yet.
+    let builtin = builtinDisplayID()
+    let panel = NSScreen.screens.first {
+        ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+            .uint32Value == builtin
+    }
+    print(Int(panel?.safeAreaInsets.top ?? 0))
 
 case "wallpaper":
     guard args.count > 2 else { fail("usage: wallpaper <path> | wallpaper get") }

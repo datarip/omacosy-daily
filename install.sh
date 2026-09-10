@@ -137,8 +137,30 @@ read_apps() {
 }
 read_apps "$REPO_DIR/config/apps.conf"
 read_apps "$REPO_DIR/config/apps.local.conf"
+# Top gap for the built-in display. The bar is BAR_HEIGHT tall and sits
+# at the very top of the panel, so a tiled window has to start below it.
+# A notched display already excludes the camera strip from the usable
+# area, so the bar occupies space no window could take and only the
+# margin is left to reserve. A flat panel excludes nothing, so the bar's
+# whole height is reserved as well. Subtracting the inset covers both,
+# and never goes below the margin the other three edges use.
+#
+# The helper is built further down, so a first install has nothing to
+# ask. Fall back to the flat-panel value: too large wastes space, too
+# small buries the bar, so failing large fails safe.
+BAR_HEIGHT=34                             # helper/bar.swift
+BAR_MARGIN=8                              # matches inner/outer gaps in the template
+OUTER_TOP=$(( BAR_HEIGHT + BAR_MARGIN ))
+INSET="$("$HOME/.local/bin/omacosy-helper" safe-top 2>/dev/null || true)"
+case "$INSET" in
+  ''|*[!0-9]*) ;;                         # no helper yet, or unusable output
+  *) OUTER_TOP=$(( BAR_HEIGHT + BAR_MARGIN - INSET ))
+     if [ "$OUTER_TOP" -lt "$BAR_MARGIN" ]; then OUTER_TOP=$BAR_MARGIN; fi ;;
+esac
+
 sed -e "s|@TERMINAL@|$TERMINAL|g" -e "s|@BROWSER@|$BROWSER|g" \
     -e "s|@MUSIC@|$MUSIC|g" -e "s|@MESSENGER@|$MESSENGER|g" \
+    -e "s|@OUTER_TOP@|$OUTER_TOP|g" \
   "$REPO_DIR/config/aerospace/aerospace.template.toml" > "$REPO_DIR/config/aerospace/aerospace.toml"
 
 log "Linking configs"
