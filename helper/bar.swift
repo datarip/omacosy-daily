@@ -2908,6 +2908,13 @@ final class BarSurface {
         let frame = NSRect(x: screen.frame.minX, y: screen.frame.maxY - barHeight - stackOffset,
                            width: screen.frame.width, height: barHeight)
         window = BarWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        // On the WINDOW, not just on the backdrop below. An
+        // NSVisualEffectView derives its own appearance and picks the
+        // VIBRANT variant, which renders lighter; setting it on the view
+        // alone left a frame or two drawn vibrant before the override took
+        // hold, visible as a pale flash on every reveal. Set here it is
+        // established before anything in the window draws once.
+        window.appearance = NSApp.effectiveAppearance
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
@@ -2962,6 +2969,12 @@ final class BarSurface {
         backdrop.addSubview(view)
         window.contentView = backdrop
         view.surface = self
+        // Every stored property exists by here, so `autohide` can be asked.
+        // An auto-hiding surface hides by ordering its WINDOW out, so the
+        // backdrop stays put and never has to appear; unhiding it as part
+        // of the reveal added frames of visible transition. Only a surface
+        // that stays on screen has anything left to toggle.
+        backdrop.isHidden = !autohide
         window.orderFrontRegardless()
     }
 
@@ -3135,9 +3148,16 @@ func setRevealed(_ show: Bool, on surface: BarSurface) {
     surface.revealed = show
     surface.window.level = show ? barRevealLevel : barBaseLevel
     // The backdrop is only needed where the bar ARRIVES into a strip the
-    // native bar is also entering, which is the auto-hiding case. A
-    // notched display's bar was already there and has nothing to cover.
-    surface.backdrop.isHidden = !(show && surface.autohide)
+    // native bar is also entering. An auto-hiding surface set it up once
+    // and hides by ordering the window out, so there is nothing to do
+    // here; a visible surface has to raise it, and does so without an
+    // implicit fade, which is otherwise drawn from the wrong colour.
+    if !surface.autohide {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        surface.backdrop.isHidden = !show
+        CATransaction.commit()
+    }
     updateBarVisibility(surface)
 }
 
