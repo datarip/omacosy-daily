@@ -2457,8 +2457,17 @@ let padLeft: CGFloat = 10
 let chipBox: CGFloat = 20
 let chipPad: CGFloat = 2
 let pillHeight: CGFloat = barHeight - 8
-let chipPillHeight: CGFloat = barHeight - 14
+// The workspace chip is a SQUARE, which is what a 20x20 chipBox and a
+// 20 chipPillHeight meant at the shipped bar height. Deriving the height
+// from barHeight alone turned it into a rectangle on any shorter bar and
+// shrank the icon with it. Track chipBox instead, and only give way when
+// the bracket is too short to hold it.
+let chipPillHeight: CGFloat = min(chipBox, pillHeight - 2)
 let chipIcon: CGFloat = chipPillHeight - 2
+// A 4 point radius on a 20 point square reads as a rounded rectangle.
+// Roughly a quarter of the side is what makes it read as a rounded
+// square, which is the shape an app icon already is.
+let chipRadius: CGFloat = chipPillHeight * 0.28
 let radius: CGFloat = 4
 let gap: CGFloat = 14
 
@@ -2597,7 +2606,7 @@ final class BarView: NSView {
                 let pill = NSRect(x: box.minX, y: (barHeight - chipPillHeight) / 2,
                                   width: chipBox, height: chipPillHeight)
                 palette.accent.setFill()
-                NSBezierPath(roundedRect: pill, xRadius: radius, yRadius: radius).fill()
+                NSBezierPath(roundedRect: pill, xRadius: chipRadius, yRadius: chipRadius).fill()
             }
             let tint: NSColor = ws == surface.visible ? palette.barBG : palette.muted
             switch workspaceIconConfig.icon(for: ws) {
