@@ -125,6 +125,31 @@ func windowCandidates() -> [Cand] {
             && owner != "Window Server"
         guard layer == 0 || blocking else { continue }
         let rect = CGRect(x: x, y: y, width: wd, height: h)
+        // A third kind is not a panel either, and cannot be named in
+        // advance: an app-wide overlay spanning a whole display.
+        // LanguageTool for Desktop ships two, both 1440x900 at layer 3,
+        // and either one stops hover focus dead across the entire
+        // screen — the hit test meets it first wherever the pointer is
+        // and returns "leave focus alone".
+        //
+        // The panel rule protects a DISCRETE thing: a Touch ID prompt,
+        // a HUD. Something covering a display end to end is an overlay,
+        // and a rule about not tunnelling under panels cannot have
+        // meant "disable hover focus". Drop it from the candidates so
+        // it neither blocks nor is a target, and keep looking beneath.
+        //
+        // Not detectable any other way. These report kCGWindowAlpha 1.0
+        // and a normal sharing state; they are transparent where they
+        // are drawn, not at the window level, so the window server
+        // describes them exactly like a solid window.
+        //
+        // 0.95 rather than exact equality: menu-bar insets and display
+        // scaling leave a window a few points short of its display, and
+        // nothing that is genuinely a panel comes close to this.
+        if blocking, screens.contains(where: { scr in
+            let i = rect.intersection(scr)
+            return !i.isNull && i.width * i.height >= scr.width * scr.height * 0.95
+        }) { continue }
         // AeroSpace hides inactive-workspace windows mostly offscreen
         // with a sliver visible — ignore anything <30% on-screen
         let visible = screens.reduce(CGFloat(0)) { acc, scr in
