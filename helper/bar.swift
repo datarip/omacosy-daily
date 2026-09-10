@@ -2908,18 +2908,26 @@ final class BarSurface {
         // macos-defaults.sh already asks macOS for the blurred menu bar
         // appearance, so this is the same surface, not a new one.
         //
-        // .windowBackground rather than .menu, measured. .menu is the
-        // material for a dropdown menu and lands 41 apart from the native
-        // menu bar in sRGB on this machine; .windowBackground lands 14,
-        // the closest of the ten materials tried. The two cannot be made
-        // identical because the native bar is drawn by the window server
-        // rather than by AppKit.
+        // The appearance matters more than the material. Left alone an
+        // NSVisualEffectView promotes itself to the VIBRANT variant of the
+        // system appearance (measured: NSApp is NSAppearanceNameDarkAqua
+        // and a fresh effect view reports NSAppearanceNameVibrantDark),
+        // and vibrancy lightens it. Every material tried came out lighter
+        // than the native bar because of it. Handing the view the app's own
+        // appearance turns vibrancy off and follows light and dark mode,
+        // which hardcoding either one would not.
+        //
+        // With that set, .hudWindow matches the native menu bar EXACTLY on
+        // this machine, R=50 G=54 B=51 against R=50 G=54 B=51. .popover
+        // measured identical; sidebar and underWindowBackground were 1
+        // away, .menu 7, .windowBackground 21.
         //
         // Hidden unless the bar is raised, so the resting bar is unchanged.
         backdrop = NSVisualEffectView(frame: NSRect(origin: .zero, size: frame.size))
-        backdrop.material = .windowBackground
+        backdrop.material = .hudWindow
         backdrop.blendingMode = .behindWindow
         backdrop.state = .active
+        backdrop.appearance = NSApp.effectiveAppearance
         backdrop.autoresizingMask = [.width, .height]
         backdrop.isHidden = true
         view = BarView(frame: NSRect(origin: .zero, size: frame.size))
