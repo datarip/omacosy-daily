@@ -402,6 +402,74 @@ var palette = loadPalette()
 //
 // Per column, not one average: the strip sits over a window at one end and
 // the desktop at the other, and the material tracks that.
+// A seed so the strip is NEVER empty, because an empty strip means the
+// effect view draws instead and the reveal ramps again. Derived from the
+// wallpaper, which is what the menu bar tints from, with no capture and no
+// permission, so it is available the moment the bar starts.
+//
+// The wallpaper is scaled to FILL, so the visible band is not simply the
+// top of the image: the scale is the larger of the two ratios and the crop
+// is centred. Getting that wrong is why an earlier version of this read a
+// band nobody was looking at.
+//
+// It is an approximation. The menu bar runs brighter than the wallpaper it
+// tints from, measured at about +36 in red here, so the seed is corrected
+// toward white by that much and no more. A right-half hover replaces it
+// with the real thing.
+// The last good capture, kept across restarts. After the first right-half
+// hover this machine ever does, every later start paints the real menu bar
+// colour on its first frame instead of an approximation.
+func stripCachePath(_ surface: BarSurface) -> String {
+    let dir = NSHomeDirectory() + "/.local/state/omacosy"
+    try? FileManager.default.createDirectory(atPath: dir,
+                                             withIntermediateDirectories: true)
+    return dir + "/bar-strip-\(screenID(surface.screen))"
+}
+
+func loadStrip(_ surface: BarSurface) -> [NSColor] {
+    guard let text = try? String(contentsOfFile: stripCachePath(surface), encoding: .utf8)
+    else { return [] }
+    return text.split(separator: "\n").compactMap { line in
+        let f = line.split(separator: " ").compactMap { Double($0) }
+        guard f.count == 3 else { return nil }
+        return NSColor(srgbRed: f[0], green: f[1], blue: f[2], alpha: 1)
+    }
+}
+
+func saveStrip(_ surface: BarSurface, _ colours: [NSColor]) {
+    let text = colours.compactMap { c -> String? in
+        guard let s = c.usingColorSpace(.sRGB) else { return nil }
+        return "\(s.redComponent) \(s.greenComponent) \(s.blueComponent)"
+    }.joined(separator: "\n")
+    try? text.write(toFile: stripCachePath(surface), atomically: true, encoding: .utf8)
+}
+
+func seedStripFromWallpaper(_ surface: BarSurface) -> [NSColor] {
+    let screen = surface.screen
+    guard let url = NSWorkspace.shared.desktopImageURL(for: screen),
+          let image = NSImage(contentsOf: url),
+          let tiff = image.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: tiff),
+          bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0
+    else { return [] }
+    let sx = screen.frame.width / CGFloat(bitmap.pixelsWide)
+    let sy = screen.frame.height / CGFloat(bitmap.pixelsHigh)
+    let scale = max(sx, sy)
+    let band = max(1, Int(barHeight / scale))
+    let visibleW = Int(screen.frame.width / scale)
+    let x0 = max(0, (bitmap.pixelsWide - visibleW) / 2)
+    var r = 0.0, g = 0.0, b = 0.0, n = 0.0
+    for x in stride(from: x0, to: min(x0 + visibleW, bitmap.pixelsWide), by: max(1, visibleW / 64)) {
+        for y in stride(from: 0, to: band, by: max(1, band / 4)) {
+            guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+            r += c.redComponent; g += c.greenComponent; b += c.blueComponent; n += 1
+        }
+    }
+    guard n > 0 else { return [] }
+    let seed = NSColor(srgbRed: r/n, green: g/n, blue: b/n, alpha: 1)
+    return Array(repeating: seed, count: 8)
+}
+
 func captureOwnStrip(_ surface: BarSurface) {
     // The pointer must STILL be in the strip on the right half. The native
     // bar is auto-hidden, so it slides away the moment the pointer leaves,
@@ -468,7 +536,10 @@ func captureOwnStrip(_ surface: BarSurface) {
         let lum = columns.map { 0.299 * $0.redComponent + 0.587 * $0.greenComponent
                                 + 0.114 * $0.blueComponent }
         guard let lo = lum.min(), let hi = lum.max(), hi - lo < 0.12 else { return }
-        DispatchQueue.main.async { surface.backdropStrip = columns }
+        DispatchQueue.main.async {
+            surface.backdropStrip = columns
+            saveStrip(surface, columns)
+        }
     }
 }
 
@@ -3063,6 +3134,11 @@ final class BarSurface {
         // of the reveal added frames of visible transition. Only a surface
         // that stays on screen has anything left to toggle.
         backdrop.isHidden = !autohide
+        // Remembered first, wallpaper only on a machine that has never
+        // sampled. Either way it is never empty, and an empty strip is what
+        // puts the effect view back on screen and the reveal ramp with it.
+        backdropStrip = loadStrip(self)
+        if backdropStrip.isEmpty { backdropStrip = seedStripFromWallpaper(self) }
         window.orderFrontRegardless()
     }
 
@@ -3712,9 +3788,9 @@ watch(FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".config/omarchy/current").path, create: false) {
     let t0 = DispatchTime.now().uptimeNanoseconds
     palette = loadPalette()
-    // theme-set swaps the wallpaper, so the stored blur no longer describes
-    // it. Dropped here; the next reveal renders live and is captured again.
-    for surface in surfaces { surface.backdropStrip.removeAll() }
+    // theme-set swaps the wallpaper. Re-seed rather than clear: an empty
+    // strip would put the effect view back on screen and the ramp with it.
+    for surface in surfaces { surface.backdropStrip = seedStripFromWallpaper(surface) }
     iconCache.removeAll()
     repaint()
     if cheatWindow != nil { hideCheatsheet(); toggleCheatsheet() } // repaint in the new palette
