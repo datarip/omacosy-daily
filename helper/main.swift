@@ -457,18 +457,41 @@ case "split-hint":
     // cannot invalidate one. Measured at 14ms, and reached only when a
     // prediction is otherwise about to fire.
     //
-    // `--workspace focused` rather than the hinted window's own
-    // workspace, which would cost a second query. The two agree except
-    // across a workspace switch, and there disagreeing is the wanted
-    // answer: the stored slot is not on screen any more.
+    // The WORKSPACE comes back from the same query, because the count on
+    // its own cannot tell "one more window here" from "one window on a
+    // different workspace". Both read as 1, and chaining the second off a
+    // slot measured in the first splits a lone window against a parent it
+    // never had. Observed: a terminal opened alone on an empty workspace
+    // was predicted at half the width of a FULLSCREEN window on the
+    // workspace just left, 720x900 against a real 1424x883. Portrait, so
+    // the hint said stack, and the pair ended up one above the other.
     //
-    // -1 on failure. It matches no real count, so a prediction is
-    // refused and the frame gets measured instead.
-    func tiledCount() -> Int {
+    // -1 on failure, and "" for a workspace holding nothing. Neither
+    // matches a stored slot, so the prediction is refused and the frame
+    // gets measured instead, which is the safe direction.
+    func focusedTiled() -> (count: Int, ws: String) {
         guard let lines = aerospaceLines(
-            ["list-windows", "--workspace", "focused", "--format", "%{window-layout}"])
-        else { return -1 }
-        return lines.filter { $0 != "floating" }.count
+            ["list-windows", "--workspace", "focused",
+             "--format", "%{window-layout}|%{workspace}"])
+        else { return (-1, "") }
+        var n = 0
+        var ws = ""
+        for l in lines {
+            let f = l.split(separator: "|", omittingEmptySubsequences: false)
+            guard f.count >= 2 else { continue }
+            if f[0] != "floating" { n += 1 }
+            ws = String(f[1])
+        }
+        return (n, ws)
+    }
+    // Asked at most once per run: the predicted branch checks it and the
+    // state write below reuses the answer.
+    var focusedCache: (count: Int, ws: String)?
+    func focusedTiledOnce() -> (count: Int, ws: String) {
+        if let f = focusedCache { return f }
+        let f = focusedTiled()
+        focusedCache = f
+        return f
     }
     // Every id AeroSpace can currently see. Used to seed maxWid when
     // there is no state to chain from, so a window that existed before
@@ -478,17 +501,23 @@ case "split-hint":
         else { return 0 }
         return lines.compactMap { UInt32($0) }.max() ?? 0
     }
-    var state: (wid: UInt32, w: CGFloat, h: CGFloat, count: Int)?
+    var state: (wid: UInt32, w: CGFloat, h: CGFloat, count: Int, ws: String)?
     // maxWid is read past the TTL on purpose. An expired line still
     // proves the ids in it were seen, and letting it lapse would make a
     // long-idle window look new on its next refocus.
     var maxWid: UInt32 = 0
     if let line = try? String(contentsOfFile: statePath, encoding: .utf8) {
-        let f = line.split(separator: " ").compactMap { Double($0) }
+        // six numbers, then the workspace the slot was measured on. A file
+        // written before the workspace was recorded has six fields and no
+        // seventh; it still seeds maxWid, and its prediction is refused,
+        // which is what an unknown workspace should do.
+        let parts = line.split(separator: " ").map(String.init)
+        let f = parts.prefix(6).compactMap { Double($0) }
         if f.count == 6 {
             maxWid = UInt32(f[4])
             if now - f[3] < 3 {
-                state = (UInt32(f[0]), CGFloat(f[1]), CGFloat(f[2]), Int(f[5]))
+                state = (UInt32(f[0]), CGFloat(f[1]), CGFloat(f[2]), Int(f[5]),
+                         parts.count >= 7 ? parts[6] : "")
             }
         }
     }
@@ -505,7 +534,15 @@ case "split-hint":
     // Carried out of the predicted branch so the state write below does
     // not query a second time for a number it already has.
     var count: Int?
-    if let s = state, wid > s.wid, wid > maxWid, tiledCount() == s.count + 1 {
+    // The stored slot has to describe the workspace this window landed on.
+    // Without that the count alone lets a lone window on an empty
+    // workspace chain off a slot measured somewhere else.
+    func chainable(_ s: (wid: UInt32, w: CGFloat, h: CGFloat, count: Int, ws: String)) -> Bool {
+        guard !s.ws.isEmpty else { return false }
+        let f = focusedTiledOnce()
+        return f.count == s.count + 1 && f.ws == s.ws
+    }
+    if let s = state, wid > s.wid, wid > maxWid, chainable(s) {
         // fresh spawn inside a burst: its slot is the half left over
         // from the split we just issued on the previous window.
         // `wid > s.wid` alone only says this id beats the last one
@@ -559,7 +596,13 @@ case "split-hint":
     // The measured paths pay for the count here, after `split`, where
     // they have already spent 400ms settling and are not racing
     // anything. The predicted path reuses the one it just checked.
-    try? "\(wid) \(w) \(h) \(now) \(max(wid, maxWid)) \(count ?? tiledCount())"
+    // The measured paths ask AGAIN here, after `split` and after the 400ms
+    // settle, where they are not racing anything: a count taken before the
+    // settle can miss the window that just arrived. Only the predicted
+    // path reuses the answer, which it took moments ago and already
+    // checked.
+    let wrote = count != nil ? focusedTiledOnce() : focusedTiled()
+    try? "\(wid) \(w) \(h) \(now) \(max(wid, maxWid)) \(count ?? wrote.count) \(wrote.ws)"
         .write(toFile: statePath, atomically: true, encoding: .utf8)
     if let d = "\(Date().timeIntervalSince1970) wid=\(idStr) \(Int(w))x\(Int(h)) (\(how)) -> \(dir == "horizontal" ? "h" : "v") rc=\(split.terminationStatus)\n".data(using: .utf8),
         let fh = FileHandle(forWritingAtPath: "/tmp/omacosy-split-hint.log") ?? {
