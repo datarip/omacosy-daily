@@ -668,6 +668,13 @@ let autoFullscreenSolo: Bool = {
 // The count each workspace was last acted on at. A repeat of the same count
 // is not a trigger, and that is the whole of the Super+F truce.
 var soloCount: [String: Int] = [:]
+// Which windows were fullscreen at the last good look, kept for the sleep
+// handler. Measured: an `aerospace` call started from willSleep is not
+// guaranteed to finish before the system suspends. It resumes after the
+// wake and answers with the WOKEN machine, where the fullscreen is already
+// gone, so the handler records nothing and the restore has nothing to do.
+// Reading a cache costs no subprocess and cannot lose that race.
+var lastFullscreenIDs: Set<String> = []
 let soloLock = NSLock()
 
 func forgetSoloCounts() {
@@ -708,7 +715,16 @@ func kickSoloRecheck() {
 // subprocess, and this file's rule is that subprocess work stays off the
 // path a frame has to travel.
 func applyAutoFullscreen(_ s: Snapshot) {
-    guard autoFullscreenSolo, !omniwmActive(), !s.aeroFocused.isEmpty else { return }
+    guard autoFullscreenSolo, !omniwmActive() else { return }
+    // guarded on the list being non-empty: aerospace answers with nothing
+    // while the display is going down, and caching that would throw the
+    // record away at the exact moment it is needed
+    if !s.tiledIDs.isEmpty {
+        soloLock.lock()
+        lastFullscreenIDs = s.fullscreenIDs
+        soloLock.unlock()
+    }
+    guard !s.aeroFocused.isEmpty else { return }
     let ws = s.aeroFocused
     let ids = s.tiledIDs[ws] ?? []
     guard !ids.isEmpty else { return }
@@ -4095,17 +4111,12 @@ NSWorkspace.shared.notificationCenter.addObserver(
     forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
 ) { _ in
     guard autoFullscreenSolo, !omniwmActive() else { return }
-    // asked fresh rather than read off the cached snapshot: Super+F is a
-    // RESIZE, and RESIZE deliberately does not rebuild, so the cache can be
-    // a manual choice behind
-    fullscreenAtSleep = aerospace(["list-windows", "--all", "--format",
-                                   "%{window-id}|%{window-is-fullscreen}"])
-        .split(separator: "\n")
-        .compactMap { line in
-            let f = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-            guard f.count >= 2, f[1] == "true" else { return nil }
-            return f[0]
-        }
+    // read, never asked: see lastFullscreenIDs. A Super+F refreshes the
+    // cache through the move/resize recheck, so it is at most that
+    // recheck's debounce out of date.
+    soloLock.lock()
+    fullscreenAtSleep = Array(lastFullscreenIDs)
+    soloLock.unlock()
     tlog("autofullscreen: sleeping, recorded \(fullscreenAtSleep.count) fullscreen window(s)")
 }
 
