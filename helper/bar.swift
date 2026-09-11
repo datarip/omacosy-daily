@@ -3745,45 +3745,118 @@ NSWorkspace.shared.notificationCenter.addObserver(
     tlog("autofullscreen: sleeping, recorded \(fullscreenAtSleep.count) fullscreen window(s)")
 }
 
+// Waking is driven by aerospace's own detection, not by a guessed delay.
+// Measured: a wake re-detects every window in one burst about 10 ms wide
+// and places each of them on the FOCUSED workspace, before the
+// on-window-detected rules move them back out. That is what drops
+// fullscreen, even on a workspace holding one window, and restoring while
+// it is happening achieves nothing.
+var detectWatch: Process?
+var detectBuffer = Data()
+var wakeArmed = false
+var detectQuiet: DispatchWorkItem?
+var wakeFallback: DispatchWorkItem?
+
+func startDetectWatch() {
+    guard autoFullscreenSolo, !omniwmActive(), detectWatch == nil else { return }
+    // a bar killed by launchd leaves its stream child alive under pid 1,
+    // one per restart: startOmniWatch's reason and its recipe
+    let reap = Process()
+    reap.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+    reap.arguments = ["-P", "1", "-f", "aerospace subscribe window-detected"]
+    try? reap.run()
+    reap.waitUntilExit()
+
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: aerospaceBin)
+    p.arguments = ["subscribe", "window-detected", "--no-send-initial"]
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = FileHandle.nullDevice
+    pipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        guard !chunk.isEmpty else { return }
+        DispatchQueue.main.async {
+            detectBuffer.append(chunk)
+            while let nl = detectBuffer.firstIndex(of: 0x0A) {
+                detectBuffer = Data(detectBuffer[detectBuffer.index(after: nl)...])
+                windowDetected()
+            }
+        }
+    }
+    p.terminationHandler = { proc in
+        DispatchQueue.main.async {
+            pipe.fileHandleForReading.readabilityHandler = nil
+            guard detectWatch === proc else { return }
+            detectWatch = nil
+            guard autoFullscreenSolo, !omniwmActive() else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { startDetectWatch() }
+        }
+    }
+    guard (try? p.run()) != nil else { return }
+    detectWatch = p
+    tlog("autofullscreen: watching window-detected")
+}
+
+// Every event pushes the settle point out, so the restore waits for the
+// whole burst rather than a fixed number of seconds.
+func windowDetected() {
+    guard wakeArmed else { return }
+    detectQuiet?.cancel()
+    let w = DispatchWorkItem { finishWake("detection settled") }
+    detectQuiet = w
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: w)
+}
+
+func finishWake(_ why: String) {
+    guard wakeArmed else { return }
+    wakeArmed = false
+    detectQuiet?.cancel(); detectQuiet = nil
+    wakeFallback?.cancel(); wakeFallback = nil
+    let ids = fullscreenAtSleep
+    tlog("autofullscreen: wake \(why), restoring \(ids.count) window(s)")
+    // Two more passes after the first. Measured: the burst of app
+    // activations a few seconds after a wake focuses another window in the
+    // workspace, and aerospace leaves fullscreen when that happens.
+    for delay in [0.0, 3.0, 8.0] {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            rebuildQueue.async {
+                for id in ids {
+                    // tiling FIRST. Measured: a window can come back from a
+                    // sleep floating, having lost its tiling as well as its
+                    // fullscreen, and aerospace cannot fullscreen a floating
+                    // window. It exits 0 and does nothing, so the restore
+                    // reported success and changed nothing. Unconditional is
+                    // safe: only a tiled window can be fullscreen, so every
+                    // recorded id was tiled.
+                    aerospace(["layout", "tiling", "--window-id", id])
+                    aerospace(["fullscreen", "on", "--no-outer-gaps", "--window-id", id])
+                }
+            }
+        }
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 11.0) { soloBaselineAfterWake() }
+}
+
 NSWorkspace.shared.notificationCenter.addObserver(
     forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
 ) { _ in
     guard autoFullscreenSolo, !omniwmActive() else { return }
-    // The counts are deliberately KEPT. Clearing them here would defeat the
-    // restore below: the next window event would read a changed count on a
-    // two-window workspace and switch off the manual Super+F just put back.
-    // Nothing opens or closes while the machine is asleep, so they still
-    // describe the state being woken into.
-    // hold the rule off until the last rung of the ladder below has run
+    // The counts are deliberately KEPT until the baseline runs. Clearing
+    // them here would defeat the restore: the next window event would read
+    // a changed count on a multi-window workspace and switch off the manual
+    // Super+F just put back.
     soloLock.lock()
-    soloSettleUntil = Date().addingTimeInterval(18)
+    soloSettleUntil = Date().addingTimeInterval(60) // the baseline clears it
     soloLock.unlock()
-    DispatchQueue.main.asyncAfter(deadline: .now() + 18.0) { soloBaselineAfterWake() }
-    let ids = fullscreenAtSleep
-    guard !ids.isEmpty else { return }
-    // The same ladder the display path uses. Measured: the fullscreen can
-    // survive the sleep and then be knocked out by the burst of app
-    // activations about five seconds after the wake, which focuses another
-    // window in the same workspace. A pair of retries at 1 s and 3 s both
-    // finished before that happened.
-    for delay in [1.0, 3.0, 8.0, 15.0] {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            rebuildQueue.async {
-                for id in ids {
-                    // tiling FIRST. Measured: a window can come back from
-                    // sleep as floating, having lost its tiling as well as
-                    // its fullscreen, and aerospace cannot fullscreen a
-                    // floating window. It exits 0 and does nothing, so the
-                    // restore reported success and changed nothing.
-                    // Unconditional is safe here: only a tiled window can
-                    // be fullscreen, so every recorded id was tiled.
-                    aerospace(["layout", "tiling", "--window-id", id])
-                    aerospace(["fullscreen", "on", "--no-outer-gaps", "--window-id", id])
-                }
-                tlog("autofullscreen: woke, reapplied \(ids.count) window(s)")
-            }
-        }
-    }
+    wakeArmed = true
+    detectQuiet?.cancel(); detectQuiet = nil
+    // a shallow sleep re-detects nothing, so nothing would ever settle
+    wakeFallback?.cancel()
+    let fb = DispatchWorkItem { finishWake("no detection burst") }
+    wakeFallback = fb
+    DispatchQueue.main.asyncAfter(deadline: .now() + 6.0, execute: fb)
+    startDetectWatch() // in case the stream died while asleep
 }
 
 // a display arriving or leaving re-lays every workspace out, so the counts
@@ -3851,5 +3924,6 @@ updateWeather()
 repaint()
 primeMedia()
 startOmniWatch() // a no-op under aerospace; the WM observer handles switches
+startDetectWatch() // a no-op unless the solo rule is on
 tlog("omacosy-bar up on " + surfaces.map { "\($0.screen.localizedName)=m\($0.monitorID)\($0.notched ? " (notched)" : "")" }.joined(separator: ", "))
 app.run()
