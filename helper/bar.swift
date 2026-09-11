@@ -468,19 +468,39 @@ func wallpaperURL(for screen: NSScreen) -> URL? {
     return NSWorkspace.shared.desktopImageURL(for: screen)
 }
 
-func seedStripFromWallpaper(_ surface: BarSurface) -> [NSColor] {
-    let screen = surface.screen
-    guard let url = wallpaperURL(for: screen),
-          let image = NSImage(contentsOf: url),
-          let tiff = image.tiffRepresentation,
-          let bitmap = NSBitmapImageRep(data: tiff),
-          bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0
+// A seed costs a whole image decode. The wallpapers shipped here are
+// 6016x3384 and larger, measured at 60 to 115ms each, so the answer is
+// remembered against the image and the display. Cycling backgrounds
+// returns to the same handful of files, so after one lap every press is
+// free. The lock is there because the reseed runs off the main queue and
+// a display change can seed a new surface on it at the same time.
+var seedCache: [String: [NSColor]] = [:]
+let seedCacheLock = NSLock()
+
+// Takes the frame and the display id rather than the NSScreen, so the
+// caller reads those on the main queue and this can run anywhere.
+func seedStrip(from url: URL, frame: NSRect, display: CGDirectDisplayID) -> [NSColor] {
+    let key = "\(url.resolvingSymlinksInPath().path)|\(display)|\(frame.width)x\(frame.height)"
+    seedCacheLock.lock()
+    let hit = seedCache[key]
+    seedCacheLock.unlock()
+    if let hit { return hit }
+
+    // CGImageSource, not NSImage.tiffRepresentation. The TIFF is a round
+    // trip through an 80MB buffer for a 6016x3384 image, and nothing reads
+    // it: NSBitmapImageRep takes the CGImage directly. Measured over the
+    // seven wallpapers here it saves 1 to 38ms, and the sampled colour is
+    // identical to every digit in all seven, so the value does not move.
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+          let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
     else { return [] }
-    let sx = screen.frame.width / CGFloat(bitmap.pixelsWide)
-    let sy = screen.frame.height / CGFloat(bitmap.pixelsHigh)
+    let bitmap = NSBitmapImageRep(cgImage: cgImage)
+    guard bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0 else { return [] }
+    let sx = frame.width / CGFloat(bitmap.pixelsWide)
+    let sy = frame.height / CGFloat(bitmap.pixelsHigh)
     let scale = max(sx, sy)
     let band = max(1, Int(barHeight / scale))
-    let visibleW = Int(screen.frame.width / scale)
+    let visibleW = Int(frame.width / scale)
     let x0 = max(0, (bitmap.pixelsWide - visibleW) / 2)
     var r = 0.0, g = 0.0, b = 0.0, n = 0.0
     for x in stride(from: x0, to: min(x0 + visibleW, bitmap.pixelsWide), by: max(1, visibleW / 64)) {
@@ -491,7 +511,19 @@ func seedStripFromWallpaper(_ surface: BarSurface) -> [NSColor] {
     }
     guard n > 0 else { return [] }
     let seed = NSColor(srgbRed: r/n, green: g/n, blue: b/n, alpha: 1)
-    return Array(repeating: seed, count: 8)
+    let strip = Array(repeating: seed, count: 8)
+    seedCacheLock.lock()
+    seedCache[key] = strip
+    seedCacheLock.unlock()
+    return strip
+}
+
+// Startup only, where there is nothing to be late for and the answer is
+// wanted before the first frame.
+func seedStripFromWallpaper(_ surface: BarSurface) -> [NSColor] {
+    guard let url = wallpaperURL(for: surface.screen) else { return [] }
+    return seedStrip(from: url, frame: surface.screen.frame,
+                     display: screenID(surface.screen))
 }
 
 func captureOwnStrip(_ surface: BarSurface) {
@@ -4281,21 +4313,33 @@ watch(stateDir, create: false) {
     guard now != seededWallpaper else { return }
     seededWallpaper = now
     let t0 = DispatchTime.now().uptimeNanoseconds
-    for surface in surfaces {
-        // Re-seed rather than clear, and keep the old strip if the image
-        // cannot be read: an empty strip puts the effect view back on
-        // screen and brings the reveal ramp with it.
-        let seed = seedStripFromWallpaper(surface)
-        guard !seed.isEmpty else { continue }
-        surface.backdropStrip = seed
-        // The cache still holds a capture of the PREVIOUS wallpaper and
-        // would paint it on the next start. An approximation of the
-        // current one is nearer, and a right-half hover replaces it.
-        saveStrip(surface, seed)
+    // Everything the seed needs, read HERE, on the main queue.
+    let jobs = surfaces.map { ($0, $0.screen.frame, screenID($0.screen)) }
+    let url = URL(fileURLWithPath: now)
+    // OFF the main queue, the same rule the rebuild path follows. An
+    // uncached seed decodes a whole image, measured at 60 to 115ms, and
+    // the bar can be mid-slide while it happens. Left on main it was a
+    // stall of that length between the key and the new colour.
+    DispatchQueue.global(qos: .userInitiated).async {
+        let seeded = jobs.map { ($0.0, seedStrip(from: url, frame: $0.1, display: $0.2)) }
+        DispatchQueue.main.async {
+            for (surface, seed) in seeded {
+                // Re-seed rather than clear, and keep the old strip if the
+                // image cannot be read: an empty strip puts the effect view
+                // back on screen and brings the reveal ramp with it.
+                guard !seed.isEmpty else { continue }
+                surface.backdropStrip = seed
+                // The cache still holds a capture of the PREVIOUS wallpaper
+                // and would paint it on the next start. An approximation of
+                // the current one is nearer, and a right-half hover replaces
+                // it.
+                saveStrip(surface, seed)
+            }
+            repaint()
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
+            tlog(String(format: "wallpaper %.2f ms", ms))
+        }
     }
-    repaint()
-    let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
-    tlog(String(format: "wallpaper %.2f ms", ms))
 }
 
 // --- popup guard -----------------------------------------------------------
