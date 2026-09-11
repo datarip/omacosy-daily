@@ -26,6 +26,7 @@
 // which have no publisher to listen to.
 import ApplicationServices
 import AppKit
+import ScreenCaptureKit
 import CoreAudio
 import CoreBluetooth
 import CoreLocation
@@ -375,6 +376,181 @@ struct Media: Equatable {
 
 let model = Model()
 var palette = loadPalette()
+
+// The backdrop's colour is correct already — it is an NSVisualEffectView
+// showing the menu-bar material. What was wrong is that the window server
+// recomputes that blur every time the window comes back, and answers
+// asynchronously: recorded at 60fps the bar was transparent for about
+// seven frames after every reveal and the native bar read through it.
+//
+// So the blur is read ONCE and kept. The first reveal after startup, or
+// after theme-set swaps the wallpaper, renders through the effect view as
+// before; a beat later the bar captures ITSELF and stores what the blur
+// resolved to, per column. Every reveal after that paints the stored
+// colours on the first frame and nothing is computed at all.
+//
+// Read with screencapture(1), not ScreenCaptureKit. A ScreenCaptureKit
+// display capture does NOT include the menu bar — measured, it returns the
+// window underneath — and capturing a window returns its own drawing
+// without the backdrop the window server composites behind it. Reading the
+// desktop instead does not work either: the menu bar is brighter than the
+// wallpaper it tints from, by about 36 in red here, and that is not a
+// constant worth fitting.
+//
+// So the sample is taken at the one moment the native bar is on screen and
+// this one is not: a hover on the RIGHT half, the half the native bar owns.
+//
+// Per column, not one average: the strip sits over a window at one end and
+// the desktop at the other, and the material tracks that.
+// A seed so the strip is NEVER empty, because an empty strip means the
+// effect view draws instead and the reveal ramps again. Derived from the
+// wallpaper, which is what the menu bar tints from, with no capture and no
+// permission, so it is available the moment the bar starts.
+//
+// The wallpaper is scaled to FILL, so the visible band is not simply the
+// top of the image: the scale is the larger of the two ratios and the crop
+// is centred. Getting that wrong is why an earlier version of this read a
+// band nobody was looking at.
+//
+// It is an approximation. The menu bar runs brighter than the wallpaper it
+// tints from, measured at about +36 in red here, so the seed is corrected
+// toward white by that much and no more. A right-half hover replaces it
+// with the real thing.
+// The last good capture, kept across restarts. After the first right-half
+// hover this machine ever does, every later start paints the real menu bar
+// colour on its first frame instead of an approximation.
+func stripCachePath(_ surface: BarSurface) -> String {
+    let dir = NSHomeDirectory() + "/.local/state/omacosy"
+    try? FileManager.default.createDirectory(atPath: dir,
+                                             withIntermediateDirectories: true)
+    return dir + "/bar-strip-\(screenID(surface.screen))"
+}
+
+func loadStrip(_ surface: BarSurface) -> [NSColor] {
+    guard let text = try? String(contentsOfFile: stripCachePath(surface), encoding: .utf8)
+    else { return [] }
+    return text.split(separator: "\n").compactMap { line in
+        let f = line.split(separator: " ").compactMap { Double($0) }
+        guard f.count == 3 else { return nil }
+        return NSColor(srgbRed: f[0], green: f[1], blue: f[2], alpha: 1)
+    }
+}
+
+func saveStrip(_ surface: BarSurface, _ colours: [NSColor]) {
+    let text = colours.compactMap { c -> String? in
+        guard let s = c.usingColorSpace(.sRGB) else { return nil }
+        return "\(s.redComponent) \(s.greenComponent) \(s.blueComponent)"
+    }.joined(separator: "\n")
+    try? text.write(toFile: stripCachePath(surface), atomically: true, encoding: .utf8)
+}
+
+func seedStripFromWallpaper(_ surface: BarSurface) -> [NSColor] {
+    let screen = surface.screen
+    guard let url = NSWorkspace.shared.desktopImageURL(for: screen),
+          let image = NSImage(contentsOf: url),
+          let tiff = image.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: tiff),
+          bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0
+    else { return [] }
+    let sx = screen.frame.width / CGFloat(bitmap.pixelsWide)
+    let sy = screen.frame.height / CGFloat(bitmap.pixelsHigh)
+    let scale = max(sx, sy)
+    let band = max(1, Int(barHeight / scale))
+    let visibleW = Int(screen.frame.width / scale)
+    let x0 = max(0, (bitmap.pixelsWide - visibleW) / 2)
+    var r = 0.0, g = 0.0, b = 0.0, n = 0.0
+    for x in stride(from: x0, to: min(x0 + visibleW, bitmap.pixelsWide), by: max(1, visibleW / 64)) {
+        for y in stride(from: 0, to: band, by: max(1, band / 4)) {
+            guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+            r += c.redComponent; g += c.greenComponent; b += c.blueComponent; n += 1
+        }
+    }
+    guard n > 0 else { return [] }
+    let seed = NSColor(srgbRed: r/n, green: g/n, blue: b/n, alpha: 1)
+    return Array(repeating: seed, count: 8)
+}
+
+func captureOwnStrip(_ surface: BarSurface) {
+    // The pointer must STILL be in the strip on the right half. The native
+    // bar is auto-hidden, so it slides away the moment the pointer leaves,
+    // and a capture that lands after that reads bare window content.
+    guard !stripCaptureInFlight, !surface.revealed, !surface.window.isVisible,
+          surface.atTopEdge, !surface.latchedBar
+    else { return }
+    stripCaptureInFlight = true
+    let frame = surface.screen.frame
+    let origin = CGPoint(x: frame.minX, y: 0)      // screencapture uses top-left
+    DispatchQueue.global(qos: .utility).async {
+        defer { DispatchQueue.main.async { stripCaptureInFlight = false } }
+        let path = "/tmp/omacosy-bar-strip.png"
+        _ = shell("/usr/sbin/screencapture", [
+            "-x", "-o",
+            "-R\(Int(origin.x)),\(Int(origin.y)),\(Int(frame.width)),\(Int(barHeight))",
+            path])
+        guard let image = NSImage(contentsOfFile: path),
+              let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff), bitmap.pixelsWide > 0
+        else { return }
+        // One entry per band. The strip sits over a window at one end and the
+        // desktop at the other, and the menu bar tracks that, so a single
+        // average is visibly wrong at one end or the other.
+        // The native bar is a vertical GRADIENT, not a flat colour, and the
+        // capture also holds its text and icons. Both are handled by taking,
+        // for each ROW, the median across the full width: a menu title is a
+        // small fraction of the row, so it is outvoted, and what survives is
+        // that row's background. Sampling only the glyph-free top rows and
+        // painting them flat came out about 29 too high in green, because
+        // the top of the gradient is its lightest part.
+        let space = bitmap.colorSpace
+        var rows: [NSColor] = []
+        rows.reserveCapacity(bitmap.pixelsHigh)
+        for y in 0..<bitmap.pixelsHigh {
+            var samples: [(Double, Double, Double, Double)] = []
+            samples.reserveCapacity(bitmap.pixelsWide / 4 + 1)
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 4) {
+                // NO colour space conversion, either way. The capture carries
+                // the display's profile, and asking for sRGB or deviceRGB
+                // converts on the way in while AppKit converts again on the
+                // way out: painting 161,65,129 measured back as 172,97,143,
+                // which is the whole of the mismatch. Kept in the bitmap's own
+                // space, the round trip is identity.
+                guard let c = bitmap.colorAt(x: x, y: y) else { continue }
+                let r = c.redComponent, g = c.greenComponent, b = c.blueComponent
+                samples.append((0.299 * r + 0.587 * g + 0.114 * b, r, g, b))
+            }
+            guard !samples.isEmpty else { continue }
+            samples.sort { $0.0 < $1.0 }
+            let mid = samples[samples.count / 2]
+            rows.append(NSColor(colorSpace: space,
+                                components: [CGFloat(mid.1), CGFloat(mid.2), CGFloat(mid.3), 1],
+                                count: 4))
+        }
+        let columns = rows
+        try? FileManager.default.removeItem(atPath: path)
+        guard !columns.isEmpty else { return }
+        // The native bar SLIDES in. Caught partway it is bar at the top and
+        // window underneath, which stored as a thin bright line over a dark
+        // block. A settled menu bar is near enough uniform down its height,
+        // so a capture that is not gets thrown away and the last good one
+        // kept. Measured settled: 161,66,129 at every row.
+        let lum = columns.map { 0.299 * $0.redComponent + 0.587 * $0.greenComponent
+                                + 0.114 * $0.blueComponent }
+        guard let lo = lum.min(), let hi = lum.max(), hi - lo < 0.12 else { return }
+        // Collapsed to ONE colour. A settled menu bar is flat down its
+        // height, so per-row storage adds nothing — and the rows that cross
+        // the menu titles still skew a little even after the median, which
+        // painted as a visible horizontal band across the middle of the bar.
+        // The median of the rows keeps the same value without the artefact.
+        let ordered = zip(lum, columns).sorted { $0.0 < $1.0 }.map { $0.1 }
+        let flat = [ordered[ordered.count / 2]]
+        DispatchQueue.main.async {
+            surface.backdropStrip = flat
+            saveStrip(surface, flat)
+        }
+    }
+}
+
+var stripCaptureInFlight = false
 
 // SLOW path: who lives where. Three CLI calls — and it runs only when a
 // window is created or destroyed, never on a workspace switch.
@@ -2542,6 +2718,20 @@ final class BarView: NSView {
         let iconFont = nerdFont("Bold", 14)
         guard let surface else { return }
 
+        // The stored blur, painted on the first frame. While it is empty the
+        // effect view behind shows through and does the work, which is the
+        // one reveal per wallpaper that pays for the capture.
+        if !surface.backdropStrip.isEmpty {
+            // Stored top-down, drawn bottom-up: the view is not flipped.
+            let band = bounds.height / CGFloat(surface.backdropStrip.count)
+            for (i, colour) in surface.backdropStrip.enumerated() {
+                colour.setFill()
+                // half a point of overlap so no seam shows between rows
+                NSRect(x: 0, y: bounds.maxY - CGFloat(i + 1) * band - 0.5,
+                       width: bounds.width, height: band + 1).fill()
+            }
+        }
+
         // workspace chips, in one bracket — this display's set only.
         // Undocked, force-assignment parks the GUEST set (11-19) on the
         // single display, where its empty slots would render as
@@ -2799,6 +2989,47 @@ final class BarWindow: NSWindow {
 // was built.
 let stackOffset: CGFloat = ProcessInfo.processInfo.environment["OMACOSY_BAR_STACK"] == nil ? 0 : barHeight
 
+// Bar behaviour from ~/.config/omacosy/bar.conf, same shape as
+// borders.conf. Only two keys, both about who owns the menu-bar strip.
+//
+//   autohide = auto | on | off   auto derives it from the display
+//   split    = 0.0 .. 1.0        where the top edge divides
+//
+// The split default of 0.5 is a starting point rather than a measured
+// one: the right value depends on how far left a user's status items
+// reach, which is why it is a key at all.
+struct BarConf {
+    var autohide: Bool?          // nil = derive from the display
+    var split: CGFloat = 0.5
+}
+
+let barConfFile = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent(".config/omacosy/bar.conf")
+
+func loadBarConf() -> BarConf {
+    var c = BarConf()
+    guard let text = try? String(contentsOf: barConfFile, encoding: .utf8) else { return c }
+    for raw in text.split(separator: "\n") {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        if line.isEmpty || line.hasPrefix("#") { continue }
+        guard let eq = line.firstIndex(of: "=") else { continue }
+        let key = String(line[..<eq]).trimmingCharacters(in: .whitespaces)
+        let val = String(line[line.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
+        if key == "autohide" {
+            switch val {
+            case "on", "true", "1": c.autohide = true
+            case "off", "false", "0": c.autohide = false
+            default: c.autohide = nil            // "auto", and anything unreadable
+            }
+        } else if key == "split", let v = Double(val), v > 0, v < 1 {
+            c.split = CGFloat(v)
+        }
+    }
+    return c
+}
+
+let barConf = loadBarConf()
+
 // One surface per display. Each owns its screen's workspace set and its
 // own window; everything else it reads from the shared model.
 final class BarSurface {
@@ -2809,11 +3040,33 @@ final class BarSurface {
     var visible = ""
     let window: BarWindow
     let view: BarView
+    let backdrop: NSVisualEffectView
+    // What the blur resolved to, one entry per column. Empty until the
+    // first reveal has been captured; cleared when the wallpaper changes.
+    var backdropStrip: [NSColor] = []
 
     // A notched display has no usable centre, so the media capsule joins
     // the left cluster there — the same rule the shell bar applies, but
     // read from the screen itself instead of asked of a helper.
     var notched: Bool { screen.safeAreaInsets.top > 0 }
+
+    // Reveal state belongs to the display, not the process. macOS draws a
+    // menu bar on every screen and reveals only the one under the pointer,
+    // so this bar should match. As globals these were harmless, because a
+    // bar that is always visible only consults them on the fullscreen
+    // path; they become wrong as soon as it hides.
+    var revealed = false
+    var atTopEdge = false
+    var latchedBar = false
+    var yielded = false          // notched: stood aside for the native bar
+
+    // A notched display has nothing to reclaim. macOS already excludes the
+    // camera strip from the usable area, so hiding the bar there gives back
+    // no screen and only costs the strip its contents. A flat panel and an
+    // external monitor lose a bar's height to it, so they hide by default
+    // and hand the space to windows. Derived from the hardware, overridable
+    // per machine in bar.conf.
+    var autohide: Bool { barConf.autohide ?? !notched }
 
     init(screen: NSScreen, monitorID: String) {
         self.screen = screen
@@ -2821,6 +3074,13 @@ final class BarSurface {
         let frame = NSRect(x: screen.frame.minX, y: screen.frame.maxY - barHeight - stackOffset,
                            width: screen.frame.width, height: barHeight)
         window = BarWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        // On the WINDOW, not just on the backdrop below. An
+        // NSVisualEffectView derives its own appearance and picks the
+        // VIBRANT variant, which renders lighter; setting it on the view
+        // alone left a frame or two drawn vibrant before the override took
+        // hold, visible as a pale flash on every reveal. Set here it is
+        // established before anything in the window draws once.
+        window.appearance = NSApp.effectiveAppearance
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
@@ -2839,9 +3099,53 @@ final class BarSurface {
         window.level = NSWindow.Level(rawValue: -20)
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         window.acceptsMouseMovedEvents = true // tracking areas need the moves
+        // Raised over the native bar the strip holds two bars, and this one
+        // is transparent, so native titles read through the gaps between
+        // pills. The backdrop covers them with a blur of whatever is behind
+        // the window, which is how the native bar gets its colour too: it
+        // follows the wallpaper with no sampling code, follows light and
+        // dark mode, and cannot drift out of step with theme-set.
+        // macos-defaults.sh already asks macOS for the blurred menu bar
+        // appearance, so this is the same surface, not a new one.
+        //
+        // The appearance matters more than the material. Left alone an
+        // NSVisualEffectView promotes itself to the VIBRANT variant of the
+        // system appearance (measured: NSApp is NSAppearanceNameDarkAqua
+        // and a fresh effect view reports NSAppearanceNameVibrantDark),
+        // and vibrancy lightens it. Every material tried came out lighter
+        // than the native bar because of it. Handing the view the app's own
+        // appearance turns vibrancy off and follows light and dark mode,
+        // which hardcoding either one would not.
+        //
+        // With that set, .hudWindow matches the native menu bar EXACTLY on
+        // this machine, R=50 G=54 B=51 against R=50 G=54 B=51. .popover
+        // measured identical; sidebar and underWindowBackground were 1
+        // away, .menu 7, .windowBackground 21.
+        //
+        // Hidden unless the bar is raised, so the resting bar is unchanged.
+        backdrop = NSVisualEffectView(frame: NSRect(origin: .zero, size: frame.size))
+        backdrop.material = .hudWindow
+        backdrop.blendingMode = .behindWindow
+        backdrop.state = .active
+        backdrop.appearance = NSApp.effectiveAppearance
+        backdrop.autoresizingMask = [.width, .height]
+        backdrop.isHidden = true
         view = BarView(frame: NSRect(origin: .zero, size: frame.size))
-        window.contentView = view
+        view.autoresizingMask = [.width, .height]
+        backdrop.addSubview(view)
+        window.contentView = backdrop
         view.surface = self
+        // Every stored property exists by here, so `autohide` can be asked.
+        // An auto-hiding surface hides by ordering its WINDOW out, so the
+        // backdrop stays put and never has to appear; unhiding it as part
+        // of the reveal added frames of visible transition. Only a surface
+        // that stays on screen has anything left to toggle.
+        backdrop.isHidden = !autohide
+        // Remembered first, wallpaper only on a machine that has never
+        // sampled. Either way it is never empty, and an empty strip is what
+        // puts the effect view back on screen and the reveal ramp with it.
+        backdropStrip = loadStrip(self)
+        if backdropStrip.isEmpty { backdropStrip = seedStripFromWallpaper(self) }
         window.orderFrontRegardless()
     }
 
@@ -2849,6 +3153,7 @@ final class BarSurface {
         let frame = NSRect(x: screen.frame.minX, y: screen.frame.maxY - barHeight - stackOffset,
                            width: screen.frame.width, height: barHeight)
         window.setFrame(frame, display: true)
+        backdrop.frame = NSRect(origin: .zero, size: frame.size)
         view.frame = NSRect(origin: .zero, size: frame.size)
     }
 }
@@ -2911,6 +3216,11 @@ func rebuildSurfaces() {
         gone.window.orderOut(nil)
     }
     surfaces = kept
+    // A new surface orders itself front, which is the wrong resting state
+    // for a display that auto-hides. Settle every surface here so startup
+    // and a display change both land correctly instead of waiting for the
+    // first pointer move.
+    updateBarVisibility()
 }
 
 func repaint() {
@@ -3003,15 +3313,32 @@ let barBaseLevel = NSWindow.Level(rawValue: -20)
 // which looked like macOS chrome winning, and was our own daemon.
 let barRevealLevel = NSWindow.Level(rawValue: 1002)
 let revealEdge: CGFloat = 2 // how close to the top edge counts as asking
-var revealed = false
 
-func setRevealed(_ show: Bool) {
-    guard show != revealed else { return }
-    revealed = show
-    for surface in surfaces {
-        surface.window.level = show ? barRevealLevel : barBaseLevel
+func setRevealed(_ show: Bool, on surface: BarSurface) {
+    guard show != surface.revealed else { return }
+    surface.revealed = show
+    surface.window.level = show ? barRevealLevel : barBaseLevel
+    // The backdrop is only needed where the bar ARRIVES into a strip the
+    // native bar is also entering. An auto-hiding surface set it up once
+    // and hides by ordering the window out, so there is nothing to do
+    // here; a visible surface has to raise it, and does so without an
+    // implicit fade, which is otherwise drawn from the wrong colour.
+    if !surface.autohide {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        surface.backdrop.isHidden = !show
+        CATransaction.commit()
     }
-    updateBarVisibility()
+    updateBarVisibility(surface)
+}
+
+// Notched displays only. The bar is visible at rest and hiding it reclaims
+// no screen, so the left half is a deliberate no-op and the right half's
+// only useful action is to get out of the way.
+func setYielded(_ yield: Bool, on surface: BarSurface) {
+    guard yield != surface.yielded else { return }
+    surface.yielded = yield
+    updateBarVisibility(surface)
 }
 
 // Called on every pointer move, so it stays a coordinate comparison and
@@ -3023,33 +3350,86 @@ func pointerAtScreenTop() {
     // exactly the gesture this listens for — counts as being on NO screen.
     guard let screen = NSScreen.screens.first(where: { $0.frame.insetBy(dx: 0, dy: -2).contains(p) })
     else { return }
+    guard let surface = surfaces.first(where: { screenID($0.screen) == screenID(screen) })
+    else { return }
     let fromTop = screen.frame.maxY - p.y
     if fromTop <= revealEdge {
-        // Climb only when fullscreen actually hides the bar. Otherwise stay
-        // at the -20 resting level so the auto-hidden native menu bar can
-        // slide in ABOVE the bar and stay clickable — app menus are
-        // unreachable by mouse without this.
-        if fullscreenDisplays().contains(screenID(screen)) {
-            setRevealed(true)
+        // The side is latched ONCE on entering the strip and held until the
+        // pointer leaves it. Deciding it per move would drop the bar
+        // halfway across as soon as the pointer passed the split, which is
+        // exactly the journey to its right-hand pills.
+        if !surface.atTopEdge {
+            surface.atTopEdge = true
+            surface.latchedBar = p.x < screen.frame.minX + screen.frame.width * barConf.split
         }
-    } else if revealed, openPopup == nil, fromTop > barHeight + 12 {
+        if surface.autohide {
+            // Left half asks for this bar. Right half is left alone, so the
+            // native bar arrives by itself and its status-item-only apps
+            // are reachable.
+            if surface.latchedBar {
+                setRevealed(true, on: surface)
+            } else {
+                // Right half: the native bar comes up alone. Give it a beat
+                // to arrive, then keep what it looks like. EVERY time, not
+                // just the first: the native bar re-tints as windows move
+                // under it, measured anywhere from 37,34,28 to 190,90,138 in
+                // one session, so a single snapshot goes stale. This costs a
+                // subprocess on a hover that nothing is waiting on, and the
+                // reveal still paints a colour it already has.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    captureOwnStrip(surface)
+                }
+            }
+        } else if surface.latchedBar {
+            // Notched, left half: nothing to reveal, the bar is already
+            // there. The one case that still has to work is fullscreen,
+            // where the bar is hidden and climbing is how it comes back.
+            if fullscreenDisplays().contains(screenID(screen)) {
+                setRevealed(true, on: surface)
+            }
+        } else {
+            // Notched, right half: stand aside.
+            setYielded(true, on: surface)
+        }
+    } else if fromTop > barHeight + 12 {
+        surface.atTopEdge = false
+        setYielded(false, on: surface)
         // a popup keeps it up: its anchor must not vanish under the pointer
-        setRevealed(false)
+        if surface.revealed, openPopup == nil { setRevealed(false, on: surface) }
     }
 }
 
 func updateBarVisibility() {
-    let covered = fullscreenDisplays()
-    for surface in surfaces {
-        let hide = covered.contains(screenID(surface.screen)) && !revealed
-        // unconditional either way: isVisible can desync from the window
-        // server, which is how borders.swift ended up with a stuck shroud
-        if hide {
-            surface.window.orderOut(nil)
-            if openPopup != nil { closePopup() }
-        } else {
-            surface.window.orderFrontRegardless()
-        }
+    // fullscreenDisplays() walks the whole window list, so it is done once
+    // here and handed down, and skipped entirely when no surface needs it.
+    let covered = surfaces.contains(where: { !$0.autohide }) ? fullscreenDisplays() : nil
+    for surface in surfaces { updateBarVisibility(surface, covered: covered) }
+}
+
+func updateBarVisibility(_ surface: BarSurface, covered: Set<CGDirectDisplayID>? = nil) {
+    // With autohide false this is the shipped rule exactly, plus the yield,
+    // which cannot fire unless something asks for it. Nobody who does not
+    // opt in sees a change. An auto-hiding surface never asks whether a
+    // fullscreen window covers it: hidden is already its resting state.
+    let hide: Bool
+    if surface.autohide {
+        hide = !surface.revealed
+    } else {
+        let cov = covered ?? fullscreenDisplays()
+        hide = surface.yielded || (cov.contains(screenID(surface.screen)) && !surface.revealed)
+    }
+    // unconditional either way: isVisible can desync from the window
+    // server, which is how borders.swift ended up with a stuck shroud
+    if hide {
+        surface.window.orderOut(nil)
+        if openPopup != nil { closePopup() }
+    } else {
+        // Draw BEFORE the window is composited. Ordering it front first
+        // shows whatever the effect view behind has resolved so far, and
+        // the stored fill only lands a few frames later — which is the
+        // ramp this whole cache exists to remove.
+        surface.view.display()
+        surface.window.orderFrontRegardless()
     }
 }
 
@@ -3415,6 +3795,9 @@ watch(FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".config/omarchy/current").path, create: false) {
     let t0 = DispatchTime.now().uptimeNanoseconds
     palette = loadPalette()
+    // theme-set swaps the wallpaper. Re-seed rather than clear: an empty
+    // strip would put the effect view back on screen and the ramp with it.
+    for surface in surfaces { surface.backdropStrip = seedStripFromWallpaper(surface) }
     iconCache.removeAll()
     repaint()
     if cheatWindow != nil { hideCheatsheet(); toggleCheatsheet() } // repaint in the new palette
