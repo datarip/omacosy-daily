@@ -4256,6 +4256,7 @@ func startDetectWatch() {
             while let nl = detectBuffer.firstIndex(of: 0x0A) {
                 detectBuffer = Data(detectBuffer[detectBuffer.index(after: nl)...])
                 windowDetected()
+                bootDetected()
             }
         }
     }
@@ -4271,6 +4272,38 @@ func startDetectWatch() {
     guard (try? p.run()) != nil else { return }
     detectWatch = p
     tlog("autofullscreen: watching window-detected")
+}
+
+// Boot looks like a wake from here: aerospace detects every window at once,
+// and this bar can be up and asking before aerospace answers at all. A
+// single evaluation at startup then finds nothing, and with no further
+// window event the feature stays dormant. Observed: five minutes after a
+// reboot before a solo workspace went fullscreen, and only because
+// something was opened.
+//
+// So boot waits for the same detection burst to go quiet, then evaluates.
+// There is nothing to restore at boot, only to assert, which is why this is
+// separate from the wake path rather than reusing it.
+var bootArmed = false
+var bootQuiet: DispatchWorkItem?
+
+func bootDetected() {
+    guard bootArmed else { return }
+    bootQuiet?.cancel()
+    let w = DispatchWorkItem { finishBoot("detection settled") }
+    bootQuiet = w
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: w)
+}
+
+func finishBoot(_ why: String) {
+    guard bootArmed else { return }
+    bootArmed = false
+    bootQuiet?.cancel(); bootQuiet = nil
+    soloLock.lock()
+    soloSettleUntil = .distantPast
+    soloLock.unlock()
+    tlog("autofullscreen: boot \(why), evaluating")
+    rebuildQueue.async { applyAutoFullscreen(soloSnapshot()) }
 }
 
 // Every event pushes the settle point out, so the restore waits for the
@@ -4387,9 +4420,21 @@ guard !surfaces.isEmpty else {
 }
 let bootSnapshot = fetchSnapshot()
 apply(bootSnapshot) // blocking is fine here: the run loop has not started
-// evaluated once at startup too, or a bar restart on a solo workspace would
-// leave it tiled until the next window opened or closed
+// Evaluated once now, which is enough for a bar restart on a settled
+// machine, and again once aerospace's detection burst goes quiet, which is
+// what a real boot needs. Nothing is decided in between.
 applyAutoFullscreen(bootSnapshot)
+if autoFullscreenSolo, !omniwmActive() {
+    soloLock.lock()
+    soloSettleUntil = Date().addingTimeInterval(30) // finishBoot clears it
+    soloLock.unlock()
+    bootArmed = true
+    // a restart on a settled machine re-detects nothing, so nothing would
+    // ever go quiet
+    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+        finishBoot("no detection burst")
+    }
+}
 rightItems["activity"] = BarItem(icon: "󰍛", iconColor: palette.accent)
 applyShade() // restore the level this machine was left at
 updateBattery()
