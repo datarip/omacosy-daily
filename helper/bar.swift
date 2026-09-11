@@ -675,6 +675,12 @@ var soloCount: [String: Int] = [:]
 // gone, so the handler records nothing and the restore has nothing to do.
 // Reading a cache costs no subprocess and cannot lose that race.
 var lastFullscreenIDs: Set<String> = []
+// Nothing is decided from the window list until this passes. Measured: for
+// several seconds after a wake aerospace answers with a PARTIAL list, and
+// the rule acted on it, fullscreening the wrong window on a three-window
+// workspace and then switching off the very window the restore had just
+// put back. The two fought four times over sixteen seconds.
+var soloSettleUntil = Date.distantPast
 let soloLock = NSLock()
 
 func forgetSoloCounts() {
@@ -716,6 +722,12 @@ func kickSoloRecheck() {
 // path a frame has to travel.
 func applyAutoFullscreen(_ s: Snapshot) {
     guard autoFullscreenSolo, !omniwmActive() else { return }
+    soloLock.lock()
+    let settling = Date() < soloSettleUntil
+    soloLock.unlock()
+    // the cache is skipped too: a partial list is not empty, so the
+    // non-empty guard below would happily store it
+    guard !settling else { return }
     // guarded on the list being non-empty: aerospace answers with nothing
     // while the display is going down, and caching that would throw the
     // record away at the exact moment it is needed
@@ -4129,6 +4141,10 @@ NSWorkspace.shared.notificationCenter.addObserver(
     // two-window workspace and switch off the manual Super+F just put back.
     // Nothing opens or closes while the machine is asleep, so they still
     // describe the state being woken into.
+    // hold the rule off until the last rung of the ladder below has run
+    soloLock.lock()
+    soloSettleUntil = Date().addingTimeInterval(18)
+    soloLock.unlock()
     let ids = fullscreenAtSleep
     guard !ids.isEmpty else { return }
     // The same ladder the display path uses. Measured: the fullscreen can
