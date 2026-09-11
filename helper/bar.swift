@@ -3266,10 +3266,12 @@ final class BarWindow: NSWindow {
 let stackOffset: CGFloat = ProcessInfo.processInfo.environment["OMACOSY_BAR_STACK"] == nil ? 0 : barHeight
 
 // Bar behaviour from ~/.config/omacosy/bar.conf, same shape as
-// borders.conf. Only two keys, both about who owns the menu-bar strip.
+// borders.conf. Three keys: two about who owns the menu-bar strip, one
+// about how the bar arrives in it.
 //
 //   autohide = auto | on | off   auto derives it from the display
 //   split    = 0.0 .. 1.0        where the top edge divides
+//   slide    = milliseconds      how long the bar takes to arrive
 //
 // The split default of 0.5 is a starting point rather than a measured
 // one: the right value depends on how far left a user's status items
@@ -3277,6 +3279,7 @@ let stackOffset: CGFloat = ProcessInfo.processInfo.environment["OMACOSY_BAR_STAC
 struct BarConf {
     var autohide: Bool?          // nil = derive from the display
     var split: CGFloat = 0.5
+    var slideTime: Double = 0.2  // seconds; 0 is the instant switch
 }
 
 let barConfFile = FileManager.default.homeDirectoryForCurrentUser
@@ -3299,12 +3302,28 @@ func loadBarConf() -> BarConf {
             }
         } else if key == "split", let v = Double(val), v > 0, v < 1 {
             c.split = CGFloat(v)
+        } else if key == "slide" {
+            switch val {
+            case "off", "false", "no": c.slideTime = 0
+            // Capped at a second. A typo of 2000 for 200 otherwise leaves
+            // the bar crawling and reads as the daemon having hung.
+            default: if let v = Double(val), v >= 0, v <= 1000 { c.slideTime = v / 1000 }
+            }
         }
     }
     return c
 }
 
 let barConf = loadBarConf()
+
+// Where an auto-hiding bar is on its vertical travel. A plain boolean
+// cannot say it: "parked" and "sliding up" both mean hidden, and only one
+// of them may be ordered out.
+enum BarSlide: Equatable {
+    case parked        // off the display, above the top edge, ordered out
+    case sliding(Bool) // a move in flight; true is coming down
+    case down          // settled in the strip
+}
 
 // One surface per display. Each owns its screen's workspace set and its
 // own window; everything else it reads from the shared model.
@@ -3335,6 +3354,13 @@ final class BarSurface {
     var atTopEdge = false
     var latchedBar = false
     var yielded = false          // notched: stood aside for the native bar
+    // Where the window is on its vertical travel. Only a sliding surface
+    // ever leaves .down.
+    var slide: BarSlide = .down
+    // Which slide is current. A reversal starts a new one and the
+    // cancelled one's completion handler still runs, so it has to be able
+    // to tell that it is no longer the move in flight.
+    var slideSeq = 0
 
     // A notched display has nothing to reclaim. macOS already excludes the
     // camera strip from the usable area, so hiding the bar there gives back
@@ -3343,6 +3369,21 @@ final class BarSurface {
     // and hand the space to windows. Derived from the hardware, overridable
     // per machine in bar.conf.
     var autohide: Bool { barConf.autohide ?? !notched }
+
+    // A bar that is always on screen has nowhere to slide from, so the
+    // travel belongs to auto-hide alone. slide=0 in bar.conf gives the
+    // instant switch back.
+    var slides: Bool { autohide && barConf.slideTime > 0 }
+
+    // The two ends of the travel. Resting is the strip; hidden is one
+    // bar-height above the top edge, which puts the whole window off the
+    // display. BarWindow.constrainFrameRect returns the rect untouched, so
+    // AppKit does not drag it back on.
+    var restFrame: NSRect {
+        NSRect(x: screen.frame.minX, y: screen.frame.maxY - barHeight - stackOffset,
+               width: screen.frame.width, height: barHeight)
+    }
+    var hiddenFrame: NSRect { restFrame.offsetBy(dx: 0, dy: barHeight + stackOffset) }
 
     init(screen: NSScreen, monitorID: String) {
         self.screen = screen
@@ -3423,12 +3464,21 @@ final class BarSurface {
         backdropStrip = loadStrip(self)
         if backdropStrip.isEmpty { backdropStrip = seedStripFromWallpaper(self) }
         window.orderFrontRegardless()
+        // A sliding surface starts hidden, and a slide has to start from
+        // somewhere. Park it above the top edge here, so the first move a
+        // user sees is a reveal rather than the bar climbing away at
+        // launch. The settle pass in rebuildSurfaces orders it out.
+        if slides {
+            window.setFrame(hiddenFrame, display: false)
+            slide = .parked
+        }
     }
 
     func place() {
-        let frame = NSRect(x: screen.frame.minX, y: screen.frame.maxY - barHeight - stackOffset,
-                           width: screen.frame.width, height: barHeight)
-        window.setFrame(frame, display: true)
+        let frame = restFrame
+        // A parked surface is off the display and must stay there; putting
+        // it back in the strip would show the bar on a screen change.
+        window.setFrame(slide == .parked ? hiddenFrame : frame, display: true)
         backdrop.frame = NSRect(origin: .zero, size: frame.size)
         view.frame = NSRect(origin: .zero, size: frame.size)
     }
@@ -3589,11 +3639,34 @@ let barBaseLevel = NSWindow.Level(rawValue: -20)
 // which looked like macOS chrome winning, and was our own daemon.
 let barRevealLevel = NSWindow.Level(rawValue: 1002)
 let revealEdge: CGFloat = 2 // how close to the top edge counts as asking
+// macOS does not start collapsing the native menu bar the instant the
+// pointer leaves it. It waits, and a bar that does not wait is ahead of it
+// for the whole travel, which is exactly when the native bar shows.
+//
+// Measured on this machine, screen recording at 60fps with this bar
+// painted a flat magenta so the two could be told apart. Both take the
+// same 167ms to travel, so the durations were never the problem. This bar
+// started TWO FRAMES before the native one and led it the whole way,
+// leaving up to 7pt of native bar in sight below it for nine frames.
+// Three frames of hold covers the two with a frame to spare: measured
+// again, the native bar is not visible in any frame of the travel, in
+// either direction.
+//
+// A constant, not a fraction of the slide: it answers the system's own
+// delay, which does not change when slide= does.
+let exitHold: TimeInterval = 0.05
 
 func setRevealed(_ show: Bool, on surface: BarSurface) {
     guard show != surface.revealed else { return }
     surface.revealed = show
-    surface.window.level = show ? barRevealLevel : barBaseLevel
+    // Going up, the level rises now: the bar has to clear a fullscreen
+    // window before it is worth drawing. Coming down, a sliding surface
+    // keeps it until the climb has finished. At the resting level the bar
+    // is BEHIND the native menu bar, and staying in front of that while it
+    // collapses is half of what the slide is for.
+    if show || !surface.slides {
+        surface.window.level = show ? barRevealLevel : barBaseLevel
+    }
     // The backdrop is only needed where the bar ARRIVES into a strip the
     // native bar is also entering. An auto-hiding surface set it up once
     // and hides by ordering the window out, so there is nothing to do
@@ -3675,6 +3748,77 @@ func pointerAtScreenTop() {
     }
 }
 
+// The native menu bar drops into the strip rather than appearing in it,
+// and it is in front of whatever it covers for the whole move. An
+// auto-hiding bar that switches on and off matches neither half of that.
+// It reads as a different kind of object from the menu bar it replaced,
+// and on the way out it leaves the native bar exposed: this bar is gone
+// in one frame while the native one is still collapsing behind it, so the
+// collapse is visible. Travelling the same distance over the same time
+// covers it.
+//
+// The window MOVES; nothing redraws. The content is already painted and
+// the backdrop's blur is resolved by the window server as the frame
+// changes, so display: false is both correct and what keeps a slide from
+// running BarView.draw a dozen times.
+func slideBar(_ surface: BarSurface, reveal: Bool) {
+    // Already there, or already going there.
+    if surface.slide == .sliding(reveal) { return }
+    if surface.slide == (reveal ? .down : .parked) { return }
+    if reveal, !surface.window.isVisible {
+        // Coming down from a standing start. Draw before the window is
+        // composited, for the reason updateBarVisibility gives.
+        surface.window.setFrame(surface.hiddenFrame, display: false)
+        surface.view.display()
+        surface.window.orderFrontRegardless()
+    }
+    surface.slide = .sliding(reveal)
+    surface.slideSeq += 1
+    let seq = surface.slideSeq
+    let hold = reveal ? 0 : exitHold
+    let run = {
+        // A reveal during the hold bumps the sequence and this stands down
+        // with the bar still in the strip, which is where it wanted to be.
+        guard surface.slideSeq == seq else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = barConf.slideTime
+            // One curve, both directions, and the same one the system
+            // uses. This bar covers the native one only while it is AT OR
+            // BEHIND it on the travel; a frame where it is ahead is a
+            // frame where the native bar shows, below it on the way out
+            // and above it on the way in. Easing that favours one
+            // direction buys a livelier exit and pays for it by
+            // overtaking near the end.
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            surface.window.animator().setFrame(reveal ? surface.restFrame : surface.hiddenFrame,
+                                               display: false)
+        }
+    }
+    if hold > 0 {
+        DispatchQueue.main.asyncAfter(deadline: .now() + hold, execute: run)
+    } else {
+        run()
+    }
+    // The settle is scheduled, not hung off the animation group's
+    // completion handler. A reversal retargets the window and the
+    // cancelled group's handler is not something to depend on, and a
+    // slide that never settles is a bar that never orders out. A reversal
+    // bumps the sequence, so the settle of the move it replaced stands
+    // down here instead.
+    DispatchQueue.main.asyncAfter(deadline: .now() + hold + barConf.slideTime + 0.02) {
+        guard surface.slideSeq == seq else { return }
+        surface.slide = reveal ? .down : .parked
+        // Snap, in case a dropped frame left the travel short.
+        surface.window.setFrame(reveal ? surface.restFrame : surface.hiddenFrame, display: false)
+        if !reveal {
+            // Ordered out first. Dropping the level on a window still on
+            // screen puts it behind the native bar for a frame.
+            surface.window.orderOut(nil)
+            surface.window.level = barBaseLevel
+        }
+    }
+}
+
 func updateBarVisibility() {
     // fullscreenDisplays() walks the whole window list, so it is done once
     // here and handed down, and skipped entirely when no surface needs it.
@@ -3695,9 +3839,15 @@ func updateBarVisibility(_ surface: BarSurface, covered: Set<CGDirectDisplayID>?
         hide = surface.yielded || (cov.contains(screenID(surface.screen)) && !surface.revealed)
     }
     // unconditional either way: isVisible can desync from the window
-    // server, which is how borders.swift ended up with a stuck shroud
+    // server, which is how borders.swift ended up with a stuck shroud. A
+    // sliding surface keeps that: once it has settled at either end the
+    // plain call runs, and only a surface mid-travel is left alone.
     if hide {
-        surface.window.orderOut(nil)
+        if surface.slides, surface.slide != .parked {
+            slideBar(surface, reveal: false)
+        } else {
+            surface.window.orderOut(nil)
+        }
         if openPopup != nil { closePopup() }
     } else {
         // Draw BEFORE the window is composited. Ordering it front first
@@ -3705,7 +3855,11 @@ func updateBarVisibility(_ surface: BarSurface, covered: Set<CGDirectDisplayID>?
         // the stored fill only lands a few frames later — which is the
         // ramp this whole cache exists to remove.
         surface.view.display()
-        surface.window.orderFrontRegardless()
+        if surface.slides, surface.slide != .down {
+            slideBar(surface, reveal: true)
+        } else {
+            surface.window.orderFrontRegardless()
+        }
     }
 }
 
