@@ -536,9 +536,16 @@ func captureOwnStrip(_ surface: BarSurface) {
         let lum = columns.map { 0.299 * $0.redComponent + 0.587 * $0.greenComponent
                                 + 0.114 * $0.blueComponent }
         guard let lo = lum.min(), let hi = lum.max(), hi - lo < 0.12 else { return }
+        // Collapsed to ONE colour. A settled menu bar is flat down its
+        // height, so per-row storage adds nothing — and the rows that cross
+        // the menu titles still skew a little even after the median, which
+        // painted as a visible horizontal band across the middle of the bar.
+        // The median of the rows keeps the same value without the artefact.
+        let ordered = zip(lum, columns).sorted { $0.0 < $1.0 }.map { $0.1 }
+        let flat = [ordered[ordered.count / 2]]
         DispatchQueue.main.async {
-            surface.backdropStrip = columns
-            saveStrip(surface, columns)
+            surface.backdropStrip = flat
+            saveStrip(surface, flat)
         }
     }
 }
