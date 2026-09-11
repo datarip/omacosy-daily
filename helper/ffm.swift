@@ -174,11 +174,28 @@ func windowCandidates() -> [Cand] {
         // it look random rather than app-wide.
         //
         // So the test is the shape of the thing, not its size: a window
-        // that WRAPS another application's window is a decoration of it.
-        // A panel worth protecting sits over part of the screen and covers
-        // no window whole. A full-display overlay is the same rule seen
-        // from further away, and both are kept because a display with no
-        // ordinary window on it has nothing to wrap.
+        // that COVERS another application's window is a decoration of it.
+        // A panel worth protecting sits over part of the screen and takes
+        // only a corner of what is under it. A full-display overlay is the
+        // same rule seen from further away, and both are kept because a
+        // display with no ordinary window on it has nothing to cover.
+        //
+        // How much is "covers" was strict containment, and that missed a
+        // third shape. Measured: LanguageTool's window at 802,-64 702x1027
+        // is anchored to Safari at 714,8 718x883 inflated by 72 points on
+        // the top, right and bottom, but starts 88 points inside its left
+        // edge. It wraps three sides of four, so containment is false, the
+        // window survives as a panel, and hover focus over that Safari
+        // window dies while the rest of the display is fine.
+        //
+        // So the test is a FRACTION of the covered window, not all of it.
+        // 0.7 separates the two cases by a wide margin: that overlay takes
+        // 630x883 of Safari, 87.7% of it, while a 1Password Touch ID
+        // prompt over a half-display tile takes about 19%. Nothing that is
+        // genuinely a discrete panel comes near it, which is the argument
+        // the 0.95 display test already makes, one level down. It also
+        // subsumes containment, the 100% case, so there is one rule here
+        // instead of two.
         //
         // Same-app is deliberately excluded: an app drawing a shade over
         // its own window is doing it on purpose, and blocking is right.
@@ -186,9 +203,11 @@ func windowCandidates() -> [Cand] {
             let i = rect.intersection(scr)
             return !i.isNull && i.width * i.height >= scr.width * scr.height * 0.95
         }) { continue }
-        if blocking, realWindows.contains(where: { $0.pid != pid && rect.contains($0.rect) }) {
-            continue
-        }
+        if blocking, realWindows.contains(where: {
+            guard $0.pid != pid else { return false }
+            let i = rect.intersection($0.rect)
+            return !i.isNull && i.width * i.height >= $0.rect.width * $0.rect.height * 0.7
+        }) { continue }
         // AeroSpace hides inactive-workspace windows mostly offscreen
         // with a sliver visible — ignore anything <30% on-screen
         let visible = screens.reduce(CGFloat(0)) { acc, scr in
