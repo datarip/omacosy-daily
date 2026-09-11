@@ -565,9 +565,33 @@ struct Snapshot {
     var soleApp: [String: String] = [:]
     var occupied: Set<String> = []
     var focused = "" // omniwm only — under aerospace the fast path owns it
+    // auto-fullscreen only. soleApp is not a window count: two windows of
+    // ONE app still read as sole, which is right for the chip and wrong
+    // for a rule that turns on at exactly one window.
+    var tiledIDs: [String: [String]] = [:]
+    var fullscreenIDs: Set<String> = []
+    var aeroFocused = "" // kept apart from `focused`, which the chips own
 }
 
 let rebuildQueue = DispatchQueue(label: "com.omacosy.bar.rebuild")
+
+// One format for both readers of the window list, so the chip rebuild and
+// the auto-fullscreen recheck can never disagree about what a window is.
+let windowFormat = "%{workspace}|%{app-name}|%{window-layout}"
+    + "|%{window-id}|%{window-is-fullscreen}|%{workspace-is-focused}"
+
+// The auto-fullscreen fields, filled from one list-windows line.
+func absorbSolo(_ f: [String], into s: inout Snapshot) {
+    guard f.count >= 6 else { return }
+    if f[5] == "true" { s.aeroFocused = f[0] }
+    // A hidden app keeps its window in the list. Measured: a workspace
+    // holding Zed plus a Cmd+H'd Notes lists two, so a plain count refuses
+    // to fullscreen a workspace that is showing one window. Floating
+    // windows are left out for the same reason.
+    guard f[2] != "floating", f[2] != "macos_native_window_of_hidden_app" else { return }
+    s.tiledIDs[f[0], default: []].append(f[3])
+    if f[4] == "true" { s.fullscreenIDs.insert(f[3]) }
+}
 
 func fetchSnapshot() -> Snapshot {
     omniwmActive() ? omniwmSnapshot() : aerospaceSnapshot()
@@ -595,10 +619,15 @@ func aerospaceSnapshot() -> Snapshot {
 
     var sole: [String: String] = [:]
     var count: [String: Int] = [:]
-    for line in aerospace(["list-windows", "--all", "--format",
-                           "%{workspace}|%{app-name}|%{window-layout}"]).split(separator: "\n") {
+    // windowFormat's three trailing fields are the auto-fullscreen rule's
+    // whole input, appended so the existing f[0..2] offsets are untouched.
+    // They cost no extra subprocess, which is the only reason the feature
+    // can live on this path at all.
+    for line in aerospace(["list-windows", "--all", "--format", windowFormat])
+        .split(separator: "\n") {
         let f = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
         guard f.count >= 3 else { continue }
+        absorbSolo(f, into: &s)
         guard f[2] != "floating" else { continue }
         s.occupied.insert(f[0])
         if let existing = sole[f[0]] {
@@ -610,6 +639,98 @@ func aerospaceSnapshot() -> Snapshot {
     }
     s.soleApp = sole.filter { count[$0.key] == 1 }
     return s
+}
+
+// --- auto-fullscreen: a workspace holding one window ----------------------
+//
+// Off unless ~/.config/omacosy/fullscreen.conf turns it on. With 8 px outer
+// gaps this buys 8 px a side, so it is a preference rather than a default.
+// AeroSpace only: OmniWM has its own layout handling.
+//
+// It rides the snapshot the chips already fetch, and acts only when a
+// workspace's tiled window COUNT changes. That is what keeps it out of the
+// way. Super+F changes no count, so a deliberate choice is never undone a
+// second later. A focus-driven version cannot tell the two apart and needs
+// a marker file, which has to be one-shot or the workspace never returns to
+// automatic.
+
+let autoFullscreenSolo: Bool = {
+    let file = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent(".config/omacosy/fullscreen.conf")
+    guard let text = try? String(contentsOf: file, encoding: .utf8) else { return false }
+    for line in text.split(separator: "\n") where line.hasPrefix("solo=") {
+        return line.dropFirst("solo=".count)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\" ")) == "on"
+    }
+    return false
+}()
+
+// The count each workspace was last acted on at. A repeat of the same count
+// is not a trigger, and that is the whole of the Super+F truce.
+var soloCount: [String: Int] = [:]
+let soloLock = NSLock()
+
+func forgetSoloCounts() {
+    soloLock.lock()
+    soloCount.removeAll()
+    soloLock.unlock()
+}
+
+// Just the rule's own input, one subprocess, for the paths that have no
+// reason to rebuild the chips as well.
+func soloSnapshot() -> Snapshot {
+    var s = Snapshot()
+    for line in aerospace(["list-windows", "--all", "--format", windowFormat])
+        .split(separator: "\n") {
+        absorbSolo(line.split(separator: "|", omittingEmptySubsequences: false).map(String.init),
+                   into: &s)
+    }
+    return s
+}
+
+// A window moving between floating and tiling changes the count without
+// creating or destroying anything. Measured with a SkyLight probe: the
+// toggle fires 806 and 807 and nothing else, which is exactly the pair the
+// chip rebuild ignores. So it gets its own recheck, on its own debounce,
+// and the chips go on ignoring it.
+var soloPending: DispatchWorkItem?
+func kickSoloRecheck() {
+    guard autoFullscreenSolo, !omniwmActive() else { return }
+    soloPending?.cancel()
+    let w = DispatchWorkItem { rebuildQueue.async { applyAutoFullscreen(soloSnapshot()) } }
+    soloPending = w
+    // longer than the chip debounce: dragging a window edge fires a stream
+    // of these, and only the settled result is worth a subprocess
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: w)
+}
+
+// Runs on the rebuild queue, never on main: every call in here is a
+// subprocess, and this file's rule is that subprocess work stays off the
+// path a frame has to travel.
+func applyAutoFullscreen(_ s: Snapshot) {
+    guard autoFullscreenSolo, !omniwmActive(), !s.aeroFocused.isEmpty else { return }
+    let ws = s.aeroFocused
+    let ids = s.tiledIDs[ws] ?? []
+    guard !ids.isEmpty else { return }
+
+    soloLock.lock()
+    let changed = soloCount[ws] != ids.count
+    soloCount[ws] = ids.count
+    soloLock.unlock()
+    guard changed else { return }
+
+    if ids.count == 1 {
+        guard !s.fullscreenIDs.contains(ids[0]) else { return }
+        aerospace(["fullscreen", "on", "--no-outer-gaps", "--window-id", ids[0]])
+        tlog("autofullscreen: \(ws) solo, window \(ids[0]) on")
+    } else {
+        // by id, not by focus: the window that has to leave fullscreen is
+        // not always the one that just took it
+        for id in ids where s.fullscreenIDs.contains(id) {
+            aerospace(["fullscreen", "off", "--window-id", id])
+            tlog("autofullscreen: \(ws) holds \(ids.count), window \(id) off")
+        }
+    }
 }
 
 // The same answers out of omniwmctl, on the same two-subprocess budget:
@@ -3739,6 +3860,7 @@ func kickRebuild() {
             let t0 = DispatchTime.now().uptimeNanoseconds
             let snapshot = fetchSnapshot()
             let fetched = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
+            applyAutoFullscreen(snapshot) // a no-op unless the conf turns it on
             DispatchQueue.main.async {
                 let t1 = DispatchTime.now().uptimeNanoseconds
                 guard apply(snapshot) else { return } // nothing moved
@@ -3798,6 +3920,8 @@ let notify: NotifyProc = { event, _, _, _ in
             // that changed nothing, which apply() reports so the
             // repaint is skipped.
             kickRebuild()
+        } else {
+            kickSoloRecheck() // MOVE and RESIZE: a float/tile toggle is only these
         }
         kickVisibility()
     }
@@ -3960,6 +4084,62 @@ NSWorkspace.shared.notificationCenter.addObserver(
     forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
 ) { _ in applyShade() }
 
+// auto-fullscreen across sleep. Waking is not a window event, so nothing
+// would re-evaluate and a workspace would stay tiled until something else
+// fired. Recording on the way down rather than recomputing on the way up is
+// what preserves a MANUAL Super+F in a workspace holding more than one
+// window: no count implies that state, so recomputing discards it.
+var fullscreenAtSleep: [String] = []
+
+NSWorkspace.shared.notificationCenter.addObserver(
+    forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
+) { _ in
+    guard autoFullscreenSolo, !omniwmActive() else { return }
+    // asked fresh rather than read off the cached snapshot: Super+F is a
+    // RESIZE, and RESIZE deliberately does not rebuild, so the cache can be
+    // a manual choice behind
+    fullscreenAtSleep = aerospace(["list-windows", "--all", "--format",
+                                   "%{window-id}|%{window-is-fullscreen}"])
+        .split(separator: "\n")
+        .compactMap { line in
+            let f = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            guard f.count >= 2, f[1] == "true" else { return nil }
+            return f[0]
+        }
+    tlog("autofullscreen: sleeping, recorded \(fullscreenAtSleep.count) fullscreen window(s)")
+}
+
+NSWorkspace.shared.notificationCenter.addObserver(
+    forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+) { _ in
+    guard autoFullscreenSolo, !omniwmActive() else { return }
+    // The counts are deliberately KEPT. Clearing them here would defeat the
+    // restore below: the next window event would read a changed count on a
+    // two-window workspace and switch off the manual Super+F just put back.
+    // Nothing opens or closes while the machine is asleep, so they still
+    // describe the state being woken into.
+    let ids = fullscreenAtSleep
+    guard !ids.isEmpty else { return }
+    // the WM is still re-adopting its displays for a moment after a wake,
+    // so the same retry pair the display path uses
+    for delay in [1.0, 3.0] {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            rebuildQueue.async {
+                for id in ids {
+                    aerospace(["fullscreen", "on", "--no-outer-gaps", "--window-id", id])
+                }
+                tlog("autofullscreen: woke, reapplied \(ids.count) window(s)")
+            }
+        }
+    }
+}
+
+// a display arriving or leaving re-lays every workspace out, so the counts
+// this last acted on mean nothing afterwards
+NotificationCenter.default.addObserver(
+    forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+) { _ in forgetSoloCounts() }
+
 // media: Spotify broadcasts every state change itself, and the payload
 // already carries the track — so the pill repaints without asking anyone
 // anything. Launch and quit are the one pair it cannot announce.
@@ -4005,7 +4185,11 @@ guard !surfaces.isEmpty else {
     FileHandle.standardError.write("omacosy-bar: no display matched \(omniwmActive() ? "an omniwm" : "an aerospace") monitor\n".data(using: .utf8)!)
     exit(1)
 }
-apply(fetchSnapshot()) // blocking is fine here: the run loop has not started
+let bootSnapshot = fetchSnapshot()
+apply(bootSnapshot) // blocking is fine here: the run loop has not started
+// evaluated once at startup too, or a bar restart on a solo workspace would
+// leave it tiled until the next window opened or closed
+applyAutoFullscreen(bootSnapshot)
 rightItems["activity"] = BarItem(icon: "󰍛", iconColor: palette.accent)
 applyShade() // restore the level this machine was left at
 updateBattery()

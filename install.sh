@@ -295,6 +295,11 @@ cp "$REPO_DIR/config/borders.conf" "$HOME/.config/omacosy/borders.conf"
 # -n, unlike borders.conf above: this file is the only place the bar
 # behaviour can be overridden, so a re-run must not throw a choice away.
 cp -n "$REPO_DIR/config/bar.conf" "$HOME/.config/omacosy/bar.conf" 2>/dev/null || true
+# auto-fullscreen: seeded once, never overwritten. The only thing in this
+# file is the user's opt-in, and a plain cp would switch the feature back
+# off on every install.
+[ -f "$HOME/.config/omacosy/fullscreen.conf" ] \
+  || cp "$REPO_DIR/config/fullscreen.conf" "$HOME/.config/omacosy/fullscreen.conf"
 # app choices, RESOLVED (apps.local.conf already applied), for the same
 # reason: the bar's activity pill launches $TERMINAL and cannot read the
 # repo from a launchd agent when the clone is TCC-protected
