@@ -4131,9 +4131,12 @@ NSWorkspace.shared.notificationCenter.addObserver(
     // describe the state being woken into.
     let ids = fullscreenAtSleep
     guard !ids.isEmpty else { return }
-    // the WM is still re-adopting its displays for a moment after a wake,
-    // so the same retry pair the display path uses
-    for delay in [1.0, 3.0] {
+    // The same ladder the display path uses. Measured: the fullscreen can
+    // survive the sleep and then be knocked out by the burst of app
+    // activations about five seconds after the wake, which focuses another
+    // window in the same workspace. A pair of retries at 1 s and 3 s both
+    // finished before that happened.
+    for delay in [1.0, 3.0, 8.0, 15.0] {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             rebuildQueue.async {
                 for id in ids {
