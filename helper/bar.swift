@@ -767,20 +767,29 @@ func applyAutoFullscreen(_ s: Snapshot) {
     // guarded on the list being non-empty: aerospace answers with nothing
     // while the display is going down, and caching that would throw the
     // record away at the exact moment it is needed
-    if !s.tiledIDs.isEmpty {
-        soloLock.lock()
-        lastFullscreenIDs = s.fullscreenIDs
-        soloLock.unlock()
-    }
-    guard !s.aeroFocused.isEmpty else { return }
-    let ws = s.aeroFocused
-    let ids = s.tiledIDs[ws] ?? []
+    guard !s.tiledIDs.isEmpty else { return }
+    soloLock.lock()
+    lastFullscreenIDs = s.fullscreenIDs
+    soloLock.unlock()
+
+    // EVERY workspace, not just the focused one. A window opening on another
+    // workspace, which is what an app-to-workspace rule does with almost
+    // every app, would otherwise sit tiled until that workspace was next
+    // visited, and then go fullscreen a beat after arriving. The snapshot
+    // already carries every workspace's windows, so this costs no extra
+    // query, and `fullscreen on --window-id` works on a window that is not
+    // on screen.
+    for (ws, ids) in s.tiledIDs { applySolo(ws, ids, s) }
+}
+
+func applySolo(_ ws: String, _ ids: [String], _ s: Snapshot) {
     guard !ids.isEmpty else { return }
     let n = ids.count
 
     // A count change means a window opened or closed here, which ends any
     // override and forgets who set what.
     soloLock.lock()
+    let firstSight = soloCount[ws] == nil
     let countChanged = soloCount[ws] != n
     soloCount[ws] = n
     if countChanged {
@@ -815,9 +824,6 @@ func applyAutoFullscreen(_ s: Snapshot) {
             tlog("autofullscreen: \(ws) left fullscreen by hand, leaving it alone")
             return
         }
-        // never set, or set to a window that is gone: assert it. This is
-        // what fixes a workspace that woke up tiled, or that the bar has
-        // not seen before, WITHOUT waiting for its window count to change.
         aerospace(["fullscreen", "on", "--no-outer-gaps", "--window-id", id])
         soloLock.lock()
         soloWeSet[ws] = id
@@ -827,6 +833,14 @@ func applyAutoFullscreen(_ s: Snapshot) {
     } else {
         let full = ids.filter { s.fullscreenIDs.contains($0) }
         guard !full.isEmpty else { return }
+        // Never clear a fullscreen on a workspace this process has not seen
+        // before. After a restart every workspace is new, and a deliberate
+        // Super+F in a multi-window workspace would be undone on sight.
+        guard !firstSight else {
+            soloLock.lock(); soloOverride.insert(ws); soloLock.unlock()
+            tlog("autofullscreen: \(ws) already fullscreen with \(n) windows, leaving it alone")
+            return
+        }
         if !countChanged {
             // fullscreen appeared here without a window opening or closing.
             // Super+F again, in a workspace the rule would never fullscreen.
@@ -836,8 +850,6 @@ func applyAutoFullscreen(_ s: Snapshot) {
             tlog("autofullscreen: \(ws) fullscreened by hand with \(n) windows, leaving it alone")
             return
         }
-        // by id, not by focus: the window that has to leave fullscreen is
-        // not always the one that just took it
         for id in full {
             aerospace(["fullscreen", "off", "--window-id", id])
             soloLock.lock()
