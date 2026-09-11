@@ -4137,6 +4137,14 @@ NSWorkspace.shared.notificationCenter.addObserver(
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             rebuildQueue.async {
                 for id in ids {
+                    // tiling FIRST. Measured: a window can come back from
+                    // sleep as floating, having lost its tiling as well as
+                    // its fullscreen, and aerospace cannot fullscreen a
+                    // floating window. It exits 0 and does nothing, so the
+                    // restore reported success and changed nothing.
+                    // Unconditional is safe here: only a tiled window can
+                    // be fullscreen, so every recorded id was tiled.
+                    aerospace(["layout", "tiling", "--window-id", id])
                     aerospace(["fullscreen", "on", "--no-outer-gaps", "--window-id", id])
                 }
                 tlog("autofullscreen: woke, reapplied \(ids.count) window(s)")
