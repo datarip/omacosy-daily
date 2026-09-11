@@ -416,11 +416,16 @@ var palette = loadPalette()
 // tints from, measured at about +36 in red here, so the seed is corrected
 // toward white by that much and no more. A right-half hover replaces it
 // with the real thing.
+// theme-set and theme-bg-next both record the chosen wallpaper here, and
+// this daemon keeps its strip cache beside it.
+let stateDir = NSHomeDirectory() + "/.local/state/omacosy"
+let wallpaperLink = stateDir + "/background"
+
 // The last good capture, kept across restarts. After the first right-half
 // hover this machine ever does, every later start paints the real menu bar
 // colour on its first frame instead of an approximation.
 func stripCachePath(_ surface: BarSurface) -> String {
-    let dir = NSHomeDirectory() + "/.local/state/omacosy"
+    let dir = stateDir
     try? FileManager.default.createDirectory(atPath: dir,
                                              withIntermediateDirectories: true)
     return dir + "/bar-strip-\(screenID(surface.screen))"
@@ -444,9 +449,28 @@ func saveStrip(_ surface: BarSurface, _ colours: [NSColor]) {
     try? text.write(toFile: stripCachePath(surface), atomically: true, encoding: .utf8)
 }
 
+// The state link FIRST, and desktopImageURL only as a fallback. Both
+// theme-set and theme-bg-next write the link and then ask macOS to set the
+// picture, and macOS takes its time: measured, the desktop changed 337ms
+// after the link on a theme switch. Seeding from desktopImageURL inside
+// that window reads the OLD wallpaper, so the strip came out the previous
+// colour and stayed there.
+//
+// The link is one image for every screen, because that is what both
+// scripts set. A wallpaper chosen per display outside omacosy is not
+// described by it, and on that setup the seed is the approximation it
+// already says it is. A right-half hover still replaces it with the
+// real thing.
+func wallpaperURL(for screen: NSScreen) -> URL? {
+    if FileManager.default.fileExists(atPath: wallpaperLink) {
+        return URL(fileURLWithPath: wallpaperLink)
+    }
+    return NSWorkspace.shared.desktopImageURL(for: screen)
+}
+
 func seedStripFromWallpaper(_ surface: BarSurface) -> [NSColor] {
     let screen = surface.screen
-    guard let url = NSWorkspace.shared.desktopImageURL(for: screen),
+    guard let url = wallpaperURL(for: screen),
           let image = NSImage(contentsOf: url),
           let tiff = image.tiffRepresentation,
           let bitmap = NSBitmapImageRep(data: tiff),
@@ -4228,14 +4252,50 @@ watch(FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".config/omarchy/current").path, create: false) {
     let t0 = DispatchTime.now().uptimeNanoseconds
     palette = loadPalette()
-    // theme-set swaps the wallpaper. Re-seed rather than clear: an empty
-    // strip would put the effect view back on screen and the ramp with it.
-    for surface in surfaces { surface.backdropStrip = seedStripFromWallpaper(surface) }
+    // The strip is NOT re-seeded here. theme-set swaps this symlink first
+    // and sets the wallpaper afterwards, so a seed taken now reads the
+    // picture that is still on screen. The wallpaper watcher below owns
+    // the strip, and it fires off the link that names the new image.
     iconCache.removeAll()
     repaint()
     if cheatWindow != nil { hideCheatsheet(); toggleCheatsheet() } // repaint in the new palette
     let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
     tlog(String(format: "theme %.2f ms", ms))
+}
+
+// The wallpaper, which is what the strip is seeded from. Nothing watched
+// it before: theme-bg-next changes the picture and touches nothing else,
+// so Super+Shift+B left the bar on the old colour until a right-half hover
+// happened to capture the real menu bar, seconds later or not at all.
+//
+// The DIRECTORY, not the link. open(2) follows a symlink, so a watch on
+// the link tracks the image FILE behind it and never sees the swap. The
+// theme watcher above watches a directory for the same reason.
+//
+// Every write in the state dir wakes this, including this daemon's own
+// strip cache, so the resolved target is compared first and an unchanged
+// one costs a stat and returns.
+var seededWallpaper = URL(fileURLWithPath: wallpaperLink).resolvingSymlinksInPath().path
+watch(stateDir, create: false) {
+    let now = URL(fileURLWithPath: wallpaperLink).resolvingSymlinksInPath().path
+    guard now != seededWallpaper else { return }
+    seededWallpaper = now
+    let t0 = DispatchTime.now().uptimeNanoseconds
+    for surface in surfaces {
+        // Re-seed rather than clear, and keep the old strip if the image
+        // cannot be read: an empty strip puts the effect view back on
+        // screen and brings the reveal ramp with it.
+        let seed = seedStripFromWallpaper(surface)
+        guard !seed.isEmpty else { continue }
+        surface.backdropStrip = seed
+        // The cache still holds a capture of the PREVIOUS wallpaper and
+        // would paint it on the next start. An approximation of the
+        // current one is nearer, and a right-half hover replaces it.
+        saveStrip(surface, seed)
+    }
+    repaint()
+    let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
+    tlog(String(format: "wallpaper %.2f ms", ms))
 }
 
 // --- popup guard -----------------------------------------------------------
