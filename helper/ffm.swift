@@ -97,6 +97,24 @@ func windowCandidates() -> [Cand] {
     guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
         kCGNullWindowID) as? [[String: Any]] else { return [] }
     let screens = displayBounds()
+    // The ordinary windows, collected first because the overlay test below
+    // asks whether something in FRONT of them wraps one, and the list runs
+    // front to back.
+    //
+    // 200x200 so a genuinely small panel cannot be excused by happening to
+    // enclose some tiny utility window. Nothing a person tiles is that
+    // small: a four-way split of a 1440x900 display still leaves 708x438.
+    var realWindows: [(pid: pid_t, rect: CGRect)] = []
+    for w in list {
+        guard let layer = w["kCGWindowLayer"] as? Int, layer == 0,
+            let b = w["kCGWindowBounds"] as? [String: Any],
+            let x = b["X"] as? CGFloat, let y = b["Y"] as? CGFloat,
+            let wd = b["Width"] as? CGFloat, let h = b["Height"] as? CGFloat,
+            let pid = w["kCGWindowOwnerPID"] as? pid_t,
+            wd >= 200, h >= 200
+        else { continue }
+        realWindows.append((pid, CGRect(x: x, y: y, width: wd, height: h)))
+    }
     var cands: [Cand] = []
     for w in list { // list is front-to-back
         guard let layer = w["kCGWindowLayer"] as? Int,
@@ -146,10 +164,31 @@ func windowCandidates() -> [Cand] {
         // 0.95 rather than exact equality: menu-bar insets and display
         // scaling leave a window a few points short of its display, and
         // nothing that is genuinely a panel comes close to this.
+        //
+        // The same overlay also appears WINDOW-sized, which the display
+        // test alone does not catch. LanguageTool's third window tracks
+        // whichever window is focused, sitting on it with a margin:
+        // measured at -64,382 852x582 over a Ghostty window at 8,454
+        // 708x438, its frame inflated by 72 points on every side. Hover
+        // focus died over that window and nowhere else, which is what made
+        // it look random rather than app-wide.
+        //
+        // So the test is the shape of the thing, not its size: a window
+        // that WRAPS another application's window is a decoration of it.
+        // A panel worth protecting sits over part of the screen and covers
+        // no window whole. A full-display overlay is the same rule seen
+        // from further away, and both are kept because a display with no
+        // ordinary window on it has nothing to wrap.
+        //
+        // Same-app is deliberately excluded: an app drawing a shade over
+        // its own window is doing it on purpose, and blocking is right.
         if blocking, screens.contains(where: { scr in
             let i = rect.intersection(scr)
             return !i.isNull && i.width * i.height >= scr.width * scr.height * 0.95
         }) { continue }
+        if blocking, realWindows.contains(where: { $0.pid != pid && rect.contains($0.rect) }) {
+            continue
+        }
         // AeroSpace hides inactive-workspace windows mostly offscreen
         // with a sliver visible — ignore anything <30% on-screen
         let visible = screens.reduce(CGFloat(0)) { acc, scr in
