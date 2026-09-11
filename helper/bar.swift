@@ -4295,15 +4295,42 @@ func bootDetected() {
     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: w)
 }
 
+// Disarms only once aerospace actually answers. A boot can start this bar
+// before the window manager is up, and the fallback below would otherwise
+// fire into an empty window list, find nothing, and disarm for good.
+let bootGiveUp = Date().addingTimeInterval(90)
+
 func finishBoot(_ why: String) {
     guard bootArmed else { return }
-    bootArmed = false
     bootQuiet?.cancel(); bootQuiet = nil
-    soloLock.lock()
-    soloSettleUntil = .distantPast
-    soloLock.unlock()
-    tlog("autofullscreen: boot \(why), evaluating")
-    rebuildQueue.async { applyAutoFullscreen(soloSnapshot()) }
+    rebuildQueue.async {
+        let s = soloSnapshot()
+        guard !s.tiledIDs.isEmpty else {
+            DispatchQueue.main.async {
+                guard bootArmed, Date() < bootGiveUp else {
+                    if bootArmed {
+                        bootArmed = false
+                        soloLock.lock(); soloSettleUntil = .distantPast; soloLock.unlock()
+                        tlog("autofullscreen: boot gave up waiting for aerospace")
+                    }
+                    return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    finishBoot("aerospace was not answering yet")
+                }
+            }
+            return
+        }
+        DispatchQueue.main.async {
+            guard bootArmed else { return }
+            bootArmed = false
+            soloLock.lock()
+            soloSettleUntil = .distantPast
+            soloLock.unlock()
+            tlog("autofullscreen: boot \(why), evaluating")
+        }
+        applyAutoFullscreen(s)
+    }
 }
 
 // Every event pushes the settle point out, so the restore waits for the
