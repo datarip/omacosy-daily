@@ -516,8 +516,13 @@ case "split-hint":
         if f.count == 6 {
             maxWid = UInt32(f[4])
             if now - f[3] < 3 {
+                // trimmed: a stray newline would make the workspace compare
+                // unequal to itself and quietly disable the chain. It fails
+                // safe, towards measuring, which is why it would go unnoticed.
                 state = (UInt32(f[0]), CGFloat(f[1]), CGFloat(f[2]), Int(f[5]),
-                         parts.count >= 7 ? parts[6] : "")
+                         parts.count >= 7
+                            ? parts[6].trimmingCharacters(in: .whitespacesAndNewlines)
+                            : "")
             }
         }
     }
