@@ -681,14 +681,29 @@ var lastFullscreenIDs: Set<String> = []
 // workspace and then switching off the very window the restore had just
 // put back. The two fought four times over sixteen seconds.
 var soloSettleUntil = Date.distantPast
-// The first look after a wake records the counts instead of acting on
-// them. Waking changes counts by itself: aerospace re-detects windows and
-// re-runs on-window-detected, so a settings window ordered to float comes
-// back floating and the tiled count drops. Without this the rule reads
-// that as a real change, sees more than one window, and switches off the
-// manual fullscreen the restore just put back.
-var soloReseed = false
 let soloLock = NSLock()
+
+// Takes the settled state as the new baseline and lets the rule act again.
+// Waking changes counts by itself: aerospace re-detects windows and re-runs
+// on-window-detected, so a settings window ordered to float comes back
+// floating and the tiled count drops. Read as a real change, that made the
+// rule switch off the manual fullscreen the restore had just put back.
+//
+// On a timer rather than on the next window event. Driven by the event, it
+// sat pending for three minutes and then ate the close that should have
+// fullscreened a workspace down to its last window.
+func soloBaselineAfterWake() {
+    rebuildQueue.async {
+        let s = soloSnapshot()
+        guard !s.tiledIDs.isEmpty else { return }
+        soloLock.lock()
+        for (ws, ids) in s.tiledIDs { soloCount[ws] = ids.count }
+        lastFullscreenIDs = s.fullscreenIDs
+        soloSettleUntil = .distantPast
+        soloLock.unlock()
+        tlog("autofullscreen: settled after wake, baseline taken")
+    }
+}
 
 func forgetSoloCounts() {
     soloLock.lock()
@@ -736,18 +751,6 @@ func applyAutoFullscreen(_ s: Snapshot) {
     // non-empty guard below would happily store it
     guard !settling else { return }
 
-    soloLock.lock()
-    let reseed = soloReseed
-    if reseed { soloReseed = false }
-    soloLock.unlock()
-    if reseed, !s.tiledIDs.isEmpty {
-        soloLock.lock()
-        for (ws, ids) in s.tiledIDs { soloCount[ws] = ids.count }
-        lastFullscreenIDs = s.fullscreenIDs
-        soloLock.unlock()
-        tlog("autofullscreen: settled after wake, took the counts as the baseline")
-        return
-    }
     // guarded on the list being non-empty: aerospace answers with nothing
     // while the display is going down, and caching that would throw the
     // record away at the exact moment it is needed
@@ -4164,8 +4167,8 @@ NSWorkspace.shared.notificationCenter.addObserver(
     // hold the rule off until the last rung of the ladder below has run
     soloLock.lock()
     soloSettleUntil = Date().addingTimeInterval(18)
-    soloReseed = true
     soloLock.unlock()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 18.0) { soloBaselineAfterWake() }
     let ids = fullscreenAtSleep
     guard !ids.isEmpty else { return }
     // The same ladder the display path uses. Measured: the fullscreen can
