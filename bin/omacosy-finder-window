@@ -43,8 +43,19 @@
 # Needs an Automation grant ("... wants to control Finder"), once, on first
 # use. That is the trade for the two bugs above.
 #
+# Through omacosy-spawn, not straight at osascript. The window is made
+# the instant this runs, but `omacosy-helper split-hint` only runs when
+# AeroSpace reports a focus change, so a burst of key presses creates
+# every window before the first hint can shape any of them. Measured on
+# a 1440-point display holding one other window: four at once ran the
+# hint ONCE and gave five equal 285-point columns, and the same four
+# through the lock ran it four times and split each slot in turn.
+#
+# The lock lives in omacosy-spawn because Super+Enter needs it too.
+# `--cmd` is there because Finder cannot be opened with `open -na`.
+#
 # >/dev/null: osascript echoes the folder it set.
-exec osascript -e 'tell application "Finder"
+exec "$HOME/.local/bin/omacosy-spawn" --cmd osascript -e 'tell application "Finder"
   set w to make new Finder window
   set target of w to path to home folder
   activate
