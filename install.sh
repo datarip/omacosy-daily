@@ -270,6 +270,11 @@ fi
 mkdir -p "$HOME/.config/omacosy"
 cp "$REPO_DIR/config/ffm-ignore" "$HOME/.config/omacosy/ffm-ignore"
 cp "$REPO_DIR/config/borders.conf" "$HOME/.config/omacosy/borders.conf"
+# auto-fullscreen: seeded once, never overwritten. The only thing in this
+# file is the user's opt-in, and a plain cp would switch the feature back
+# off on every install.
+[ -f "$HOME/.config/omacosy/fullscreen.conf" ] \
+  || cp "$REPO_DIR/config/fullscreen.conf" "$HOME/.config/omacosy/fullscreen.conf"
 # app choices, RESOLVED (apps.local.conf already applied), for the same
 # reason: the bar's activity pill launches $TERMINAL and cannot read the
 # repo from a launchd agent when the clone is TCC-protected
