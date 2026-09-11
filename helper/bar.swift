@@ -665,9 +665,17 @@ let autoFullscreenSolo: Bool = {
     return false
 }()
 
-// The count each workspace was last acted on at. A repeat of the same count
-// is not a trigger, and that is the whole of the Super+F truce.
+// The count each workspace was last seen at. A change in it means a window
+// opened or closed, which is what hands a workspace back to automatic.
 var soloCount: [String: Int] = [:]
+// The window this rule last put into fullscreen, per workspace. Needed to
+// tell "the user turned this off" from "it was never on": both look like a
+// solo workspace that is not fullscreen.
+var soloWeSet: [String: String] = [:]
+// Workspaces where the user overrode the rule with Super+F. Cleared the
+// moment a window opens or closes there, so an override lasts until
+// something changes and is then forgotten.
+var soloOverride: Set<String> = []
 // Which windows were fullscreen at the last good look, kept for the sleep
 // handler. Measured: an `aerospace` call started from willSleep is not
 // guaranteed to finish before the system suspends. It resumes after the
@@ -699,6 +707,12 @@ func soloBaselineAfterWake() {
         soloLock.lock()
         for (ws, ids) in s.tiledIDs { soloCount[ws] = ids.count }
         lastFullscreenIDs = s.fullscreenIDs
+        // Forget who set what. Waking drops fullscreen without asking, so a
+        // workspace that is solo and tiled now is a state nobody chose, and
+        // the rule should assert it rather than read it as an override.
+        // Overrides themselves are KEPT: a Super+F before the sleep is still
+        // the user's decision afterwards.
+        soloWeSet.removeAll()
         soloSettleUntil = .distantPast
         soloLock.unlock()
         tlog("autofullscreen: settled after wake, baseline taken")
@@ -747,8 +761,7 @@ func applyAutoFullscreen(_ s: Snapshot) {
     soloLock.lock()
     let settling = Date() < soloSettleUntil
     soloLock.unlock()
-    // the cache is skipped too: a partial list is not empty, so the
-    // non-empty guard below would happily store it
+    // nothing is decided while a wake settles: the list is partial then
     guard !settling else { return }
 
     // guarded on the list being non-empty: aerospace answers with nothing
@@ -763,24 +776,76 @@ func applyAutoFullscreen(_ s: Snapshot) {
     let ws = s.aeroFocused
     let ids = s.tiledIDs[ws] ?? []
     guard !ids.isEmpty else { return }
+    let n = ids.count
 
+    // A count change means a window opened or closed here, which ends any
+    // override and forgets who set what.
     soloLock.lock()
-    let changed = soloCount[ws] != ids.count
-    soloCount[ws] = ids.count
+    let countChanged = soloCount[ws] != n
+    soloCount[ws] = n
+    if countChanged {
+        soloOverride.remove(ws)
+        soloWeSet[ws] = nil
+    }
+    let overridden = soloOverride.contains(ws)
+    let weSet = soloWeSet[ws]
     soloLock.unlock()
-    guard changed else { return }
+    guard !overridden else { return }
 
-    if ids.count == 1 {
-        guard !s.fullscreenIDs.contains(ids[0]) else { return }
-        aerospace(["fullscreen", "on", "--no-outer-gaps", "--window-id", ids[0]])
-        tlog("autofullscreen: \(ws) solo, window \(ids[0]) on")
+    if n == 1 {
+        let id = ids[0]
+        if s.fullscreenIDs.contains(id) {
+            // already right. Record it, so turning it off later reads as
+            // the user's doing rather than as a state we never set.
+            soloLock.lock()
+            soloWeSet[ws] = id
+            lastFullscreenIDs.insert(id)
+            soloLock.unlock()
+            return
+        }
+        // Solo and not fullscreen. Two different situations, and the count
+        // cannot tell them apart, which is why soloWeSet exists.
+        if weSet == id {
+            // we put it there, it is off now, and nothing opened or closed:
+            // the only thing that does that is Super+F
+            soloLock.lock()
+            soloOverride.insert(ws)
+            soloWeSet[ws] = nil
+            soloLock.unlock()
+            tlog("autofullscreen: \(ws) left fullscreen by hand, leaving it alone")
+            return
+        }
+        // never set, or set to a window that is gone: assert it. This is
+        // what fixes a workspace that woke up tiled, or that the bar has
+        // not seen before, WITHOUT waiting for its window count to change.
+        aerospace(["fullscreen", "on", "--no-outer-gaps", "--window-id", id])
+        soloLock.lock()
+        soloWeSet[ws] = id
+        lastFullscreenIDs.insert(id)   // recorded now, not at the next snapshot
+        soloLock.unlock()
+        tlog("autofullscreen: \(ws) solo, window \(id) on")
     } else {
+        let full = ids.filter { s.fullscreenIDs.contains($0) }
+        guard !full.isEmpty else { return }
+        if !countChanged {
+            // fullscreen appeared here without a window opening or closing.
+            // Super+F again, in a workspace the rule would never fullscreen.
+            soloLock.lock()
+            soloOverride.insert(ws)
+            soloLock.unlock()
+            tlog("autofullscreen: \(ws) fullscreened by hand with \(n) windows, leaving it alone")
+            return
+        }
         // by id, not by focus: the window that has to leave fullscreen is
         // not always the one that just took it
-        for id in ids where s.fullscreenIDs.contains(id) {
+        for id in full {
             aerospace(["fullscreen", "off", "--window-id", id])
-            tlog("autofullscreen: \(ws) holds \(ids.count), window \(id) off")
+            soloLock.lock()
+            lastFullscreenIDs.remove(id)
+            soloLock.unlock()
+            tlog("autofullscreen: \(ws) holds \(n), window \(id) off")
         }
+        soloLock.lock(); soloWeSet[ws] = nil; soloLock.unlock()
     }
 }
 
