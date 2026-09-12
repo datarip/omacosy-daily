@@ -110,10 +110,26 @@ apply() {
     sed -i '' -E "s|^outer\.top = .*|$line|" "$AERO"
     "$A" reload-config >/dev/null 2>&1
   fi
+  # The NATIVE bar's auto-hide is a macOS global, not ours. macos-defaults.sh
+  # sets it so this bar can own the strip, and nothing put it back — so `off`
+  # gave a permanently visible omacosy bar over a native bar that still hid
+  # itself, which is half of what the setting asks for. Both bars visible is
+  # the whole point of turning autohide off.
+  #
+  # `on` and `auto` restore the omacosy default, where the native bar hides
+  # and the top edge is shared by revealing it on the other half.
+  if [ "$want" = off ]; then
+    defaults write NSGlobalDomain _HIHideMenuBar -bool false
+  else
+    defaults write NSGlobalDomain _HIHideMenuBar -bool true
+  fi
+
   # the bar reads bar.conf once, at startup
   launchctl kickstart -k "gui/$(id -u)/com.omacosy.bar" >/dev/null 2>&1
   printf 'omacosy: bar autohide=%s — built-in gap %s, external %s (%s at rest here)\n' \
     "$want" "$bi" "$ex" "$(hides "$want" && echo hidden || echo visible)"
+  printf '         native menu bar: %s\n' \
+    "$([ "$want" = off ] && echo 'visible (log out and in if it does not apply at once)' || echo 'auto-hidden, revealed at the top edge')"
 }
 
 case "${1:-status}" in
@@ -122,6 +138,8 @@ case "${1:-status}" in
     s=$(setting)
     printf 'autohide=%s — %s at rest on this display\n' "$s" \
       "$(hides "$s" && echo hidden || echo visible)"
+    printf '  native menu bar: %s\n' \
+      "$([ "$(defaults read NSGlobalDomain _HIHideMenuBar 2>/dev/null)" = 1 ] && echo auto-hidden || echo visible)"
     printf '  menu bar height %s, notch inset %s, top gap wants %s, aerospace has %s\n' \
       "$(bar_height)" "$(notch_inset)" "$(want_gap "$s")" \
       "$(current_gap)"
