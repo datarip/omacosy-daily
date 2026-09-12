@@ -571,13 +571,59 @@ func seedStripFromWallpaper(_ surface: BarSurface) -> [NSColor] {
                      display: screenID(surface.screen))
 }
 
+// The display, with THIS bar's windows taken out of it. Rebuilt when the
+// window set changes, because fetching shareable content is the slow part and
+// this bar's window ids are stable for the life of the process.
+var cachedFilter: SCContentFilter?
+var cachedFilterIDs: Set<CGWindowID> = []
+
+func captureBehindOwnBar(_ rect: CGRect) async -> CGImage? {
+    let mine = Set(surfaces.map { CGWindowID($0.window.windowNumber) })
+    if cachedFilter == nil || cachedFilterIDs != mine {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(
+                false, onScreenWindowsOnly: false),
+              let display = content.displays.first else { return nil }
+        cachedFilter = SCContentFilter(display: display,
+                                       excludingWindows: content.windows.filter { mine.contains($0.windowID) })
+        cachedFilterIDs = mine
+    }
+    guard let filter = cachedFilter else { return nil }
+    let cfg = SCStreamConfiguration()
+    cfg.sourceRect = rect
+    cfg.width = Int(rect.width)          // one sample per point is plenty for a colour
+    cfg.height = Int(rect.height)
+    cfg.showsCursor = false
+    cfg.captureResolution = .best
+    let shot: CGImage? = try? await SCScreenshotManager.captureImage(contentFilter: filter,
+                                                                     configuration: cfg)
+    return shot
+}
+
 func captureOwnStrip(_ surface: BarSurface) {
-    // The pointer must STILL be in the strip on the right half. The native
-    // bar is auto-hidden, so it slides away the moment the pointer leaves,
-    // and a capture that lands after that reads bare window content.
-    guard !stripCaptureInFlight, !surface.revealed, !surface.window.isVisible,
-          surface.atTopEdge, !surface.latchedBar
-    else { return }
+    // The pointer must still be at the top edge, because the native bar is
+    // auto-hidden and slides away the moment it leaves. Which HALF no longer
+    // matters, and neither does whether this bar is revealed.
+    //
+    // It used to matter, because the capture was a screencapture(1) of the
+    // screen: with this bar on top, that photographed this bar. So a capture
+    // could only be taken on a right-half hover with this bar down, and on a
+    // wallpaper never seen that meant the seed was shown until the user
+    // happened to visit the right-hand side. Measured from a recording: 1.6s
+    // to 19.1s, and sometimes never.
+    //
+    // ScreenCaptureKit can exclude a window from a capture. Excluding THIS
+    // bar returns what is behind it, and what is behind it is the native menu
+    // bar, which macOS reveals for any top-edge hover including the left.
+    // Verified by eye on both captures: including this window gives this
+    // bar's pills, excluding it gives the Apple logo and the app's menus.
+    guard !stripCaptureInFlight, surface.atTopEdge else { return }
+    // Once per wallpaper, not once per hover. The colour is a function of the
+    // wallpaper and of nothing else on screen, measured: the same image gave
+    // the same value with a fullscreen window under the strip and with the
+    // workspace empty, three runs minutes apart agreeing to four decimals. So
+    // a wallpaper already in the cache has nothing left to learn, and
+    // re-capturing it only spent a capture and risked a visible re-paint.
+    if loadStrips(surface)[wallpaperKey()] != nil { return }
     stripCaptureInFlight = true
     // The wallpaper this capture belongs to, read BEFORE the screenshot. A
     // capture takes a subprocess and a decode, and a wallpaper change can land
@@ -597,17 +643,12 @@ func captureOwnStrip(_ surface: BarSurface) {
     // long you hovered. At 30 the spread is 0.0004 to 0.019 and all seven are
     // accepted.
     let captureHeight = NSApplication.shared.mainMenu?.menuBarHeight ?? barHeight
-    DispatchQueue.global(qos: .utility).async {
+    let rect = CGRect(x: origin.x, y: origin.y, width: frame.width, height: captureHeight)
+    Task.detached(priority: .utility) {
         defer { DispatchQueue.main.async { stripCaptureInFlight = false } }
-        let path = "/tmp/omacosy-bar-strip.png"
-        _ = shell("/usr/sbin/screencapture", [
-            "-x", "-o",
-            "-R\(Int(origin.x)),\(Int(origin.y)),\(Int(frame.width)),\(Int(captureHeight))",
-            path])
-        guard let image = NSImage(contentsOfFile: path),
-              let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff), bitmap.pixelsWide > 0
-        else { return }
+        guard let cgImage = await captureBehindOwnBar(rect) else { return }
+        let bitmap = NSBitmapImageRep(cgImage: cgImage)
+        guard bitmap.pixelsWide > 0 else { return }
         // One entry per band. The strip sits over a window at one end and the
         // desktop at the other, and the menu bar tracks that, so a single
         // average is visibly wrong at one end or the other.
@@ -643,7 +684,6 @@ func captureOwnStrip(_ surface: BarSurface) {
                                 count: 4))
         }
         let columns = rows
-        try? FileManager.default.removeItem(atPath: path)
         guard !columns.isEmpty else { return }
         // The native bar SLIDES in. Caught partway it is bar at the top and
         // window underneath, which stored as a thin bright line over a dark
@@ -662,7 +702,7 @@ func captureOwnStrip(_ surface: BarSurface) {
         let flat = [ordered[ordered.count / 2]]
         DispatchQueue.main.async {
             guard capturedFor == wallpaperKey() else { return }  // it moved under us
-            surface.backdropStrip = flat
+            setStrip(flat, on: surface)
             if let c = flat.first { saveStrip(surface, c, for: capturedFor) }
         }
     }
@@ -3113,10 +3153,11 @@ final class BarView: NSView {
         // The stored blur, painted on the first frame. While it is empty the
         // effect view behind shows through and does the work, which is the
         // one reveal per wallpaper that pays for the capture.
-        if !surface.backdropStrip.isEmpty {
+        let painted = paintedStrip(surface)
+        if !painted.isEmpty {
             // Stored top-down, drawn bottom-up: the view is not flipped.
-            let band = bounds.height / CGFloat(surface.backdropStrip.count)
-            for (i, colour) in surface.backdropStrip.enumerated() {
+            let band = bounds.height / CGFloat(painted.count)
+            for (i, colour) in painted.enumerated() {
                 colour.setFill()
                 // half a point of overlap so no seam shows between rows
                 NSRect(x: 0, y: bounds.maxY - CGFloat(i + 1) * band - 0.5,
@@ -3457,6 +3498,18 @@ final class BarSurface {
     // What the blur resolved to, one entry per column. Empty until the
     // first reveal has been captured; cleared when the wallpaper changes.
     var backdropStrip: [NSColor] = []
+    // Where the strip is fading FROM, and when that started. The colour is
+    // corrected once per wallpaper, when a capture of the native bar finally
+    // exists, and the correction used to land in a single frame. A step is
+    // what the eye catches; the same change spread over a quarter second is
+    // not seen at all. Measured why it has to be this way rather than simply
+    // waiting for the right colour: the native bar takes ~260ms to settle
+    // after the pointer reaches the top and the capture ~130ms on top, so the
+    // true colour does not exist until ~390ms after the bar is asked for.
+    // Holding the reveal that long is itself plainly visible.
+    var fadeFrom: [NSColor] = []
+    var fadeStart: Date?
+    var fadeTimer: Timer?
 
     // A notched display has no usable centre, so the media capsule joins
     // the left cluster there — the same rule the shell bar applies, but
@@ -3670,6 +3723,68 @@ func rebuildSurfaces() {
     updateBarVisibility()
 }
 
+let stripFade = 0.25
+
+// Every correction to the strip goes through here. Setting it outright is
+// still right at startup, where there is nothing on screen to fade from.
+// Same colour to the eye? NSColor's own == also compares the colour SPACE, and
+// a colour read back from the cache is sRGB while a fresh capture carries the
+// display's profile, so two identical colours compared unequal and animated a
+// fade to themselves on every hover.
+func sameStrip(_ a: [NSColor], _ b: [NSColor]) -> Bool {
+    guard a.count == b.count else { return false }
+    for (x, y) in zip(a, b) {
+        guard let p = x.usingColorSpace(.sRGB), let q = y.usingColorSpace(.sRGB) else { return false }
+        if abs(p.redComponent - q.redComponent) > 1.0/255 { return false }
+        if abs(p.greenComponent - q.greenComponent) > 1.0/255 { return false }
+        if abs(p.blueComponent - q.blueComponent) > 1.0/255 { return false }
+    }
+    return true
+}
+
+func setStrip(_ next: [NSColor], on surface: BarSurface, animated: Bool = true) {
+    guard !sameStrip(next, surface.backdropStrip) else { return }
+    guard animated, !surface.backdropStrip.isEmpty else {
+        surface.fadeTimer?.invalidate(); surface.fadeTimer = nil; surface.fadeStart = nil
+        surface.backdropStrip = next
+        repaint()
+        return
+    }
+    // Fading FROM what is on screen this instant, not from the last target,
+    // so a second correction arriving mid-fade does not jump back.
+    surface.fadeFrom = paintedStrip(surface)
+    surface.backdropStrip = next
+    surface.fadeStart = Date()
+    surface.fadeTimer?.invalidate()
+    surface.fadeTimer = Timer.scheduledTimer(withTimeInterval: 1.0/60, repeats: true) { t in
+        guard let started = surface.fadeStart else { t.invalidate(); return }
+        if Date().timeIntervalSince(started) >= stripFade {
+            surface.fadeStart = nil; surface.fadeFrom = []
+            t.invalidate(); surface.fadeTimer = nil
+        }
+        repaint()
+    }
+    RunLoop.main.add(surface.fadeTimer!, forMode: .common)   // keeps running during a slide
+    repaint()
+}
+
+// What the strip looks like right now: the target, or a blend on the way to it.
+func paintedStrip(_ surface: BarSurface) -> [NSColor] {
+    guard let started = surface.fadeStart, !surface.fadeFrom.isEmpty else {
+        return surface.backdropStrip
+    }
+    let t = min(1, max(0, Date().timeIntervalSince(started) / stripFade))
+    // smoothstep: no visible start or stop, which a linear ramp still shows
+    let e = CGFloat(t * t * (3 - 2 * t))
+    let n = max(surface.backdropStrip.count, surface.fadeFrom.count)
+    guard n > 0 else { return surface.backdropStrip }
+    return (0..<n).map { i -> NSColor in
+        let a = surface.fadeFrom[min(i, surface.fadeFrom.count - 1)]
+        let b = surface.backdropStrip[min(i, surface.backdropStrip.count - 1)]
+        return a.blended(withFraction: e, of: b) ?? b
+    }
+}
+
 func repaint() {
     // every caller is already on the main queue; display() is synchronous
     // so the timings below cover real drawing, not just invalidation
@@ -3838,10 +3953,18 @@ func pointerAtScreenTop() {
             // are reachable.
             if surface.latchedBar {
                 setRevealed(true, on: surface)
-            } else {
-                // Right half: the native bar comes up alone. Give it a beat
-                // to arrive, then keep what it looks like, filed against the
-                // wallpaper it belongs to.
+            }
+            do {
+                // EITHER half. macOS drops the native bar for any top-edge
+                // hover, and the capture reads it through this one, so the
+                // left is no longer a dead end. That was the whole of the
+                // wait on a wallpaper nothing had captured: reaching this bar
+                // first meant no capture could be taken at all until the
+                // pointer happened to visit the right-hand side.
+                //
+                // 0.45s because the native bar settles about 260ms after the
+                // pointer arrives, measured over three runs at 253, 255 and
+                // 256ms, and the capture wants it settled.
                 //
                 // An earlier version of this comment said the native bar
                 // re-tints as windows move under it. Measured on an empty
@@ -3853,8 +3976,13 @@ func pointerAtScreenTop() {
                 // Still every time rather than once, because a capture costs
                 // a subprocess on a hover nothing is waiting on, and a second
                 // opinion on a wallpaper already known is free to discard.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                    captureOwnStrip(surface)
+                // Twice. 0.32s is just past the settle and wins almost always;
+                // 0.55s is the safety net for a slow one, and costs nothing
+                // because a capture already taken is rejected by the guards.
+                for delay in [0.32, 0.55] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        captureOwnStrip(surface)
+                    }
                 }
             }
         } else if surface.latchedBar {
@@ -4403,10 +4531,14 @@ watch(stateDir, create: false) {
                 // A real capture for this wallpaper beats the seed outright,
                 // and the cache survives restarts, so after one right-half
                 // hover per wallpaper the seed is never seen again.
+                // No fade here. The wallpaper itself has just changed under
+                // the bar, so this is a new subject rather than a correction
+                // to the old one, and blending between two wallpapers would
+                // read as a smear.
                 if let known = loadStrips(surface)[now] {
-                    surface.backdropStrip = [known]
+                    setStrip([known], on: surface, animated: false)
                 } else {
-                    surface.backdropStrip = seed
+                    setStrip(seed, on: surface, animated: false)
                 }
             }
             repaint()
