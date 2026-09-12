@@ -450,7 +450,7 @@ func wallpaperKey() -> String {
 // that produced it, and anything else is discarded rather than trusted. Bump
 // this whenever the capture changes: the height it reads, the route it takes,
 // or the statistic it reduces to.
-let stripCacheVersion = "v2 sck-behind-own-bar native-height row-median"
+let stripCacheVersion = "v3 sck-behind-own-bar native-height row-median extended-srgb"
 
 // "<r> <g> <b> <wallpaper path>" per line, after a first line naming the
 // version. A file from any other version is ignored and relearned.
@@ -465,7 +465,8 @@ func loadStrips(_ surface: BarSurface) -> [String: NSColor] {
         let parts = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: false)
         guard parts.count == 4, let r = Double(parts[0]), let g = Double(parts[1]),
               let b = Double(parts[2]) else { continue }
-        out[String(parts[3])] = NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
+        out[String(parts[3])] = NSColor(colorSpace: .extendedSRGB,
+                                        components: [CGFloat(r), CGFloat(g), CGFloat(b), 1], count: 4)
     }
     return out
 }
@@ -473,8 +474,14 @@ func loadStrips(_ surface: BarSurface) -> [String: NSColor] {
 func saveStrip(_ surface: BarSurface, _ colour: NSColor, for wallpaper: String) {
     var all = loadStrips(surface)
     all[wallpaper] = colour
+    // extendedSRGB, NOT sRGB. The menu bar's colour can sit outside the sRGB
+    // gamut: on a saturated teal wallpaper here the native bar's red is -0.236
+    // in extended coordinates, and usingColorSpace(.sRGB) clamps that to 0 and
+    // loses 60/255. Measured round trip: through sRGB 60.2/255 lost, through
+    // extendedSRGB 0.0. Extended coordinates go outside 0...1, which is the
+    // whole point, and the parser above reads the minus sign.
     let text = (["# \(stripCacheVersion)"] + all.compactMap { key, c -> String? in
-        guard let s = c.usingColorSpace(.sRGB) else { return nil }
+        guard let s = c.usingColorSpace(.extendedSRGB) else { return nil }
         return "\(s.redComponent) \(s.greenComponent) \(s.blueComponent) \(key)"
     }).joined(separator: "\n")
     try? text.write(toFile: stripCachePath(surface), atomically: true, encoding: .utf8)
@@ -625,6 +632,38 @@ func captureBehindOwnBar(_ rect: CGRect) async -> CGImage? {
     return shot
 }
 
+// A settled menu bar reads the same twice; one that is still re-tinting after
+// a wallpaper change does not. Two shots 120ms apart, and the pair is thrown
+// away unless they agree. This is what stops a capture taken mid-change being
+// filed under the new wallpaper and kept for good, and it needs no guess at
+// how long macOS takes, which varies with the image.
+func captureSettledBehindOwnBar(_ rect: CGRect) async -> CGImage? {
+    guard let first = await captureBehindOwnBar(rect) else { return nil }
+    let a = quickAverage(first)
+    try? await Task.sleep(nanoseconds: 120_000_000)
+    guard let second = await captureBehindOwnBar(rect) else { return nil }
+    let b = quickAverage(second)
+    guard let x = a, let y = b,
+          abs(x.0 - y.0) < 1.5/255, abs(x.1 - y.1) < 1.5/255, abs(x.2 - y.2) < 1.5/255
+    else { return nil }
+    return second
+}
+
+// Cheap mean over raw bytes, only ever compared against another of its own.
+func quickAverage(_ img: CGImage) -> (Double, Double, Double)? {
+    guard let data = img.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return nil }
+    let bpr = img.bytesPerRow, bpp = img.bitsPerPixel / 8
+    var r = 0.0, g = 0.0, b = 0.0, n = 0.0
+    for y in stride(from: 0, to: img.height, by: 2) {
+        for x in stride(from: 0, to: img.width, by: 8) {
+            let o = y * bpr + x * bpp
+            b += Double(p[o]); g += Double(p[o + 1]); r += Double(p[o + 2]); n += 1
+        }
+    }
+    guard n > 0 else { return nil }
+    return (r / n / 255, g / n / 255, b / n / 255)
+}
+
 func captureOwnStrip(_ surface: BarSurface) {
     // The pointer must still be at the top edge, because the native bar is
     // auto-hidden and slides away the moment it leaves. Which HALF no longer
@@ -650,6 +689,13 @@ func captureOwnStrip(_ surface: BarSurface) {
     // a wallpaper already in the cache has nothing left to learn, and
     // re-capturing it only spent a capture and risked a visible re-paint.
     if loadStrips(surface)[wallpaperKey()] != nil { return }
+    // The link changes the instant theme-bg-next runs, but macOS applies the
+    // picture about 340ms later and the native bar re-tints after that. Until
+    // the desktop agrees with the link, a capture is of the OLD wallpaper's
+    // tint and would be filed under the new one, permanently, because a
+    // wallpaper already cached is never captured again.
+    guard NSWorkspace.shared.desktopImageURL(for: surface.screen)?
+            .resolvingSymlinksInPath().path == wallpaperKey() else { return }
     stripCaptureInFlight = true
     // The wallpaper this capture belongs to, read BEFORE the screenshot. A
     // capture takes a subprocess and a decode, and a wallpaper change can land
@@ -672,7 +718,7 @@ func captureOwnStrip(_ surface: BarSurface) {
     let rect = CGRect(x: origin.x, y: origin.y, width: frame.width, height: captureHeight)
     Task.detached(priority: .utility) {
         defer { DispatchQueue.main.async { stripCaptureInFlight = false } }
-        guard let cgImage = await captureBehindOwnBar(rect) else { return }
+        guard let cgImage = await captureSettledBehindOwnBar(rect) else { return }
         let bitmap = NSBitmapImageRep(cgImage: cgImage)
         guard bitmap.pixelsWide > 0 else { return }
         // One entry per band. The strip sits over a window at one end and the
@@ -3760,7 +3806,8 @@ let stripFade = 0.25
 func sameStrip(_ a: [NSColor], _ b: [NSColor]) -> Bool {
     guard a.count == b.count else { return false }
     for (x, y) in zip(a, b) {
-        guard let p = x.usingColorSpace(.sRGB), let q = y.usingColorSpace(.sRGB) else { return false }
+        guard let p = x.usingColorSpace(.extendedSRGB),
+              let q = y.usingColorSpace(.extendedSRGB) else { return false }
         if abs(p.redComponent - q.redComponent) > 1.0/255 { return false }
         if abs(p.greenComponent - q.greenComponent) > 1.0/255 { return false }
         if abs(p.blueComponent - q.blueComponent) > 1.0/255 { return false }
