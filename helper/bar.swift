@@ -3023,7 +3023,10 @@ final class BarView: NSView {
         // The stored blur, painted on the first frame. While it is empty the
         // effect view behind shows through and does the work, which is the
         // one reveal per wallpaper that pays for the capture.
-        let painted = paintedStrip(surface)
+        // Skipped when the bar stays on screen: that bar is transparent, and
+        // the strip colour would be the one thing putting an opaque band back
+        // over what it is meant to let through.
+        let painted = surface.autohide ? paintedStrip(surface) : []
         if !painted.isEmpty {
             // Stored top-down, drawn bottom-up: the view is not flipped.
             let band = bounds.height / CGFloat(painted.count)
@@ -3395,6 +3398,7 @@ final class BarSurface {
     var atTopEdge = false
     var latchedBar = false
     var yielded = false          // notched: stood aside for the native bar
+    var yieldSeq = 0             // cancels a pending return, see setYielded
     // Where the window is on its vertical travel. Only a sliding surface
     // ever leaves .down.
     var slide: BarSlide = .down
@@ -3490,10 +3494,31 @@ final class BarSurface {
         backdrop.isHidden = true
         view = BarView(frame: NSRect(origin: .zero, size: frame.size))
         view.autoresizingMask = [.width, .height]
-        backdrop.addSubview(view)
-        window.contentView = backdrop
+        // SIBLINGS, not parent and child. BarView used to be a subview of the
+        // backdrop, so hiding the backdrop hid every pill, the clock and the
+        // strip colour with it — the window stayed on screen at the right
+        // size drawing nothing. Side by side in a plain container, the
+        // material can be taken away without taking the bar away, which is
+        // what a transparent bar needs.
+        let container = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        container.autoresizingMask = [.width, .height]
+        container.addSubview(backdrop)
+        container.addSubview(view, positioned: .above, relativeTo: backdrop)
+        window.contentView = container
         view.surface = self
-        // Visible from the start, for BOTH kinds of surface.
+        // A bar that never hides draws NO background of its own: no material
+        // and no painted strip, so what is behind the top edge shows through
+        // and only the pills are added to it. That is the notched default —
+        // `autohide` is `!notched`, so a notched Mac takes this path without
+        // configuring anything — and it is what `omacosy-bar-autohide off`
+        // gives anyone who asks for the bar to stay.
+        //
+        // An auto-hiding bar keeps both: it arrives into an EMPTY strip
+        // rather than over something, so it has to bring its own background
+        // or there is nothing there at all.
+        backdrop.isHidden = !autohide
+
+        // Visible from the start, for an auto-hiding surface.
         //
         // This read `backdrop.isHidden = !autohide`, on the reasoning that an
         // auto-hiding surface hides by ordering its window out and so never
@@ -3512,7 +3537,6 @@ final class BarSurface {
         // It reaches further than the opt-in. `autohide` defaults to
         // `!notched`, so a notched display takes this path by default, and
         // the bar would be invisible there on a stock install.
-        backdrop.isHidden = false
         // Remembered first, wallpaper only on a machine that has never
         // sampled. Either way it is never empty, and an empty strip is what
         // puts the effect view back on screen and the reveal ramp with it.
@@ -3777,6 +3801,13 @@ let revealEdge: CGFloat = 2 // how close to the top edge counts as asking
 // delay, which does not change when slide= does.
 let exitHold: TimeInterval = 0.05
 
+// How long the native menu bar takes to collapse once the pointer leaves the
+// top edge. It does not vanish, it travels, and it travels BEHIND this bar,
+// so coming back the instant the hover ends shows it retreating underneath —
+// exactly the overlap the stand-aside exists to avoid. Measured at 167ms for
+// the same travel in the other direction; 0.2 covers it with a frame spare.
+let nativeCollapse: TimeInterval = 0.2
+
 func setRevealed(_ show: Bool, on surface: BarSurface) {
     guard show != surface.revealed else { return }
     surface.revealed = show
@@ -3805,10 +3836,38 @@ func setRevealed(_ show: Bool, on surface: BarSurface) {
 // Notched displays only. The bar is visible at rest and hiding it reclaims
 // no screen, so the left half is a deliberate no-op and the right half's
 // only useful action is to get out of the way.
+// Standing aside is immediate; coming back is not.
+//
+// The native bar is drawn by the window server above this one, so while it is
+// up it covers this bar completely — which is the whole point. On the way out
+// it COLLAPSES rather than disappearing, and it collapses behind this bar, so
+// returning at once puts this bar in front of a native bar that is still
+// travelling and the retreat is visible through it. Held for the collapse,
+// this bar returns to a strip the native one has already left.
+//
+// The sequence number cancels a pending return: go back to the top edge
+// during the hold and the bar simply stays aside, which is where it was
+// going anyway.
 func setYielded(_ yield: Bool, on surface: BarSurface) {
-    guard yield != surface.yielded else { return }
-    surface.yielded = yield
-    updateBarVisibility(surface)
+    if yield {
+        // Bumped only HERE. Going back to the top edge is the one thing that
+        // should cancel a pending return; a repeated request to come back is
+        // not, and bumping on those cancelled the return each time it was
+        // asked for. pointerAtScreenTop asks on every move below the
+        // threshold, so the bar never came back at all.
+        surface.yieldSeq += 1
+        guard !surface.yielded else { return }
+        surface.yielded = true
+        updateBarVisibility(surface)
+        return
+    }
+    guard surface.yielded else { return }
+    let seq = surface.yieldSeq
+    DispatchQueue.main.asyncAfter(deadline: .now() + nativeCollapse) {
+        guard surface.yieldSeq == seq, surface.yielded else { return }
+        surface.yielded = false
+        updateBarVisibility(surface)
+    }
 }
 
 // Called on every pointer move, so it stays a coordinate comparison and
@@ -3870,15 +3929,24 @@ func pointerAtScreenTop() {
                     }
                 }
             }
-        } else if surface.latchedBar {
-            // Notched, left half: nothing to reveal, the bar is already
-            // there. The one case that still has to work is fullscreen,
-            // where the bar is hidden and climbing is how it comes back.
-            if fullscreenDisplays().contains(screenID(screen)) {
-                setRevealed(true, on: surface)
-            }
+        } else if fullscreenDisplays().contains(screenID(screen)) {
+            // Hidden under a fullscreen window: climbing out is how this bar
+            // comes back, and that is what a top-edge hover should do here.
+            // It takes priority over standing aside, because there is nothing
+            // to stand aside FROM while the bar is not on screen.
+            setRevealed(true, on: surface)
         } else {
-            // Notched, right half: stand aside.
+            // EITHER half stands aside, not just the right one.
+            //
+            // The split exists for an auto-hiding bar, where the two bars take
+            // turns in an empty strip and which half you enter decides which
+            // one arrives. A bar that never hides is already occupying that
+            // strip, so the question is not which bar arrives but whether the
+            // native one may cover it — and the answer does not depend on
+            // where along the top edge the pointer went in. Splitting it there
+            // made the left half a dead end: the native bar came up and this
+            // bar stayed in front of it, which is the overlap the split was
+            // meant to end.
             setYielded(true, on: surface)
         }
     } else if fromTop > barHeight + 12 {
@@ -3986,7 +4054,10 @@ func updateBarVisibility(_ surface: BarSurface, covered: Set<CGDirectDisplayID>?
     // undoes it and not just a move. It costs one coordinate comparison.
     if surface.yielded,
        surface.screen.frame.maxY - NSEvent.mouseLocation.y > barHeight + 12 {
-        surface.yielded = false
+        // Through setYielded, so this takes the collapse hold as well. It
+        // leaves `yielded` true for now and the bar stays aside for this
+        // pass, which is right: the native bar may still be travelling.
+        setYielded(false, on: surface)
     }
     let hide: Bool
     if surface.autohide {

@@ -132,6 +132,12 @@ apply() {
 
   # the bar reads bar.conf once, at startup
   launchctl kickstart -k "gui/$(id -u)/com.omacosy.bar" >/dev/null 2>&1
+  # and so does omacosy-solo, which asks the same file whether to fullscreen
+  # with or without the outer gaps. Without this it keeps using the setting
+  # from whenever it last started: switch the bar to always-visible and solo
+  # windows go on covering it edge to edge, so the bar hides under them and
+  # the change looks like it did nothing.
+  launchctl kickstart -k "gui/$(id -u)/com.omacosy.solo" >/dev/null 2>&1
   printf 'omacosy: bar autohide=%s — built-in gap %s, external %s (%s at rest here)\n' \
     "$want" "$bi" "$ex" "$(hides "$want" && echo hidden || echo visible)"
 }
