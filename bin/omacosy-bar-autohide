@@ -86,8 +86,8 @@ current_gap() {
   local line
   line=$(grep -E "^outer\\.top" "$AERO" 2>/dev/null | head -1)
   case "$line" in
-    *built-in*) echo "$line" | sed -E "s|.*built-in'? *= *([0-9]+).*|\\1|" ;;
-    *)          echo "$line" | sed -E 's|.*= *([0-9]+).*|\\1|' ;;
+    *built-in*) echo "$line" | sed -E "s|.*built-in'? *= *([0-9]+).*|\1|" ;;
+    *)          echo "$line" | sed -E 's|.*= *([0-9]+).*|\1|' ;;
   esac
 }
 
