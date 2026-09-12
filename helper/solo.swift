@@ -298,10 +298,21 @@ func applyAutoFullscreen(_ s: Solo) {
         soloWeSet[ws] = nil
         soloOverride.remove(ws)
     }
+    // Anything we own that is no longer a tiled window anywhere has gone:
+    // closed, or floated. Either way it is not fullscreen any more and it is
+    // not ours. Pruning only at startup and when a workspace EMPTIES missed
+    // the common case — one owned window replaced by another on the same
+    // workspace, which happens every time you close a terminal and open
+    // another. Observed: three ids owned with one window left on screen.
+    //
+    // Against the tiled set, which is the snapshot we already have: a
+    // fullscreen window is tiled by definition, so a window missing from it
+    // cannot still be fullscreen.
+    let liveTiled = Set(s.tiledIDs.values.flatMap { $0 })
+    let stale = ownedIDs.subtracting(liveTiled)
+    if !stale.isEmpty { ownedIDs.subtract(stale); dropped = true }
     // Rewritten only when something actually went, so an idle evaluation does
-    // not touch the disk. Without this the file kept the ids of windows that
-    // had been closed, and `off` would ask aerospace about windows that no
-    // longer exist.
+    // not touch the disk.
     if dropped { saveOwned() }
     soloLock.unlock()
 
