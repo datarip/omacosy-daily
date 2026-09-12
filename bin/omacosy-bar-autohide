@@ -78,6 +78,19 @@ external_gap() {
 # what this machine's own display will use, for status
 want_gap() { builtin_gap "$1"; }
 
+# What aerospace has for THIS display. The line is normally the per-monitor
+# form, `[{ monitor.'built-in' = N }, M]`, so a plain cut on the first `=`
+# returns the monitor expression rather than a number. Take the built-in
+# entry when it is there, and the bare value when it is not.
+current_gap() {
+  local line
+  line=$(grep -E "^outer\\.top" "$AERO" 2>/dev/null | head -1)
+  case "$line" in
+    *built-in*) echo "$line" | sed -E "s|.*built-in'? *= *([0-9]+).*|\\1|" ;;
+    *)          echo "$line" | sed -E 's|.*= *([0-9]+).*|\\1|' ;;
+  esac
+}
+
 apply() {
   local want="$1" gap
   mkdir -p "$(dirname "$CONF")"
@@ -111,7 +124,7 @@ case "${1:-status}" in
       "$(hides "$s" && echo hidden || echo visible)"
     printf '  menu bar height %s, notch inset %s, top gap wants %s, aerospace has %s\n' \
       "$(bar_height)" "$(notch_inset)" "$(want_gap "$s")" \
-      "$(grep -E '^outer\.top' "$AERO" 2>/dev/null | head -1 | tr -d ' ' | cut -d= -f2)"
+      "$(current_gap)"
     ;;
   *) echo "usage: omacosy-bar-autohide [on|off|auto|status]" >&2; exit 1 ;;
 esac
