@@ -162,6 +162,37 @@ let markerPath = NSHomeDirectory() + "/.config/omacosy/solo-fullscreen"
 // one place, with a command to set it.
 let autoFullscreenSolo: Bool = forceOn || FileManager.default.fileExists(atPath: markerPath)
 
+// Does the menu bar stay on screen? Only `autohide=off` is explicit enough
+// to act on: `auto` keeps the bar on a NOTCHED display, but there a
+// fullscreen window already starts below the notch — measured at y=32 — so
+// it cannot cover a bar drawn from y=0 and there is nothing to avoid. `on`
+// hides the bar, so there is nothing to avoid either.
+//
+// Read once at startup, like the marker. Missing file, or anything but
+// `off`, means the bar is not permanently in the way and the whole display
+// is ours.
+let barStaysVisible: Bool = {
+    let f = NSHomeDirectory() + "/.config/omacosy/bar.conf"
+    guard let t = try? String(contentsOfFile: f, encoding: .utf8) else { return false }
+    for line in t.split(separator: "\n") {
+        let l = line.trimmingCharacters(in: .whitespaces)
+        guard !l.hasPrefix("#"), let eq = l.firstIndex(of: "=") else { continue }
+        guard l[..<eq].trimmingCharacters(in: .whitespaces) == "autohide" else { continue }
+        return l[l.index(after: eq)...].trimmingCharacters(in: .whitespaces) == "off"
+    }
+    return false
+}()
+
+// `--no-outer-gaps` takes the side and top gaps too, which is what makes a
+// solo window fill the display edge to edge. With a bar that never hides,
+// that also takes the strip the bar is drawn in, and the bar ducks under any
+// fullscreen window — so every workspace holding one window lost the bar.
+// Keeping the gaps puts the window below the bar instead: it still gets
+// everything else, and "always visible" keeps meaning what it says.
+let fullscreenArgs: [String] = barStaysVisible
+    ? ["fullscreen", "on", "--fail-if-noop"]
+    : ["fullscreen", "on", "--no-outer-gaps", "--fail-if-noop"]
+
 // --- the rule's input -----------------------------------------------------
 
 struct Solo {
@@ -379,8 +410,7 @@ func applySolo(_ ws: String, _ ids: [String], _ s: Solo) {
         // fullscreen and the user can press Super+F in the gap before this
         // runs; without the flag the rule would then claim a window it never
         // touched, and undo that Super+F the next time the count moved.
-        guard actChanged(["fullscreen", "on", "--no-outer-gaps",
-                          "--fail-if-noop", "--window-id", id]) else {
+        guard actChanged(fullscreenArgs + ["--window-id", id]) else {
             // Changed nothing. Either the window was already fullscreen —
             // someone else's doing, in the gap since the snapshot — or the
             // call failed. Do not claim it either way, and do NOT record an
@@ -613,7 +643,7 @@ func finishWake(_ why: String) {
                     if let now = placed[id], now != ws {
                         act(["move-node-to-workspace", ws, "--window-id", id])
                     }
-                    act(["fullscreen", "on", "--no-outer-gaps", "--window-id", id])
+                    act(fullscreenArgs.filter { $0 != "--fail-if-noop" } + ["--window-id", id])
                 }
             }
         }
