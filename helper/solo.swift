@@ -510,6 +510,10 @@ var detectQuiet: DispatchWorkItem?
 var wakeFallback: DispatchWorkItem?
 var bootArmed = false
 var bootQuiet: DispatchWorkItem?
+// When a window-detected event last arrived. A real boot re-detects every
+// window in a burst; a kickstart on a settled machine re-detects nothing.
+// Telling those apart is what lets the settled case act immediately.
+var lastDetectAt = Date.distantPast
 let bootGiveUp = Date().addingTimeInterval(90)
 
 func startDetectWatch() {
@@ -527,6 +531,7 @@ func startDetectWatch() {
             detectBuffer.append(chunk)
             while let nl = detectBuffer.firstIndex(of: 0x0A) {
                 detectBuffer = Data(detectBuffer[detectBuffer.index(after: nl)...])
+                lastDetectAt = Date()
                 windowDetected()
                 bootDetected()
             }
@@ -622,6 +627,16 @@ func bootDetected() {
 
 func finishBoot(_ why: String) {
     guard bootArmed else { return }
+    // A burst is still arriving: every window is sitting on the focused
+    // workspace at this instant, so anything decided now would be decided
+    // about a layout that is halfway through being rebuilt. Wait for quiet.
+    if Date().timeIntervalSince(lastDetectAt) < 1.0 {
+        bootQuiet?.cancel()
+        let again = DispatchWorkItem { finishBoot("detection settled") }
+        bootQuiet = again
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: again)
+        return
+    }
     bootQuiet?.cancel(); bootQuiet = nil
     work.async {
         let s = soloSnapshot()
@@ -644,10 +659,18 @@ func finishBoot(_ why: String) {
             }
             return
         }
+        // Cleared HERE, on this queue, before the evaluation below — not in a
+        // hop to main. soloSettleUntil is lock-protected, so it can be, and
+        // doing it on main lost a race with the very call it was meant to
+        // unblock: applyAutoFullscreen ran first, saw the settle window still
+        // 30 seconds wide, and returned having done nothing. The workspace
+        // then waited for some unrelated window event. Measured: the daemon
+        // logged "evaluating" at 13:09:48 and did not fullscreen until
+        // 13:10:06.
+        soloLock.lock(); soloSettleUntil = .distantPast; soloLock.unlock()
         DispatchQueue.main.async {
             guard bootArmed else { return }
             bootArmed = false
-            soloLock.lock(); soloSettleUntil = .distantPast; soloLock.unlock()
             tlog("boot \(why), evaluating")
         }
         applyAutoFullscreen(s)
@@ -743,8 +766,13 @@ soloLock.lock()
 soloSettleUntil = Date().addingTimeInterval(30) // finishBoot clears it
 soloLock.unlock()
 bootArmed = true
-// a restart on a settled machine re-detects nothing, so nothing would settle
-DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { finishBoot("no detection burst") }
+// Almost at once, not after five seconds. A kickstart from
+// `omacosy-solo-fullscreen on` happens on a settled machine where nothing
+// will be re-detected, so waiting for a burst that is never coming made the
+// command look like it had done nothing. finishBoot defers itself while
+// detections are still arriving, so a real boot still waits for quiet, and
+// it retries while aerospace has yet to answer at all.
+DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { finishBoot("nothing detected") }
 startDetectWatch()
 
 tlog("omacosy-solo up\(dryRun ? " (DRY RUN — nothing will be changed)" : "")")
