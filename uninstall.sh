@@ -28,13 +28,15 @@ launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist" 2>/dev/null 
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist" "$HOME/.local/bin/omacosy-ffm"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" "$HOME/.local/bin/omacosy-dwindle"
+launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" "$HOME/.local/bin/omacosy-solo"
+# the daemon's event subscriber is a child process, so unloading the agent
+# orphans it rather than ending it. -P 1 only reaches an orphan, so a
+# running daemon's own child is never touched.
+pkill -P 1 -f "aerospace subscribe window-detected" 2>/dev/null || true
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" "$HOME/.local/bin/omacosy-bar"
 rm -rf "$HOME/.local/share/omacosy/omacosy-bar.app"
-# the bar's event subscriber is a child process, so unloading the agent
-# orphans it rather than ending it. -P 1 only reaches an orphan, so a
-# running bar's own child is never touched.
-pkill -P 1 -f "aerospace subscribe window-detected" 2>/dev/null || true
 # overview is self-daemonizing (no launchd agent) — kill by pidfile
 # /tmp is shared. `[ -f ]` follows symlinks, so without the -L check a
 # link planted at this path could point at a file holding someone

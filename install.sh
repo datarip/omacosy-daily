@@ -260,6 +260,15 @@ if [ ! -x "$HOME/.local/bin/omacosy-ffm" ] || [ "$REPO_DIR/helper/ffm.swift" -nt
   swiftc -O -F /System/Library/PrivateFrameworks -framework SkyLight -o "$HOME/.local/bin/omacosy-ffm" "$REPO_DIR/helper/ffm.swift"
 fi
 
+# auto-fullscreen daemon. Its own binary rather than code inside the bar:
+# a Swift trap cannot be caught, so a fault in this rule used to take the
+# menu bar down with it. Separate processes are the only hard boundary, and
+# launchd restarts this one without the bar ever noticing.
+if [ ! -x "$HOME/.local/bin/omacosy-solo" ] || [ "$REPO_DIR/helper/solo.swift" -nt "$HOME/.local/bin/omacosy-solo" ]; then
+  log "Building omacosy-solo"
+  swiftc -O -F /System/Library/PrivateFrameworks -framework SkyLight -o "$HOME/.local/bin/omacosy-solo" "$REPO_DIR/helper/solo.swift"
+fi
+
 # focused-window border ring (replaces JankyBorders; no permissions;
 # SkyLight for the window-server event notifications)
 if [ ! -x "$HOME/.local/bin/omacosy-borders" ] || [ "$REPO_DIR/helper/borders.swift" -nt "$HOME/.local/bin/omacosy-borders" ]; then
@@ -272,6 +281,7 @@ if security find-identity -p codesigning -v 2>/dev/null | grep -q "Apple Develop
   codesign -f -s "Apple Development" --identifier com.omacosy.helper "$HOME/.local/bin/omacosy-helper" 2>/dev/null || true
   codesign -f -s "Apple Development" --identifier com.omacosy.ffm "$HOME/.local/bin/omacosy-ffm" 2>/dev/null || true
   codesign -f -s "Apple Development" --identifier com.omacosy.borders "$HOME/.local/bin/omacosy-borders" 2>/dev/null || true
+  codesign -f -s "Apple Development" --identifier com.omacosy.solo "$HOME/.local/bin/omacosy-solo" 2>/dev/null || true
   # the BUNDLE is signed now; the identifier is what grants key on
   codesign -f -s "Apple Development" --identifier com.omacosy.bar "$BAR_APP" 2>/dev/null || true
   codesign -f -s "Apple Development" --identifier com.omacosy.overview "$HOME/.local/bin/omacosy-overview" 2>/dev/null || true
@@ -336,6 +346,27 @@ cat > "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist" <<PLIST
 PLIST
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist" 2>/dev/null || true
 launchctl load "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist"
+
+# auto-fullscreen. KeepAlive is SuccessfulExit=false, not true: this daemon
+# exits 0 on purpose when the rule is off in fullscreen.conf, or when OmniWM
+# is the running window manager, and KeepAlive=true would respawn it in a
+# loop forever. Restart-on-failure is what makes the rule crash-safe: launchd
+# brings it back and the bar never notices.
+cat > "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.omacosy.solo</string>
+  <key>ProgramArguments</key><array><string>$HOME/.local/bin/omacosy-solo</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardErrorPath</key><string>/tmp/omacosy-solo.err</string>
+</dict>
+</plist>
+PLIST
+launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" 2>/dev/null || true
+launchctl load "$HOME/Library/LaunchAgents/com.omacosy.solo.plist"
 
 
 cat > "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" <<PLIST
