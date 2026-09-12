@@ -445,13 +445,23 @@ func wallpaperKey() -> String {
     URL(fileURLWithPath: wallpaperLink).resolvingSymlinksInPath().path
 }
 
-// "<r> <g> <b> <wallpaper path>" per line. A line in the old three-field
-// shape is dropped, so an existing cache is relearned rather than misread.
+// A capture is kept forever and never re-taken, so a value written by an
+// older build would be served for good. The file therefore names the pipeline
+// that produced it, and anything else is discarded rather than trusted. Bump
+// this whenever the capture changes: the height it reads, the route it takes,
+// or the statistic it reduces to.
+let stripCacheVersion = "v2 sck-behind-own-bar native-height row-median"
+
+// "<r> <g> <b> <wallpaper path>" per line, after a first line naming the
+// version. A file from any other version is ignored and relearned.
 func loadStrips(_ surface: BarSurface) -> [String: NSColor] {
     guard let text = try? String(contentsOfFile: stripCachePath(surface), encoding: .utf8)
     else { return [:] }
+    var lines = text.split(separator: "\n")
+    guard let head = lines.first, head == "# \(stripCacheVersion)" else { return [:] }
+    lines.removeFirst()
     var out: [String: NSColor] = [:]
-    for line in text.split(separator: "\n") {
+    for line in lines {
         let parts = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: false)
         guard parts.count == 4, let r = Double(parts[0]), let g = Double(parts[1]),
               let b = Double(parts[2]) else { continue }
@@ -463,10 +473,10 @@ func loadStrips(_ surface: BarSurface) -> [String: NSColor] {
 func saveStrip(_ surface: BarSurface, _ colour: NSColor, for wallpaper: String) {
     var all = loadStrips(surface)
     all[wallpaper] = colour
-    let text = all.compactMap { key, c -> String? in
+    let text = (["# \(stripCacheVersion)"] + all.compactMap { key, c -> String? in
         guard let s = c.usingColorSpace(.sRGB) else { return nil }
         return "\(s.redComponent) \(s.greenComponent) \(s.blueComponent) \(key)"
-    }.joined(separator: "\n")
+    }).joined(separator: "\n")
     try? text.write(toFile: stripCachePath(surface), atomically: true, encoding: .utf8)
 }
 
