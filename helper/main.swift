@@ -343,21 +343,25 @@ case "split-hint":
     // the focus change — faster than any app can open its next window.
     //
     // Refocusing an EXISTING window (hover, keyboard) reads the frame
-    // directly: it already sits in its slot, no waiting needed. The
-    // slow settle-wait survives only as the fallback when there is no
-    // fresh state to chain from (first window in a burst).
-    // State is one line: "wid w h ts maxWid count". A 3s TTL bounds how
-    // stale a chain can get (manual resizes, closes, and workspace
-    // switches invalidate predictions; a burst of opens never lives that
-    // long).
+    // directly: it usually already sits in its slot, so the hint lands
+    // at once, and is then checked (see the end of this case) for the
+    // refocus that follows a window leaving. The slow settle-wait
+    // survives as the fallback when there is no fresh state to chain
+    // from (first window in a burst).
+    // State is one line: "wid w h ts maxWid count verified ws". A 3s TTL
+    // bounds how stale a chain can get (manual resizes, closes, and
+    // workspace switches invalidate predictions; a burst of opens never
+    // lives that long).
     //
-    // The TTL bounds staleness in TIME, not in LAYOUT, so two more
+    // The TTL bounds staleness in TIME, not in LAYOUT, so three more
     // fields bound it in layout. `maxWid` is the highest id ever hinted:
     // ids only increase, so an id above it is a genuinely new window,
-    // while an id at or below it is a window seen before and therefore a
-    // refocus that must be measured. `count` is the focused workspace's
-    // tiled window count: one fresh spawn raises it by exactly one, and
-    // anything else means the stored slot is void however recent it is.
+    // while an id at or below it is a window seen before. `count` is the
+    // focused workspace's tiled window count, and `ws` is that workspace:
+    // one fresh spawn raises the count by exactly one on the SAME
+    // workspace, and anything else means the stored slot is void however
+    // recent it is. `verified` says whether the slot was measured; a read
+    // is only a guess until the settle at the end of this case agrees.
     func frame() -> (CGFloat, CGFloat, CGFloat, CGFloat)? {
         guard let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, wid) as? [[String: Any]],
             let b = list.first?[kCGWindowBounds as String] as? [String: CGFloat],
@@ -365,94 +369,63 @@ case "split-hint":
             let w = b["Width"], let h = b["Height"] else { return nil }
         return (x, y, w, h)
     }
-    // A window that has just CLOSED leaves its hint in the state file
-    // for the 3s TTL. The survivor then takes focus with a LOWER window
-    // id, so it misses the `predicted` branch and lands in `read` —
-    // whose comment assumes a settled frame. It is not settled:
-    // AeroSpace has not re-expanded the survivor yet, so `read` returns
-    // its old half-size slot.
-    func chainAlive(_ id: UInt32) -> Bool {
-        guard let l = CGWindowListCopyWindowInfo(.optionIncludingWindow, id)
-            as? [[String: Any]] else { return false }
-        return !l.isEmpty
+    // Wait for the frame to stop moving. "Two equal samples" alone is not
+    // enough — an untiled window's frame equals itself — so a window must
+    // MOVE before its frame counts as settled, while one that never moves
+    // is accepted after a short grace. Full bounds, not just size: a
+    // spawning terminal inherits the last window's size, so only the
+    // position reliably changes on tile.
+    func settle() -> (frame: (CGFloat, CGFloat, CGFloat, CGFloat)?, moved: Bool) {
+        var sample = frame()
+        var moved = false
+        for tick in 1...16 {
+            usleep(75_000)
+            let next = frame()
+            if let a = sample, let b = next, a != b { moved = true }
+            if next == nil || (moved && next! == sample!) { sample = next; break }
+            sample = next
+            if !moved && tick >= 5 { break }
+        }
+        return (sample, moved)
     }
-    // chainAlive is not enough on its own. Measured: the SAME window
-    // logs as (read) at 708x883 and then 1424x495 seconds apart, chain
-    // alive both times — a LIVE window mid-relayout returns whatever
-    // frame it holds at that instant. Two samples 50ms apart. Equal
-    // means at rest, so the frame means what it says. Different means a
-    // relayout is in flight, the read fails, and the chain falls
-    // through to the settle loop, which already waits for movement to
-    // stop. The 50ms is paid only on hover and keyboard refocus;
-    // bursts of opens take `predicted` and never reach here.
-    func readSettled(_ first: (CGFloat, CGFloat, CGFloat, CGFloat)) -> Bool {
-        usleep(50_000)
-        guard let again = frame() else { return false }
-        return again == first
-    }
-    // Measure against the display the window is ON: the main display
-    // would misjudge a sole window sitting on a secondary one. Window
-    // bounds and display bounds share the same top-left global space,
-    // so the centre point resolves directly.
-    func displayBounds(under f: (CGFloat, CGFloat, CGFloat, CGFloat)) -> CGRect {
-        let centre = CGPoint(x: f.0 + f.2 / 2, y: f.1 + f.3 / 2)
-        var id = CGDirectDisplayID()
-        var matched: UInt32 = 0
-        guard CGGetDisplaysWithPoint(centre, 1, &id, &matched) == .success,
-            matched > 0 else { return CGDisplayBounds(CGMainDisplayID()) }
-        return CGDisplayBounds(id)
-    }
-    // Gaps mean a full slot never reaches the display bounds exactly:
-    // the shipped config takes 42px off the top and 8px off each other
-    // edge. 120 clears that on both axes and still rejects the
-    // half-slots this guard exists to catch.
-    let fullSlotSlack: CGFloat = 120
-    // CGWindowListCopyWindowInfo STILL LISTS a window that has just
-    // closed, so chainAlive and readSettled can both pass on a frame
-    // that is already history. AeroSpace, not the window server, knows
-    // the layout. Only reached when a read is otherwise about to be
-    // trusted, so bursts of opens never pay for the subprocess.
-    func soloAndFull(_ f: (CGFloat, CGFloat, CGFloat, CGFloat)) -> Bool {
-        let bin = ["/opt/homebrew/bin/aerospace", "/usr/local/bin/aerospace"]
-            .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "aerospace"
-        let pr = Process()
-        pr.executableURL = URL(fileURLWithPath: bin)
-        pr.arguments = ["list-windows", "--workspace", "focused"]
-        let pipe = Pipe()
-        pr.standardOutput = pipe
-        pr.standardError = FileHandle.nullDevice
-        guard (try? pr.run()) != nil else { return true }
-        let out = pipe.fileHandleForReading.readDataToEndOfFile()
-        pr.waitUntilExit()
-        let count = String(data: out, encoding: .utf8)?
-            .split(separator: "\n").filter { !$0.isEmpty }.count ?? 0
-        // More than one window: the frame is one slot among several and
-        // cannot be checked this way, so trust it.
-        guard count == 1 else { return true }
-        // Sole window: its slot must span the display minus gaps. Both
-        // axes — 1424x495 is full width on a 1440-wide display and is
-        // still a leftover from before the close.
-        let display = displayBounds(under: f)
-        return f.2 >= display.width - fullSlotSlack
-            && f.3 >= display.height - fullSlotSlack
-    }
-    // Hyprland's `dwindle:split_width_multiplier` defaults to 1.0.
-    // 1.4 is tuned for a 3440-wide display, where the half-slot
-    // (1712x1389) is still wider than tall and would go side-by-side
-    // twice before it ever stacked. On a narrow display it instead
-    // stacks slots that are wider than tall: a 500x441 slot is
-    // side-by-side at 1.0 (500 >= 441) and stacked at 1.4
-    // (500 < 617.4), which reads as a split direction that changes at
-    // random. So keep 1.4 where it was meant to apply and fall back to
-    // Hyprland's default below that. The threshold is a judgement
-    // call rather than a measured boundary.
+    // Direction: Hyprland's rule is `stack when h * multiplier > w`
+    // (dwindle:split_width_multiplier, default 1.0). 1.4 is tuned for a
+    // 3440-wide display, where the half-slot (1712x1389) is still wider
+    // than tall and would go side-by-side twice before it ever stacked.
+    // On a narrow display it instead stacks slots that are wider than
+    // tall: a 500x441 slot is side-by-side at 1.0 (500 >= 441) and
+    // stacked at 1.4 (500 < 617.4), which reads as a split direction
+    // that changes at random. So keep 1.4 where it was meant to apply
+    // and fall back to Hyprland's default below that. The threshold is
+    // a judgement call rather than a measured boundary.
     let wideDisplayWidth: CGFloat = 2560
     let splitWidthMultiplier: CGFloat =
         CGDisplayBounds(CGMainDisplayID()).width >= wideDisplayWidth ? 1.4 : 1.0
-    let statePath = "/tmp/omacosy-split-state-\(getuid())"
-    let now = Date().timeIntervalSince1970
+    func direction(_ w: CGFloat, _ h: CGFloat) -> String {
+        w >= h * splitWidthMultiplier ? "horizontal" : "vertical"
+    }
     let aerospaceBin = ["/opt/homebrew/bin/aerospace", "/usr/local/bin/aerospace"]
         .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "aerospace"
+    func split(_ dir: String) -> Int32 {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: aerospaceBin)
+        p.arguments = ["split", "--window-id", idStr, dir]
+        p.standardError = FileHandle.nullDevice
+        try? p.run()
+        p.waitUntilExit()
+        return p.terminationStatus
+    }
+    let logPath = "/tmp/omacosy-split-hint.log"
+    func note(_ w: CGFloat, _ h: CGFloat, _ how: String, _ dir: String, _ rc: Int32?) {
+        guard let d = "\(Date().timeIntervalSince1970) wid=\(idStr) \(Int(w))x\(Int(h)) (\(how)) -> \(dir == "horizontal" ? "h" : "v") rc=\(rc.map(String.init) ?? "-")\n".data(using: .utf8),
+            let fh = FileHandle(forWritingAtPath: logPath) ?? {
+                FileManager.default.createFile(atPath: logPath, contents: nil)
+                return FileHandle(forWritingAtPath: logPath)
+            }() else { return }
+        fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
+    }
+    let statePath = "/tmp/omacosy-split-state-\(getuid())"
+    let now = Date().timeIntervalSince1970
     // nil rather than an empty list on failure, so a caller can tell a
     // query that failed from a workspace that is genuinely empty.
     func aerospaceLines(_ argv: [String]) -> [Substring]? {
@@ -470,7 +443,7 @@ case "split-hint":
     }
     // Tiled windows only: a floating window occupies no slot, so it
     // cannot invalidate one. Measured at 14ms, and reached only when a
-    // prediction is otherwise about to fire.
+    // verified line is about to be chained from or written.
     //
     // The WORKSPACE comes back from the same query, because the count on
     // its own cannot tell "one more window here" from "one window on a
@@ -481,9 +454,9 @@ case "split-hint":
     // workspace just left, 720x900 against a real 1424x883. Portrait, so
     // the hint said stack, and the pair ended up one above the other.
     //
-    // -1 on failure, and "" for a workspace holding nothing. Neither
-    // matches a stored slot, so the prediction is refused and the frame
-    // gets measured instead, which is the safe direction.
+    // -1 on failure, and "" for a workspace that could not be named.
+    // Neither matches a stored slot, so the prediction is refused and the
+    // frame gets measured instead, which is the safe direction.
     func focusedTiled() -> (count: Int, ws: String) {
         guard let lines = aerospaceLines(
             ["list-windows", "--workspace", "focused",
@@ -508,129 +481,160 @@ case "split-hint":
         focusedCache = f
         return f
     }
-    // Every id AeroSpace can currently see. Used to seed maxWid when
-    // there is no state to chain from, so a window that existed before
-    // this run does not pass for new on the strength of its id alone.
+    // Every id AeroSpace can currently see. Used to seed maxWid when there
+    // is no state to chain from, so a window that existed before this run
+    // does not pass for new on the strength of its id alone.
     func highestKnownWid() -> UInt32 {
         guard let lines = aerospaceLines(["list-windows", "--all", "--format", "%{window-id}"])
         else { return 0 }
         return lines.compactMap { UInt32($0) }.max() ?? 0
     }
-    var state: (wid: UInt32, w: CGFloat, h: CGFloat, count: Int, ws: String)?
-    // maxWid is read past the TTL on purpose. An expired line still
-    // proves the ids in it were seen, and letting it lapse would make a
-    // long-idle window look new on its next refocus.
+    // Stands in for a workspace that could not be named, so the line
+    // always carries eight fields and the parser can tell the formats
+    // apart by counting them. It reads back as unknown, so a workspace a
+    // user really does call "-" costs a refused prediction and no more.
+    let unknownWs = "-"
     var maxWid: UInt32 = 0
+    func stateLine(_ w: CGFloat, _ h: CGFloat, _ ts: Double,
+                   _ count: Int, _ verified: Bool, _ ws: String) -> String {
+        "\(wid) \(w) \(h) \(ts) \(max(wid, maxWid)) \(count) \(verified ? 1 : 0) \(ws.isEmpty ? unknownWs : ws)"
+    }
+    var state: (wid: UInt32, w: CGFloat, h: CGFloat, count: Int, verified: Bool, ws: String)?
+    // maxWid is read past the TTL on purpose. An expired line still proves
+    // the ids in it were seen, and letting it lapse would make a long-idle
+    // window look new on its next refocus.
     if let line = try? String(contentsOfFile: statePath, encoding: .utf8) {
-        // six numbers, then the workspace the slot was measured on. A file
-        // written before the workspace was recorded has six fields and no
-        // seventh; it still seeds maxWid, and its prediction is refused,
-        // which is what an unknown workspace should do.
-        let parts = line.split(separator: " ").map(String.init)
-        let f = parts.prefix(6).compactMap { Double($0) }
-        if f.count == 6 {
+        // The last field is a workspace NAME and may be any string, so the
+        // numbers come from a fixed prefix rather than from filtering the
+        // whole line: a workspace called "3" is a number too. A line
+        // written before `verified` existed has seven fields; it still
+        // seeds maxWid, and it reads as unverified, which refuses its
+        // prediction.
+        let parts = line.split(separator: " ").map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let n = parts.count >= 8 ? 7 : 6
+        let f = parts.prefix(n).compactMap { Double($0) }
+        // the range check is what stops a corrupt file trapping UInt32()
+        let ids = 0...Double(UInt32.max)
+        if f.count == n, ids.contains(f[0]), ids.contains(f[4]) {
             maxWid = UInt32(f[4])
             if now - f[3] < 3 {
-                // trimmed: a stray newline would make the workspace compare
-                // unequal to itself and quietly disable the chain. It fails
-                // safe, towards measuring, which is why it would go unnoticed.
+                let ws = parts.count > n ? parts[n] : ""
                 state = (UInt32(f[0]), CGFloat(f[1]), CGFloat(f[2]), Int(f[5]),
-                         parts.count >= 7
-                            ? parts[6].trimmingCharacters(in: .whitespacesAndNewlines)
-                            : "")
+                         n == 7 && f[6] != 0,
+                         ws == unknownWs ? "" : ws)
             }
         }
     }
     // No chain to ride, so this run measures whatever happens below and
     // cannot mispredict. What it can do is leave maxWid too low for the
-    // NEXT run: /tmp is cleared on reboot, and a fresh file knows no ids
-    // at all, so every window already open would read as new once. The
-    // seed costs one query on a path that is about to spend ~400ms
-    // settling.
+    // NEXT run: /tmp is cleared on reboot, and a fresh file knows no ids at
+    // all, so every window already open would read as new once. The seed
+    // costs one query on a path that is about to spend ~400ms settling.
     if state == nil { maxWid = max(maxWid, highestKnownWid()) }
+    // The stored slot has to describe the workspace this window landed on,
+    // and it has to have been measured. Without the first, the count alone
+    // lets a lone window on an empty workspace chain off a slot measured
+    // somewhere else. Without the second, a window opening inside the
+    // settle grace below chains off a read that is about to be corrected.
+    func chainable(
+        _ s: (wid: UInt32, w: CGFloat, h: CGFloat, count: Int, verified: Bool, ws: String)
+    ) -> Bool {
+        guard s.verified, !s.ws.isEmpty else { return false }
+        let f = focusedTiledOnce()
+        return f.count == s.count + 1 && f.ws == s.ws
+    }
     var w: CGFloat
     var h: CGFloat
     var how: String
     // Carried out of the predicted branch so the state write below does
     // not query a second time for a number it already has.
     var count: Int?
-    // The stored slot has to describe the workspace this window landed on.
-    // Without that the count alone lets a lone window on an empty
-    // workspace chain off a slot measured somewhere else.
-    func chainable(_ s: (wid: UInt32, w: CGFloat, h: CGFloat, count: Int, ws: String)) -> Bool {
-        guard !s.ws.isEmpty else { return false }
-        let f = focusedTiledOnce()
-        return f.count == s.count + 1 && f.ws == s.ws
-    }
     if let s = state, wid > s.wid, wid > maxWid, chainable(s) {
-        // fresh spawn inside a burst: its slot is the half left over
-        // from the split we just issued on the previous window.
-        // `wid > s.wid` alone only says this id beats the last one
-        // hinted, which any older window with a higher id also does, so
+        // fresh spawn inside a burst: its slot is the half left over from
+        // the split we just issued on the previous window.
+        // `wid > s.wid` alone only says this id beats the last one hinted,
+        // which any older window with a higher id also does, so
         // `wid > maxWid` is what actually establishes "never seen".
         //
-        // `+ 1` because this window is the one that just arrived, so it
-        // is already in the count. Exactly one more than the stored
-        // count is what a single fresh spawn looks like. A close and an
-        // open inside the TTL nets back to the stored count and is
-        // refused, which is the case this guard exists for.
+        // `+ 1` because this window is the one that just arrived, so it is
+        // already in the count. Exactly one more than the stored count is
+        // what a single fresh spawn looks like. A close and an open inside
+        // the TTL nets back to the stored count and is refused, which is
+        // one of the two cases these guards exist for.
         if s.w >= s.h * splitWidthMultiplier { w = s.w / 2; h = s.h } else { w = s.w; h = s.h / 2 }
         count = s.count + 1
         how = "predicted"
-    } else if let s = state, chainAlive(s.wid), let f = frame(),
-        readSettled(f), soloAndFull(f) {
-        // an existing window refocused mid-burst: its frame is settled
+    } else if state != nil, wid <= maxWid, let f = frame() {
+        // an existing window refocused mid-burst: usually settled, and
+        // checked below for when it is not. `wid <= maxWid` keeps a NEW
+        // window out of here, because a refused prediction leaves its frame
+        // wherever the app spawned it and there is nothing to read.
         (w, h) = (f.2, f.3)
         how = "read"
     } else {
-        // no fresh chain to ride: wait for the frame to stop moving.
-        // "Two equal samples" alone is not enough — an untiled window's
-        // frame equals itself — so a new window must MOVE (get tiled)
-        // before its frame is trusted, while a hover-focused window that
-        // never moves is accepted after a short grace. Full bounds, not
-        // just size: a spawning terminal inherits the last window's
-        // size, so only the position reliably changes on tile.
-        var sample = frame()
-        var moved = false
-        for tick in 1...16 {
-            usleep(75_000)
-            let next = frame()
-            if let a = sample, let b = next, a != b { moved = true }
-            if next == nil || (moved && next! == sample!) { sample = next; break }
-            sample = next
-            if !moved && tick >= 5 { break }
-        }
-        guard let f = sample else { exit(0) }
+        // no fresh chain to ride: wait for the frame to stop moving
+        let settled = settle()
+        guard let f = settled.frame else { exit(0) }
         (w, h) = (f.2, f.3)
-        how = moved ? "settled" : "static"
+        how = settled.moved ? "settled" : "static"
     }
-    // Direction: Hyprland's rule is `stack when h * multiplier > w`.
-    // Which multiplier applies on this display is decided above.
-    let dir = w >= h * splitWidthMultiplier ? "horizontal" : "vertical"
-    let split = Process()
-    split.executableURL = URL(fileURLWithPath: aerospaceBin)
-    split.arguments = ["split", "--window-id", idStr, dir]
-    split.standardError = FileHandle.nullDevice
-    try? split.run()
-    split.waitUntilExit()
-    // The measured paths pay for the count here, after `split`, where
-    // they have already spent 400ms settling and are not racing
-    // anything. The predicted path reuses the one it just checked.
-    // The measured paths ask AGAIN here, after `split` and after the 400ms
-    // settle, where they are not racing anything: a count taken before the
-    // settle can miss the window that just arrived. Only the predicted
-    // path reuses the answer, which it took moments ago and already
-    // checked.
-    let wrote = count != nil ? focusedTiledOnce() : focusedTiled()
-    try? "\(wid) \(w) \(h) \(now) \(max(wid, maxWid)) \(count ?? wrote.count) \(wrote.ws)"
+    let dir = direction(w, h)
+    let rc = split(dir)
+    // A read is stamped UNVERIFIED, so a window opening inside the settle
+    // grace below measures its own slot rather than halving a guess. Its
+    // count and workspace go unasked, because nothing chains off an
+    // unverified line; the write after the settle fills them in.
+    let verified = how != "read"
+    let known: (count: Int, ws: String) = verified
+        ? (count != nil ? focusedTiledOnce() : focusedTiled())
+        : (-1, "")
+    let stamp = stateLine(w, h, now, count ?? known.count, verified, known.ws)
+    try? stamp.write(toFile: statePath, atomically: true, encoding: .utf8)
+    note(w, h, how, dir, rc)
+
+    // A read trusts the frame to be settled, and a refocus by hover or
+    // keyboard is exactly that. A refocus caused by a window LEAVING is
+    // not (issue #17): close the second window and the survivor takes
+    // focus while AeroSpace has yet to re-expand it, so the read catches
+    // its old half-size slot. No liveness test tells the two apart — the
+    // window server still lists a just-closed window, and a window moved
+    // or hidden away is alive anyway. So the read keeps its speed and is
+    // then watched for the settle grace. If the frame changes, the
+    // settled frame decides: the state is corrected, because the NEXT
+    // window's prediction halves this slot and a changed size matters
+    // even when the direction holds, and a changed direction is issued
+    // again.
+    //
+    // Issuing it again is invisible: the split above left this window as
+    // its container's only child, and `split` on an only child just turns
+    // that container. That holds only while no window has joined it, so
+    // any newer hint in the state file cancels the correction — a second
+    // split would nest the newcomer.
+    //
+    // A newcomer that cancels it no longer needs it. The line it found was
+    // unverified, so it measured its own slot instead of halving this one.
+    // Without that flag the cancel was the whole of the remaining bug: the
+    // guard that protects the newcomer stopped the repair, and the
+    // newcomer chained off the very size the repair was there to correct.
+    guard how == "read", let f = settle().frame,
+        (try? String(contentsOfFile: statePath, encoding: .utf8)) == stamp else { exit(0) }
+    let after = focusedTiled()
+    let settledTs = Date().timeIntervalSince1970
+    guard (f.2, f.3) != (w, h) else {
+        // The guess held, so say so. Left unverified, a slot this run has
+        // just proved would make the next window measure for nothing.
+        try? stateLine(w, h, settledTs, after.count, true, after.ws)
+            .write(toFile: statePath, atomically: true, encoding: .utf8)
+        note(w, h, "confirmed", dir, nil)
+        exit(0)
+    }
+    let fixed = direction(f.2, f.3)
+    let rcFixed: Int32? = fixed == dir ? nil : split(fixed)
+    try? stateLine(f.2, f.3, settledTs, after.count, true, after.ws)
         .write(toFile: statePath, atomically: true, encoding: .utf8)
-    if let d = "\(Date().timeIntervalSince1970) wid=\(idStr) \(Int(w))x\(Int(h)) (\(how)) -> \(dir == "horizontal" ? "h" : "v") rc=\(split.terminationStatus)\n".data(using: .utf8),
-        let fh = FileHandle(forWritingAtPath: "/tmp/omacosy-split-hint.log") ?? {
-            FileManager.default.createFile(atPath: "/tmp/omacosy-split-hint.log", contents: nil)
-            return FileHandle(forWritingAtPath: "/tmp/omacosy-split-hint.log")
-        }() {
-        fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
-    }
+    note(f.2, f.3, "re-read", fixed, rcFixed)
 
 case "audio":
     let sub = args.count > 2 ? args[2] : "list"
