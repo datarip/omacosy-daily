@@ -3493,12 +3493,26 @@ final class BarSurface {
         backdrop.addSubview(view)
         window.contentView = backdrop
         view.surface = self
-        // Every stored property exists by here, so `autohide` can be asked.
-        // An auto-hiding surface hides by ordering its WINDOW out, so the
-        // backdrop stays put and never has to appear; unhiding it as part
-        // of the reveal added frames of visible transition. Only a surface
-        // that stays on screen has anything left to toggle.
-        backdrop.isHidden = !autohide
+        // Visible from the start, for BOTH kinds of surface.
+        //
+        // This read `backdrop.isHidden = !autohide`, on the reasoning that an
+        // auto-hiding surface hides by ordering its window out and so never
+        // needs the backdrop toggled, while one that stays on screen has
+        // something left to toggle. The second half does not hold: `slides`
+        // is `autohide && slideTime > 0`, so a surface that does NOT hide
+        // never slides, and slideBar — the only other place that unhides
+        // this — is never reached. The backdrop stayed hidden for the life
+        // of the process.
+        //
+        // BarView is a SUBVIEW of the backdrop, so hiding it hides every
+        // pill, the clock and the strip colour. The window was on screen,
+        // at the right size, drawing nothing. Measured with autohide=off:
+        // the top strip was wallpaper, unchanged whether the bar ran or not.
+        //
+        // It reaches further than the opt-in. `autohide` defaults to
+        // `!notched`, so a notched display takes this path by default, and
+        // the bar would be invisible there on a stock install.
+        backdrop.isHidden = false
         // Remembered first, wallpaper only on a machine that has never
         // sampled. Either way it is never empty, and an empty strip is what
         // puts the effect view back on screen and the reveal ramp with it.
@@ -3958,6 +3972,22 @@ func updateBarVisibility(_ surface: BarSurface, covered: Set<CGDirectDisplayID>?
     // which cannot fire unless something asks for it. Nobody who does not
     // opt in sees a change. An auto-hiding surface never asks whether a
     // fullscreen window covers it: hidden is already its resting state.
+    // `yielded` means this bar stood aside so the native one could be used.
+    // It was SET by a pointer move into the native half and cleared only by
+    // another pointer move, because both live in pointerAtScreenTop, which
+    // runs on a global .mouseMoved monitor. Use the native menu and then
+    // reach for the keyboard — switch workspace, open a window — and the bar
+    // stayed stood aside indefinitely, with nothing on screen to explain it.
+    // Measured: warp the pointer to the middle of the display and switch
+    // workspace, and the bar is still gone; one real mouse move brings it
+    // back.
+    //
+    // Re-checked here instead, where visibility is decided, so ANY trigger
+    // undoes it and not just a move. It costs one coordinate comparison.
+    if surface.yielded,
+       surface.screen.frame.maxY - NSEvent.mouseLocation.y > barHeight + 12 {
+        surface.yielded = false
+    }
     let hide: Bool
     if surface.autohide {
         hide = !surface.revealed
@@ -3982,6 +4012,20 @@ func updateBarVisibility(_ surface: BarSurface, covered: Set<CGDirectDisplayID>?
         // the stored fill only lands a few frames later — which is the
         // ramp this whole cache exists to remove.
         surface.view.display()
+        // A bar that does not auto-hide has to be raised, and stay raised.
+        // The resting level is -20, below normal windows, so a fullscreen
+        // window covers it for free — right for a bar that is only ever seen
+        // while revealed, and wrong for one that is meant to be seen always:
+        // ANY window at a layer above -20 buries it, including ones that are
+        // invisible. Measured here, LanguageTool for Desktop keeps two
+        // full-screen overlays at layer 3, and with autohide=off the bar was
+        // on screen, drawing, and not visible anywhere on the display.
+        //
+        // Nothing is given away by raising it. aerospace's outer.top already
+        // keeps tiled windows off the strip when the bar stays visible, which
+        // is the same gap that makes room for it, so there is nothing left
+        // for it to float over.
+        if !surface.autohide { surface.window.level = barRevealLevel }
         if surface.slides, surface.slide != .down {
             slideBar(surface, reveal: true)
         } else {
