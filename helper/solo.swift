@@ -294,7 +294,13 @@ func applyAutoFullscreen(_ s: Solo) {
     var dropped = false
     for ws in Array(soloCount.keys) where s.tiledIDs[ws] == nil {
         soloCount[ws] = nil
-        if let id = soloWeSet[ws] { ownedIDs.remove(id); dropped = true }
+        // NOT ownedIDs. This workspace holding no tiled window says nothing
+        // about whether the WINDOW still exists: send it to another workspace
+        // and this one empties while the window is alive, still fullscreen and
+        // still ours. Disowning it here left a window the rule had filled that
+        // `off` would never hand back. The prune below asks the real question
+        // — is this window tiled ANYWHERE — and is the only thing that should
+        // take ownership away.
         soloWeSet[ws] = nil
         soloOverride.remove(ws)
     }
@@ -310,7 +316,10 @@ func applyAutoFullscreen(_ s: Solo) {
     // cannot still be fullscreen.
     let liveTiled = Set(s.tiledIDs.values.flatMap { $0 })
     let stale = ownedIDs.subtracting(liveTiled)
-    if !stale.isEmpty { ownedIDs.subtract(stale); dropped = true }
+    if !stale.isEmpty {
+        ownedIDs.subtract(stale); dropped = true
+        tlog("released \(stale.count) window(s) that are no longer tiled")
+    }
     // Rewritten only when something actually went, so an idle evaluation does
     // not touch the disk.
     if dropped { saveOwned() }
