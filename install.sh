@@ -260,9 +260,9 @@ if [ ! -x "$HOME/.local/bin/omacosy-ffm" ] || [ "$REPO_DIR/helper/ffm.swift" -nt
   swiftc -O -F /System/Library/PrivateFrameworks -framework SkyLight -o "$HOME/.local/bin/omacosy-ffm" "$REPO_DIR/helper/ffm.swift"
 fi
 
-# auto-fullscreen daemon. Its own binary rather than code inside the bar:
-# a Swift trap cannot be caught, so a fault in this rule used to take the
-# menu bar down with it. Separate processes are the only hard boundary, and
+# auto-fullscreen daemon. Its own binary rather than a thread in the bar:
+# a Swift trap cannot be caught, so a fault in this rule would take the menu
+# bar down with it. Separate processes are the only hard boundary, and
 # launchd restarts this one without the bar ever noticing.
 if [ ! -x "$HOME/.local/bin/omacosy-solo" ] || [ "$REPO_DIR/helper/solo.swift" -nt "$HOME/.local/bin/omacosy-solo" ]; then
   log "Building omacosy-solo"
@@ -305,11 +305,6 @@ cp "$REPO_DIR/config/borders.conf" "$HOME/.config/omacosy/borders.conf"
 # -n, unlike borders.conf above: this file is the only place the bar
 # behaviour can be overridden, so a re-run must not throw a choice away.
 cp -n "$REPO_DIR/config/bar.conf" "$HOME/.config/omacosy/bar.conf" 2>/dev/null || true
-# auto-fullscreen: seeded once, never overwritten. The only thing in this
-# file is the user's opt-in, and a plain cp would switch the feature back
-# off on every install.
-[ -f "$HOME/.config/omacosy/fullscreen.conf" ] \
-  || cp "$REPO_DIR/config/fullscreen.conf" "$HOME/.config/omacosy/fullscreen.conf"
 # app choices, RESOLVED (apps.local.conf already applied), for the same
 # reason: the bar's activity pill launches $TERMINAL and cannot read the
 # repo from a launchd agent when the clone is TCC-protected
@@ -348,7 +343,7 @@ launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist" 2>/dev/null 
 launchctl load "$HOME/Library/LaunchAgents/com.omacosy.ffm.plist"
 
 # auto-fullscreen. KeepAlive is SuccessfulExit=false, not true: this daemon
-# exits 0 on purpose when the rule is off in fullscreen.conf, or when OmniWM
+# exits 0 on purpose when the rule is off (no marker file), or when OmniWM
 # is the running window manager, and KeepAlive=true would respawn it in a
 # loop forever. Restart-on-failure is what makes the rule crash-safe: launchd
 # brings it back and the bar never notices.
@@ -404,6 +399,7 @@ link "$REPO_DIR/bin/omacosy-layout" "$HOME/.local/bin/omacosy-layout"
 link "$REPO_DIR/bin/omacosy-float" "$HOME/.local/bin/omacosy-float"
 link "$REPO_DIR/bin/omacosy-finder-window" "$HOME/.local/bin/omacosy-finder-window"
 link "$REPO_DIR/bin/omacosy-cycle" "$HOME/.local/bin/omacosy-cycle"
+link "$REPO_DIR/bin/omacosy-solo-fullscreen" "$HOME/.local/bin/omacosy-solo-fullscreen"
 
 # --- 3. omarchy theme convention -------------------------------------------
 # Canonical theme state lives at ~/.config/omarchy/current/theme (what the

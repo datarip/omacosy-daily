@@ -30,6 +30,7 @@ launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" 2>/dev/n
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" "$HOME/.local/bin/omacosy-dwindle"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" "$HOME/.local/bin/omacosy-solo"
+rm -f "$HOME/.local/state/omacosy/solo-owned"
 # the daemon's event subscriber is a child process, so unloading the agent
 # orphans it rather than ending it. -P 1 only reaches an orphan, so a
 # running daemon's own child is never touched.
@@ -65,7 +66,7 @@ rm -rf "/tmp/omacosy-spawn-$(id -u).lock.d"
 rm -f "$HOME/.config/omacosy/ffm-ignore" \
   "$HOME/.config/omacosy/borders.conf" \
   "$HOME/.config/omacosy/bar.conf" \
-  "$HOME/.config/omacosy/fullscreen.conf" \
+  "$HOME/.config/omacosy/solo-fullscreen" \
   "$HOME/.config/omacosy/apps.conf" \
   "$HOME/.config/omacosy/gesture.json" \
   "$HOME/.config/omacosy/disabled"
@@ -164,7 +165,7 @@ fi
 
 # theme-set / theme-next out of ~/.local/bin — only when they are OUR
 # symlinks (a user's own script of the same name survives)
-for t in theme-set theme-next theme-bg-next omacosy-ws omacosy-toggle omacosy-focus-guard omacosy-ws-collapse omacosy-float omacosy-cycle omacosy-update omacosy-spawn omacosy-layout omacosy-finder-window omacosy-wm-switch omacosy-karabiner-omniwm; do
+for t in theme-set theme-next theme-bg-next omacosy-ws omacosy-toggle omacosy-focus-guard omacosy-ws-collapse omacosy-float omacosy-cycle omacosy-update omacosy-spawn omacosy-layout omacosy-finder-window omacosy-solo-fullscreen omacosy-wm-switch omacosy-karabiner-omniwm; do
   target="$(readlink "$HOME/.local/bin/$t" 2>/dev/null || true)"
   case "$target" in *omacosy*) rm -f "$HOME/.local/bin/$t" ;; esac
 done

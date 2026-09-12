@@ -2,7 +2,7 @@
 // window the whole display, with no outer gaps. A second window arrives and
 // both tile again. Close back to one and it goes full again.
 //
-// Off unless ~/.config/omacosy/fullscreen.conf sets solo=on. AeroSpace only:
+// Off unless omacosy-solo-fullscreen on has been run. AeroSpace only:
 // OmniWM's dwindle already fills a lone window (singleWindowFit = "fill").
 //
 // A SEPARATE PROCESS on purpose. The rule used to live inside omacosy-bar,
@@ -20,7 +20,7 @@
 //   --dry-run   log every decision, change nothing. For testing beside a
 //               bar that still carries the old in-process rule.
 //   --daemon    detach and run in the background, pidfile below
-//   --force     ignore fullscreen.conf and run the rule anyway
+//   --force     ignore the marker file and run the rule anyway
 
 import AppKit
 
@@ -57,6 +57,28 @@ func act(_ args: [String]) -> String {
         return ""
     }
     return aerospace(args)
+}
+
+// True only when the call CHANGED something. `aerospace ... --fail-if-noop`
+// exits non-zero when it had nothing to do, which is a direct answer to "is
+// this window fullscreen because we did it". Inferring the same thing from
+// remembered window ids is more state and more ways to be wrong: the snapshot
+// can say a window is not fullscreen and the user can press Super+F in the
+// gap before the call, and then the rule would claim a window it never
+// touched. Borrowed from the maintainer's PR #19, which is right about this.
+func actChanged(_ args: [String]) -> Bool {
+    guard !dryRun else {
+        tlog("would run: aerospace \(args.joined(separator: " "))")
+        return true
+    }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: aerospaceBin)
+    p.arguments = args
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    guard (try? p.run()) != nil else { return false }
+    p.waitUntilExit()
+    return p.terminationStatus == 0
 }
 
 // The OTHER window manager. omacosy-wm-switch can hand the session over
@@ -134,17 +156,11 @@ let EVENT_WINDOW_VISIBILITY: UInt32 = 815
 
 // --- opt-in ---------------------------------------------------------------
 
-let autoFullscreenSolo: Bool = {
-    if forceOn { return true }
-    let file = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent(".config/omacosy/fullscreen.conf")
-    guard let text = try? String(contentsOf: file, encoding: .utf8) else { return false }
-    for line in text.split(separator: "\n") where line.hasPrefix("solo=") {
-        return line.dropFirst("solo=".count)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "\" ")) == "on"
-    }
-    return false
-}()
+let markerPath = NSHomeDirectory() + "/.config/omacosy/solo-fullscreen"
+// A marker file, not a key in a config file: the whole setting is "does this
+// exist", which is what omacosy-solo-fullscreen on|off writes. One switch, in
+// one place, with a command to set it.
+let autoFullscreenSolo: Bool = forceOn || FileManager.default.fileExists(atPath: markerPath)
 
 // --- the rule's input -----------------------------------------------------
 
@@ -189,6 +205,28 @@ var soloWeSet: [String: String] = [:]
 // Workspaces where the user overrode the rule with Super+F. Cleared the
 // moment a window opens or closes there.
 var soloOverride: Set<String> = []
+
+// The windows this rule fullscreened, one id per line, rewritten whenever the
+// set changes. Two readers need it. omacosy-solo-fullscreen off hands back
+// ONLY these, so a window fullscreened by hand survives switching the feature
+// off. And this process reloads them at startup, so ownership outlives a
+// restart: without that, a restart adopted every fullscreen it found, and a
+// Super+F turned off afterwards would be put straight back.
+let ownedPath = NSHomeDirectory() + "/.local/state/omacosy/solo-owned"
+var ownedAtStart: Set<String> = []
+
+func loadOwned() -> Set<String> {
+    guard let t = try? String(contentsOfFile: ownedPath, encoding: .utf8) else { return [] }
+    return Set(t.split(separator: "\n").map(String.init).filter { !$0.isEmpty })
+}
+
+// Called with soloLock held.
+func saveOwned() {
+    let ids = Set(soloWeSet.values)
+    try? FileManager.default.createDirectory(atPath: (ownedPath as NSString).deletingLastPathComponent,
+                                             withIntermediateDirectories: true)
+    try? ids.sorted().joined(separator: "\n").write(toFile: ownedPath, atomically: true, encoding: .utf8)
+}
 // Which windows were fullscreen at the last good look, kept for the sleep
 // handler. An `aerospace` call started from willSleep is not guaranteed to
 // finish before the system suspends; it resumes after the wake and answers
@@ -282,11 +320,16 @@ func applySolo(_ ws: String, _ ids: [String], _ s: Solo) {
     if n == 1 {
         let id = ids[0]
         if s.fullscreenIDs.contains(id) {
-            // already right. Record it, so turning it off later reads as the
-            // user's doing rather than a state we never set.
+            // Already right. Claim it only if it was OURS — either still in
+            // soloWeSet, or in the set this process inherited at startup.
+            // Claiming any fullscreen window on sight is what made a restart
+            // adopt a hand-made Super+F and then undo it.
             soloLock.lock()
-            soloWeSet[ws] = id
-            lastFullscreen[id] = ws
+            if soloWeSet[ws] == id || ownedAtStart.contains(id) {
+                soloWeSet[ws] = id
+                lastFullscreen[id] = ws
+                saveOwned()
+            }
             soloLock.unlock()
             return
         }
@@ -300,10 +343,29 @@ func applySolo(_ ws: String, _ ids: [String], _ s: Solo) {
             tlog("\(ws) left fullscreen by hand, leaving it alone")
             return
         }
-        act(["fullscreen", "on", "--no-outer-gaps", "--window-id", id])
+        // --fail-if-noop, so the window counts as OURS only when the call
+        // actually changed it. The snapshot can say a window is not
+        // fullscreen and the user can press Super+F in the gap before this
+        // runs; without the flag the rule would then claim a window it never
+        // touched, and undo that Super+F the next time the count moved.
+        guard actChanged(["fullscreen", "on", "--no-outer-gaps",
+                          "--fail-if-noop", "--window-id", id]) else {
+            // Changed nothing. Either the window was already fullscreen —
+            // someone else's doing, in the gap since the snapshot — or the
+            // call failed. Do not claim it either way, and do NOT record an
+            // override: an override would stop the rule touching this
+            // workspace until a window opened or closed there, which turns a
+            // transient failure into a lasting one. Claiming nothing is
+            // enough. If it really is fullscreen, the next evaluation finds
+            // it so and leaves it; if the call merely failed, the next
+            // evaluation tries again.
+            tlog("\(ws) fullscreen on changed nothing, not claiming window \(id)")
+            return
+        }
         soloLock.lock()
         soloWeSet[ws] = id
         lastFullscreen[id] = ws   // recorded now, not at the next snapshot
+        saveOwned()
         soloLock.unlock()
         tlog("\(ws) solo, window \(id) on")
     } else {
@@ -328,6 +390,9 @@ func applySolo(_ ws: String, _ ids: [String], _ s: Solo) {
             act(["fullscreen", "off", "--window-id", id])
             soloLock.lock()
             lastFullscreen[id] = nil
+            if soloWeSet[ws] == id { soloWeSet[ws] = nil }
+            ownedAtStart.remove(id)
+            saveOwned()
             soloLock.unlock()
             tlog("\(ws) holds \(n), window \(id) off")
         }
@@ -375,7 +440,9 @@ var pendingRule: DispatchWorkItem?
 func kickRule() {
     guard autoFullscreenSolo, !omniwmActive() else { return }
     pendingRule?.cancel()
-    let w = DispatchWorkItem { work.async { applyAutoFullscreen(soloSnapshot()) } }
+    let w = DispatchWorkItem { ownedAtStart = loadOwned()
+tlog("inherited \(ownedAtStart.count) window(s) from a previous run")
+work.async { applyAutoFullscreen(soloSnapshot()) } }
     pendingRule = w
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: w)
 }
@@ -603,7 +670,7 @@ if wantDaemon {
 }
 
 guard autoFullscreenSolo else {
-    tlog("solo=off in fullscreen.conf, nothing to do")
+    tlog("switched off (no marker file), nothing to do")
     exit(0)
 }
 guard !omniwmActive() else {
