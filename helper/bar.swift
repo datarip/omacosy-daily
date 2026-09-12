@@ -421,6 +421,10 @@ var palette = loadPalette()
 let stateDir = NSHomeDirectory() + "/.local/state/omacosy"
 let wallpaperLink = stateDir + "/background"
 
+// See seedStripFromWallpaper. Fitted here, not taken from any documentation.
+let menuBarSaturation = 1.3
+let menuBarDarken = 0.923
+
 // The last good capture, kept across restarts. After the first right-half
 // hover this machine ever does, every later start paints the real menu bar
 // colour on its first frame instead of an approximation.
@@ -431,20 +435,37 @@ func stripCachePath(_ surface: BarSurface) -> String {
     return dir + "/bar-strip-\(screenID(surface.screen))"
 }
 
-func loadStrip(_ surface: BarSurface) -> [NSColor] {
-    guard let text = try? String(contentsOfFile: stripCachePath(surface), encoding: .utf8)
-    else { return [] }
-    return text.split(separator: "\n").compactMap { line in
-        let f = line.split(separator: " ").compactMap { Double($0) }
-        guard f.count == 3 else { return nil }
-        return NSColor(srgbRed: f[0], green: f[1], blue: f[2], alpha: 1)
-    }
+// Which wallpaper a capture belongs to. Measured on this machine: the menu
+// bar's colour is a function of the WALLPAPER and of nothing else on screen.
+// The same image gave 0.4285 0.2459 0.6543 with a fullscreen window under the
+// strip and 0.4285 0.2459 0.6543 with the workspace empty, and three runs
+// minutes apart agreed to four decimals. So one capture per wallpaper is not
+// an approximation, it is the answer, and it is worth keeping.
+func wallpaperKey() -> String {
+    URL(fileURLWithPath: wallpaperLink).resolvingSymlinksInPath().path
 }
 
-func saveStrip(_ surface: BarSurface, _ colours: [NSColor]) {
-    let text = colours.compactMap { c -> String? in
+// "<r> <g> <b> <wallpaper path>" per line. A line in the old three-field
+// shape is dropped, so an existing cache is relearned rather than misread.
+func loadStrips(_ surface: BarSurface) -> [String: NSColor] {
+    guard let text = try? String(contentsOfFile: stripCachePath(surface), encoding: .utf8)
+    else { return [:] }
+    var out: [String: NSColor] = [:]
+    for line in text.split(separator: "\n") {
+        let parts = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: false)
+        guard parts.count == 4, let r = Double(parts[0]), let g = Double(parts[1]),
+              let b = Double(parts[2]) else { continue }
+        out[String(parts[3])] = NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
+    }
+    return out
+}
+
+func saveStrip(_ surface: BarSurface, _ colour: NSColor, for wallpaper: String) {
+    var all = loadStrips(surface)
+    all[wallpaper] = colour
+    let text = all.compactMap { key, c -> String? in
         guard let s = c.usingColorSpace(.sRGB) else { return nil }
-        return "\(s.redComponent) \(s.greenComponent) \(s.blueComponent)"
+        return "\(s.redComponent) \(s.greenComponent) \(s.blueComponent) \(key)"
     }.joined(separator: "\n")
     try? text.write(toFile: stripCachePath(surface), atomically: true, encoding: .utf8)
 }
@@ -510,7 +531,31 @@ func seedStrip(from url: URL, frame: NSRect, display: CGDirectDisplayID) -> [NSC
         }
     }
     guard n > 0 else { return [] }
-    let seed = NSColor(srgbRed: r/n, green: g/n, blue: b/n, alpha: 1)
+    // The wallpaper average is NOT the menu bar's colour. Apple's menu bar
+    // takes the desktop behind it, pushes its saturation up and darkens it,
+    // and the raw average came out visibly lighter: measured 4 to 18 per 255
+    // away from the real bar over seven wallpapers, worst 18.5.
+    //
+    // These two numbers are FITTED, on this machine, and nothing else here is.
+    // Seven wallpapers, each measured twice on an empty workspace: the bare
+    // strip with the pointer low, then the native bar with the pointer in the
+    // top right, captured 1.5s apart with nothing behind the strip but the
+    // wallpaper. Least squares over all 21 numbers. Residual: worst 9.1 per
+    // 255, mean 3.2, against 18.5 and 12 for the raw average.
+    //
+    // A better answer exists and is not reachable from public API. The real
+    // pipeline is CABackdropLayer with saturationFactor and a tint, which is
+    // private and may need an entitlement; NSVisualEffectView gives the same
+    // material but no numbers to read back. So this approximates the result
+    // rather than reproducing the mechanism, and it is superseded the moment
+    // a real capture for this wallpaper exists.
+    let mean = (r/n, g/n, b/n)
+    let luma = 0.299 * mean.0 + 0.587 * mean.1 + 0.114 * mean.2
+    func menuBarLike(_ v: Double) -> CGFloat {
+        CGFloat(min(1, max(0, (luma + menuBarSaturation * (v - luma)) * menuBarDarken)))
+    }
+    let seed = NSColor(srgbRed: menuBarLike(mean.0), green: menuBarLike(mean.1),
+                       blue: menuBarLike(mean.2), alpha: 1)
     let strip = Array(repeating: seed, count: 8)
     seedCacheLock.lock()
     seedCache[key] = strip
@@ -534,14 +579,30 @@ func captureOwnStrip(_ surface: BarSurface) {
           surface.atTopEdge, !surface.latchedBar
     else { return }
     stripCaptureInFlight = true
+    // The wallpaper this capture belongs to, read BEFORE the screenshot. A
+    // capture takes a subprocess and a decode, and a wallpaper change can land
+    // in the middle of it. Filing the result under the new wallpaper would
+    // poison the cache with the colour of the old one, and that is worse than
+    // having no capture at all.
+    let capturedFor = wallpaperKey()
     let frame = surface.screen.frame
     let origin = CGPoint(x: frame.minX, y: 0)      // screencapture uses top-left
+    // The NATIVE bar's height, not this one's. They are not the same number:
+    // barHeight is what this bar draws, and it was picked as 34. The menu bar
+    // macOS draws here is 30, so capturing barHeight rows took in 4 points of
+    // the window BELOW the bar, and those rows fail the uniformity check at
+    // the bottom of this function. Measured over seven wallpapers: at 34 rows
+    // the row-luminance spread was 0.10 to 0.22 and THREE wallpapers were
+    // rejected outright, so the bar could never learn their colour however
+    // long you hovered. At 30 the spread is 0.0004 to 0.019 and all seven are
+    // accepted.
+    let captureHeight = NSApplication.shared.mainMenu?.menuBarHeight ?? barHeight
     DispatchQueue.global(qos: .utility).async {
         defer { DispatchQueue.main.async { stripCaptureInFlight = false } }
         let path = "/tmp/omacosy-bar-strip.png"
         _ = shell("/usr/sbin/screencapture", [
             "-x", "-o",
-            "-R\(Int(origin.x)),\(Int(origin.y)),\(Int(frame.width)),\(Int(barHeight))",
+            "-R\(Int(origin.x)),\(Int(origin.y)),\(Int(frame.width)),\(Int(captureHeight))",
             path])
         guard let image = NSImage(contentsOfFile: path),
               let tiff = image.tiffRepresentation,
@@ -600,8 +661,9 @@ func captureOwnStrip(_ surface: BarSurface) {
         let ordered = zip(lum, columns).sorted { $0.0 < $1.0 }.map { $0.1 }
         let flat = [ordered[ordered.count / 2]]
         DispatchQueue.main.async {
+            guard capturedFor == wallpaperKey() else { return }  // it moved under us
             surface.backdropStrip = flat
-            saveStrip(surface, flat)
+            if let c = flat.first { saveStrip(surface, c, for: capturedFor) }
         }
     }
 }
@@ -3517,7 +3579,10 @@ final class BarSurface {
         // Remembered first, wallpaper only on a machine that has never
         // sampled. Either way it is never empty, and an empty strip is what
         // puts the effect view back on screen and the reveal ramp with it.
-        backdropStrip = loadStrip(self)
+        // The capture remembered for the wallpaper showing now. Keyed, so a
+        // restart after a theme change no longer paints the previous
+        // wallpaper's colour, which the old single-slot cache did.
+        backdropStrip = loadStrips(self)[wallpaperKey()].map { [$0] } ?? []
         if backdropStrip.isEmpty { backdropStrip = seedStripFromWallpaper(self) }
         window.orderFrontRegardless()
         // A sliding surface starts hidden, and a slide has to start from
@@ -3775,12 +3840,19 @@ func pointerAtScreenTop() {
                 setRevealed(true, on: surface)
             } else {
                 // Right half: the native bar comes up alone. Give it a beat
-                // to arrive, then keep what it looks like. EVERY time, not
-                // just the first: the native bar re-tints as windows move
-                // under it, measured anywhere from 37,34,28 to 190,90,138 in
-                // one session, so a single snapshot goes stale. This costs a
-                // subprocess on a hover that nothing is waiting on, and the
-                // reveal still paints a colour it already has.
+                // to arrive, then keep what it looks like, filed against the
+                // wallpaper it belongs to.
+                //
+                // An earlier version of this comment said the native bar
+                // re-tints as windows move under it. Measured on an empty
+                // workspace against the same wallpaper with a fullscreen
+                // window under the strip, both gave 0.4285 0.2459 0.6543.
+                // Windows make no difference; the wallpaper is the whole
+                // input. That is why the cache can be keyed by it.
+                //
+                // Still every time rather than once, because a capture costs
+                // a subprocess on a hover nothing is waiting on, and a second
+                // opinion on a wallpaper already known is free to discard.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
                     captureOwnStrip(surface)
                 }
@@ -4328,14 +4400,37 @@ watch(stateDir, create: false) {
                 // image cannot be read: an empty strip puts the effect view
                 // back on screen and brings the reveal ramp with it.
                 guard !seed.isEmpty else { continue }
-                surface.backdropStrip = seed
-                // The cache still holds a capture of the PREVIOUS wallpaper
-                // and would paint it on the next start. An approximation of
-                // the current one is nearer, and a right-half hover replaces
-                // it.
-                saveStrip(surface, seed)
+                // A real capture for this wallpaper beats the seed outright,
+                // and the cache survives restarts, so after one right-half
+                // hover per wallpaper the seed is never seen again.
+                if let known = loadStrips(surface)[now] {
+                    surface.backdropStrip = [known]
+                } else {
+                    surface.backdropStrip = seed
+                }
             }
             repaint()
+            // If the pointer is ALREADY in the strip on the right half, the
+            // native bar is on screen and correct RIGHT NOW, so the exact
+            // colour is there for the taking and the seed never has to be
+            // shown. This is the case a theme change is usually made in, and
+            // it was the whole of the delay: captures are scheduled off
+            // pointer MOVEMENT, so holding still meant none was ever taken.
+            // Measured: 1.6s to 19.1s from the key to the right colour,
+            // depending only on when the pointer next re-entered the strip.
+            //
+            // Three attempts, because macOS applies the picture about 340ms
+            // after the link names it and the bar re-tints after that. An
+            // early shot is of the old tint and the wallpaper tag throws it
+            // away; stripCaptureInFlight also lets one attempt swallow the
+            // next. Measured with two attempts: one change in three still
+            // fell through to the seed. Three costs nothing when the pointer
+            // is elsewhere, because the guards reject immediately.
+            for delay in [0.8, 1.8, 3.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    for surface in surfaces { captureOwnStrip(surface) }
+                }
+            }
             let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
             tlog(String(format: "wallpaper %.2f ms", ms))
         }
