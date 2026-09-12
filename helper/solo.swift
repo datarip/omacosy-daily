@@ -213,7 +213,13 @@ var soloOverride: Set<String> = []
 // restart: without that, a restart adopted every fullscreen it found, and a
 // Super+F turned off afterwards would be put straight back.
 let ownedPath = NSHomeDirectory() + "/.local/state/omacosy/solo-owned"
-var ownedAtStart: Set<String> = []
+
+// THE record of what this rule owns. soloWeSet says which window the rule
+// filled on each workspace, which is what the Super+F check needs; this says
+// which windows are ours at all, which is what `off` needs and what has to
+// survive a restart. Keeping the file derived from soloWeSet instead made two
+// sources of truth for one fact, and the file kept ids of closed windows.
+var ownedIDs: Set<String> = []
 
 func loadOwned() -> Set<String> {
     guard let t = try? String(contentsOfFile: ownedPath, encoding: .utf8) else { return [] }
@@ -222,10 +228,9 @@ func loadOwned() -> Set<String> {
 
 // Called with soloLock held.
 func saveOwned() {
-    let ids = Set(soloWeSet.values)
     try? FileManager.default.createDirectory(atPath: (ownedPath as NSString).deletingLastPathComponent,
                                              withIntermediateDirectories: true)
-    try? ids.sorted().joined(separator: "\n").write(toFile: ownedPath, atomically: true, encoding: .utf8)
+    try? ownedIDs.sorted().joined(separator: "\n").write(toFile: ownedPath, atomically: true, encoding: .utf8)
 }
 // Which windows were fullscreen at the last good look, kept for the sleep
 // handler. An `aerospace` call started from willSleep is not guaranteed to
@@ -286,11 +291,18 @@ func applyAutoFullscreen(_ s: Solo) {
     // completely: the count never returned to zero, because a workspace with
     // no tiled windows is never evaluated, so the next window to open there
     // found an override nobody had set.
+    var dropped = false
     for ws in Array(soloCount.keys) where s.tiledIDs[ws] == nil {
         soloCount[ws] = nil
+        if let id = soloWeSet[ws] { ownedIDs.remove(id); dropped = true }
         soloWeSet[ws] = nil
         soloOverride.remove(ws)
     }
+    // Rewritten only when something actually went, so an idle evaluation does
+    // not touch the disk. Without this the file kept the ids of windows that
+    // had been closed, and `off` would ask aerospace about windows that no
+    // longer exist.
+    if dropped { saveOwned() }
     soloLock.unlock()
 
     // EVERY workspace, not only the focused one. App-to-workspace rules put
@@ -325,10 +337,9 @@ func applySolo(_ ws: String, _ ids: [String], _ s: Solo) {
             // Claiming any fullscreen window on sight is what made a restart
             // adopt a hand-made Super+F and then undo it.
             soloLock.lock()
-            if soloWeSet[ws] == id || ownedAtStart.contains(id) {
+            if soloWeSet[ws] == id || ownedIDs.contains(id) {
                 soloWeSet[ws] = id
                 lastFullscreen[id] = ws
-                saveOwned()
             }
             soloLock.unlock()
             return
@@ -365,6 +376,7 @@ func applySolo(_ ws: String, _ ids: [String], _ s: Solo) {
         soloLock.lock()
         soloWeSet[ws] = id
         lastFullscreen[id] = ws   // recorded now, not at the next snapshot
+        ownedIDs.insert(id)
         saveOwned()
         soloLock.unlock()
         tlog("\(ws) solo, window \(id) on")
@@ -391,7 +403,7 @@ func applySolo(_ ws: String, _ ids: [String], _ s: Solo) {
             soloLock.lock()
             lastFullscreen[id] = nil
             if soloWeSet[ws] == id { soloWeSet[ws] = nil }
-            ownedAtStart.remove(id)
+            ownedIDs.remove(id)
             saveOwned()
             soloLock.unlock()
             tlog("\(ws) holds \(n), window \(id) off")
@@ -440,9 +452,7 @@ var pendingRule: DispatchWorkItem?
 func kickRule() {
     guard autoFullscreenSolo, !omniwmActive() else { return }
     pendingRule?.cancel()
-    let w = DispatchWorkItem { ownedAtStart = loadOwned()
-tlog("inherited \(ownedAtStart.count) window(s) from a previous run")
-work.async { applyAutoFullscreen(soloSnapshot()) } }
+    let w = DispatchWorkItem { work.async { applyAutoFullscreen(soloSnapshot()) } }
     pendingRule = w
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: w)
 }
@@ -697,6 +707,22 @@ _ = SLSRegisterNotifyProc(notify, EVENT_WINDOW_RESIZE, nil)
 _ = SLSRegisterNotifyProc(notify, EVENT_WINDOW_ORDER, nil)
 _ = SLSRegisterNotifyProc(notify, EVENT_WINDOW_VISIBILITY, nil)
 rebuildSubscriptions()
+
+// What this rule owned when it last ran. Loaded ONCE, here, so ownership
+// survives a restart: without it every start adopted whatever fullscreens it
+// found, including one made by hand, and `off` would then take that away.
+ownedIDs = loadOwned()
+// Windows close while this is not running, and nothing else would ever take
+// them out of the file. Prune against what aerospace can actually see, or
+// `off` asks about windows that no longer exist and the count in `status`
+// climbs for ever.
+let liveIDs = Set(windowWorkspaces().keys)
+let vanished = ownedIDs.subtracting(liveIDs)
+if !vanished.isEmpty {
+    ownedIDs.subtract(vanished)
+    soloLock.lock(); saveOwned(); soloLock.unlock()
+}
+tlog("inherited \(ownedIDs.count) window(s) from a previous run, dropped \(vanished.count) that are gone")
 
 // Evaluated once now, which is enough for a restart on a settled machine,
 // and again once aerospace's detection burst goes quiet, which is what a

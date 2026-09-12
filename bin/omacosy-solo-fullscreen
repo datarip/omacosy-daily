@@ -54,7 +54,10 @@ toggle)
   ;;
 status)
   if [ -e "$MARK" ]; then
-    n=$( [ -f "$OWNED" ] && grep -c . "$OWNED" || echo 0)
+    # -s, not -f: an EMPTY file exists, and `grep -c` on it prints 0 and then
+    # exits non-zero, so a `|| echo 0` fallback printed the count twice.
+    n=0
+    [ -s "$OWNED" ] && n=$(grep -c . "$OWNED")
     echo "on — $n window(s) fullscreened by the rule"
   else echo "off"; fi
   ;;
