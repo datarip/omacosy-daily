@@ -148,7 +148,16 @@ read_apps "$REPO_DIR/config/apps.local.conf"
 # The helper is built further down, so a first install has nothing to
 # ask. Fall back to the flat-panel value: too large wastes space, too
 # small buries the bar, so failing large fails safe.
-BAR_HEIGHT=34                             # helper/bar.swift
+# Asked, not assumed. The bar itself takes its height from macOS
+# (NSMenu.menuBarHeight); hardcoding it here made the installer the last place
+# still holding a guess, and the two disagreed — macOS reports 30 on this
+# machine against the 34 written below as the fallback. Same reasoning as the
+# inset a few lines down: read it from the system, because a constant goes
+# stale on hardware that does not exist yet.
+BAR_HEIGHT="$("$HOME/.local/bin/omacosy-helper" bar-height 2>/dev/null || true)"
+case "$BAR_HEIGHT" in
+  ''|*[!0-9]*) BAR_HEIGHT=34 ;;           # no helper yet on a first install
+esac
 BAR_MARGIN=8                              # matches inner/outer gaps in the template
 OUTER_TOP=$(( BAR_HEIGHT + BAR_MARGIN ))
 INSET="$("$HOME/.local/bin/omacosy-helper" safe-top 2>/dev/null || true)"

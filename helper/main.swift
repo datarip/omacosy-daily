@@ -132,6 +132,21 @@ case "displays":
         print("\(i + 1)\t\(notched)")
     }
 
+case "bar-height":
+    // How tall macOS draws the menu bar, in points. install.sh reserves room
+    // for the bar with it. Asked rather than assumed, for the same reason
+    // safe-top is read from the screen: a number matched against a guess goes
+    // stale on hardware that does not exist yet. Measured here macOS says 30,
+    // so a hardcoded 34 over-reserved by four points, and a hardcoded number
+    // is wrong in whichever direction Apple next moves it.
+    //
+    // macOS will not tell a process how tall the menu bar is unless it has a
+    // menu of its own, and a command-line tool has none. An empty NSMenu is
+    // enough to be told, and it draws nothing: this prints and exits.
+    if NSApplication.shared.mainMenu == nil { NSApplication.shared.mainMenu = NSMenu() }
+    guard let h = NSApplication.shared.mainMenu?.menuBarHeight, h > 0 else { exit(1) }
+    print(Int(h.rounded()))
+
 case "safe-top":
     // A notched display reports usable space starting below the camera
     // strip, so anything measured from there is already clear of it and
