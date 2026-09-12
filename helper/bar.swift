@@ -682,13 +682,30 @@ func captureOwnStrip(_ surface: BarSurface) {
     // Verified by eye on both captures: including this window gives this
     // bar's pills, excluding it gives the Apple logo and the app's menus.
     guard !stripCaptureInFlight, surface.atTopEdge else { return }
-    // Once per wallpaper, not once per hover. The colour is a function of the
-    // wallpaper and of nothing else on screen, measured: the same image gave
-    // the same value with a fullscreen window under the strip and with the
-    // workspace empty, three runs minutes apart agreeing to four decimals. So
-    // a wallpaper already in the cache has nothing left to learn, and
-    // re-capturing it only spent a capture and risked a visible re-paint.
-    if loadStrips(surface)[wallpaperKey()] != nil { return }
+    // Once per wallpaper per SESSION, not once per hover and not once ever.
+    //
+    // The colour is a function of the wallpaper and of nothing else on screen,
+    // measured: the same image gave the same value with a fullscreen window
+    // under the strip and with the workspace empty, three runs minutes apart
+    // agreeing to four decimals. That argued for capturing a wallpaper once
+    // and trusting it for good, which is what this did.
+    //
+    // It is wrong, because a capture can be taken at a moment when the native
+    // bar is not yet showing this wallpaper's colour. The guard below waits
+    // for macOS to APPLY the picture, but the menu bar re-tints after that,
+    // and in the gap it still wears the PREVIOUS theme's colour — perfectly
+    // stable, so the two-shot settle check sees two identical frames and
+    // accepts it. Measured on gruvbox/1-the-backwater: 72,78,61 cached during
+    // a theme change against 56,65,37 captured with the wallpaper settled,
+    // and because a cached wallpaper was never re-captured, the wrong value
+    // was permanent.
+    //
+    // So the cached value is still used at once — it is what the resting strip
+    // paints from at login, before any hover — but the first hover for that
+    // wallpaper in this session captures anyway and corrects it. A theme
+    // change is long over by the time a hover happens in ordinary use.
+    let cachedStrip = loadStrips(surface)[wallpaperKey()]
+    if cachedStrip != nil, stripVerified.contains(wallpaperKey()) { return }
     // The link changes the instant theme-bg-next runs, but macOS applies the
     // picture about 340ms later and the native bar re-tints after that. Until
     // the desktop agrees with the link, a capture is of the OLD wallpaper's
@@ -774,13 +791,43 @@ func captureOwnStrip(_ surface: BarSurface) {
         let flat = [ordered[ordered.count / 2]]
         DispatchQueue.main.async {
             guard capturedFor == wallpaperKey() else { return }  // it moved under us
+            guard let c = flat.first else { return }
+            // Verified for this session whether or not anything changed. A
+            // capture that was REJECTED never reaches here, so an unreadable
+            // wallpaper keeps retrying on later hovers rather than giving up.
+            stripVerified.insert(capturedFor)
+            // A re-capture that agrees changes nothing and paints nothing.
+            // Repainting on agreement would flicker the strip on every first
+            // hover, and the threshold keeps sampling jitter from rewriting a
+            // good entry: the same wallpaper captured twice differed by 1/255,
+            // while the bad entry this exists to correct was out by 16 to 25.
+            if let old = cachedStrip, stripsAgree(old, c) { return }
             setStrip(flat, on: surface)
-            if let c = flat.first { saveStrip(surface, c, for: capturedFor) }
+            saveStrip(surface, c, for: capturedFor)
         }
     }
 }
 
 var stripCaptureInFlight = false
+
+// Wallpapers whose cached colour has been checked against a fresh capture in
+// THIS run of the bar. In memory on purpose: a cache entry is trusted on
+// sight at startup, and questioned once, the first time the pointer brings
+// the native bar up for it.
+var stripVerified: Set<String> = []
+
+// Above sampling jitter, far below a wrong capture. Measured: the same
+// wallpaper captured minutes apart differed by 1/255; a capture taken during
+// a theme change was out by 16, 13 and 25.
+let stripDriftThreshold: CGFloat = 4.0 / 255
+
+func stripsAgree(_ a: NSColor, _ b: NSColor) -> Bool {
+    guard let x = a.usingColorSpace(.extendedSRGB),
+          let y = b.usingColorSpace(.extendedSRGB) else { return false }
+    return abs(x.redComponent - y.redComponent) < stripDriftThreshold
+        && abs(x.greenComponent - y.greenComponent) < stripDriftThreshold
+        && abs(x.blueComponent - y.blueComponent) < stripDriftThreshold
+}
 
 // SLOW path: who lives where. Three CLI calls — and it runs only when a
 // window is created or destroyed, never on a workspace switch.
