@@ -577,6 +577,22 @@ func seedStripFromWallpaper(_ surface: BarSurface) -> [NSColor] {
 var cachedFilter: SCContentFilter?
 var cachedFilterIDs: Set<CGWindowID> = []
 
+// macOS will not tell an agent app how tall the menu bar is unless the app has
+// a menu of its own, and this one has none: it is LSUIElement with an
+// .accessory policy, so NSApplication.mainMenu is nil and menuBarHeight is
+// unavailable. Assigning an empty NSMenu is enough to be told, and it draws
+// nothing, because an accessory app never becomes active and never owns the
+// menu bar.
+//
+// Nothing else gives the same number. Measured on this machine against a 30
+// point menu bar: NSStatusBar.system.thickness is 22, frame.maxY minus
+// visibleFrame.maxY is 0 because the bar is auto-hidden, and
+// safeAreaInsets.top is 0 without a notch. Only menuBarHeight says 30.
+func nativeMenuBarHeight() -> CGFloat {
+    if NSApplication.shared.mainMenu == nil { NSApplication.shared.mainMenu = NSMenu() }
+    return NSApplication.shared.mainMenu?.menuBarHeight ?? barHeight
+}
+
 func captureBehindOwnBar(_ rect: CGRect) async -> CGImage? {
     let mine = Set(surfaces.map { CGWindowID($0.window.windowNumber) })
     if cachedFilter == nil || cachedFilterIDs != mine {
@@ -642,7 +658,7 @@ func captureOwnStrip(_ surface: BarSurface) {
     // rejected outright, so the bar could never learn their colour however
     // long you hovered. At 30 the spread is 0.0004 to 0.019 and all seven are
     // accepted.
-    let captureHeight = NSApplication.shared.mainMenu?.menuBarHeight ?? barHeight
+    let captureHeight = nativeMenuBarHeight()
     let rect = CGRect(x: origin.x, y: origin.y, width: frame.width, height: captureHeight)
     Task.detached(priority: .utility) {
         defer { DispatchQueue.main.async { stripCaptureInFlight = false } }
