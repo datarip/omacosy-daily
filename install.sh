@@ -409,6 +409,7 @@ link "$REPO_DIR/bin/omacosy-float" "$HOME/.local/bin/omacosy-float"
 link "$REPO_DIR/bin/omacosy-finder-window" "$HOME/.local/bin/omacosy-finder-window"
 link "$REPO_DIR/bin/omacosy-cycle" "$HOME/.local/bin/omacosy-cycle"
 link "$REPO_DIR/bin/omacosy-solo-fullscreen" "$HOME/.local/bin/omacosy-solo-fullscreen"
+link "$REPO_DIR/bin/omacosy-bar-autohide" "$HOME/.local/bin/omacosy-bar-autohide"
 
 # --- 3. omarchy theme convention -------------------------------------------
 # Canonical theme state lives at ~/.config/omarchy/current/theme (what the
