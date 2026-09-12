@@ -193,7 +193,28 @@ var soloOverride: Set<String> = []
 // handler. An `aerospace` call started from willSleep is not guaranteed to
 // finish before the system suspends; it resumes after the wake and answers
 // with the WOKEN machine, where the fullscreen is already gone.
-var lastFullscreenIDs: Set<String> = []
+var lastFullscreen: [String: String] = [:]
+
+// Which workspace each fullscreen window sits on. The id alone is half the
+// state: a wake moves windows, so restoring fullscreen without restoring
+// placement puts a window full on a workspace it no longer belongs to.
+func fullscreenByWorkspace(_ s: Solo) -> [String: String] {
+    var m: [String: String] = [:]
+    for (ws, ids) in s.tiledIDs { for id in ids where s.fullscreenIDs.contains(id) { m[id] = ws } }
+    return m
+}
+
+// Every window's workspace, floating included, so a window already home is
+// never moved. list-windows --all in one subprocess.
+func windowWorkspaces() -> [String: String] {
+    var m: [String: String] = [:]
+    for line in aerospace(["list-windows", "--all", "--format", "%{window-id}|%{workspace}"])
+        .split(separator: "\n") {
+        let f = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        if f.count >= 2 { m[f[0]] = f[1] }
+    }
+    return m
+}
 // Nothing is decided from the window list until this passes. For several
 // seconds after a wake aerospace answers with a PARTIAL list.
 var soloSettleUntil = Date.distantPast
@@ -211,7 +232,27 @@ func applyAutoFullscreen(_ s: Solo) {
     // caching that would throw the record away exactly when it is needed
     guard !s.tiledIDs.isEmpty else { return }
     soloLock.lock()
-    lastFullscreenIDs = s.fullscreenIDs
+    lastFullscreen = fullscreenByWorkspace(s)
+    // A workspace holding no tiled window at all has left the rule's reach:
+    // its last window was closed, or floated. Its record has to go with it.
+    //
+    // Keeping it made a float round-trip read as a Super+F. Floating the only
+    // window drops the workspace out of this list, so nothing updates the
+    // record; tiling it again brings back the SAME id at the SAME count, and
+    // "a window we fullscreened, now tiled, with no count change" is exactly
+    // the rule's signature for the user having turned it off by hand.
+    // Measured: a solo window came back from Super+T tiled and not full, and
+    // stayed that way until something else opened or closed there.
+    //
+    // The same staleness kept an override alive on a workspace emptied
+    // completely: the count never returned to zero, because a workspace with
+    // no tiled windows is never evaluated, so the next window to open there
+    // found an override nobody had set.
+    for ws in Array(soloCount.keys) where s.tiledIDs[ws] == nil {
+        soloCount[ws] = nil
+        soloWeSet[ws] = nil
+        soloOverride.remove(ws)
+    }
     soloLock.unlock()
 
     // EVERY workspace, not only the focused one. App-to-workspace rules put
@@ -245,7 +286,7 @@ func applySolo(_ ws: String, _ ids: [String], _ s: Solo) {
             // user's doing rather than a state we never set.
             soloLock.lock()
             soloWeSet[ws] = id
-            lastFullscreenIDs.insert(id)
+            lastFullscreen[id] = ws
             soloLock.unlock()
             return
         }
@@ -262,7 +303,7 @@ func applySolo(_ ws: String, _ ids: [String], _ s: Solo) {
         act(["fullscreen", "on", "--no-outer-gaps", "--window-id", id])
         soloLock.lock()
         soloWeSet[ws] = id
-        lastFullscreenIDs.insert(id)   // recorded now, not at the next snapshot
+        lastFullscreen[id] = ws   // recorded now, not at the next snapshot
         soloLock.unlock()
         tlog("\(ws) solo, window \(id) on")
     } else {
@@ -286,7 +327,7 @@ func applySolo(_ ws: String, _ ids: [String], _ s: Solo) {
         for id in full {
             act(["fullscreen", "off", "--window-id", id])
             soloLock.lock()
-            lastFullscreenIDs.remove(id)
+            lastFullscreen[id] = nil
             soloLock.unlock()
             tlog("\(ws) holds \(n), window \(id) off")
         }
@@ -314,7 +355,7 @@ func soloBaselineAfterWake() {
         guard !s.tiledIDs.isEmpty else { return }
         soloLock.lock()
         for (ws, ids) in s.tiledIDs { soloCount[ws] = ids.count }
-        lastFullscreenIDs = s.fullscreenIDs
+        lastFullscreen = fullscreenByWorkspace(s)
         // Forget who set what. Waking drops fullscreen without asking, so a
         // workspace that is solo and tiled now is a state nobody chose, and
         // the rule should assert it rather than read it as an override.
@@ -357,15 +398,15 @@ func kickSoloRecheck() {
 // The part a focus hook cannot reach, and the reason this is a resident
 // process rather than a script on a hook.
 
-var fullscreenAtSleep: [String] = []
+var fullscreenAtSleep: [String: String] = [:]  // window id -> workspace
 
 NSWorkspace.shared.notificationCenter.addObserver(
     forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
 ) { _ in
     guard autoFullscreenSolo, !omniwmActive() else { return }
-    // read, never asked: see lastFullscreenIDs
+    // read, never asked: see lastFullscreen
     soloLock.lock()
-    fullscreenAtSleep = Array(lastFullscreenIDs)
+    fullscreenAtSleep = lastFullscreen
     soloLock.unlock()
     tlog("sleeping, recorded \(fullscreenAtSleep.count) fullscreen window(s)")
 }
@@ -432,21 +473,44 @@ func finishWake(_ why: String) {
     wakeArmed = false
     detectQuiet?.cancel(); detectQuiet = nil
     wakeFallback?.cancel(); wakeFallback = nil
-    let ids = fullscreenAtSleep
-    tlog("wake \(why), restoring \(ids.count) window(s)")
+    let recorded = fullscreenAtSleep
+    // What the wake actually did to the layout, before anything is put back.
+    // Without this a restore that repaired nothing is indistinguishable from
+    // one that repaired everything: both end with the right screen. A wake is
+    // rare, so the one query it costs is worth the certainty.
+    let stillFull = soloSnapshot().fullscreenIDs
+    tlog("wake \(why): \(stillFull.count) of \(recorded.count) survived, restoring \(recorded.count) window(s)")
     // Two more passes after the first: the burst of app activations a few
     // seconds after a wake focuses another window in the workspace, and
     // aerospace leaves fullscreen when that happens.
     for delay in [0.0, 3.0, 8.0] {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             work.async {
-                for id in ids {
+                let placed = windowWorkspaces()
+                for (id, ws) in recorded {
                     // tiling FIRST. A window can come back from a sleep
                     // floating, having lost its tiling as well as its
                     // fullscreen, and aerospace cannot fullscreen a floating
                     // window: it exits 0 and does nothing. Unconditional is
                     // safe, because only a tiled window can be fullscreen.
                     act(["layout", "tiling", "--window-id", id])
+                    // THEN the workspace. A wake re-detects every window onto
+                    // the FOCUSED workspace, and only an on-window-detected
+                    // rule moves it back out; an app without one simply stays
+                    // there. Measured on a lid close: Zed came back on
+                    // workspace 1 beside the browser, and restoring its
+                    // fullscreen THERE left workspace 1 holding two windows
+                    // with one full — this rule's own signature for a manual
+                    // Super+F. It set an override and stopped touching the
+                    // workspace, so the browser could never go full again.
+                    // Restoring the placement is what stops the restore
+                    // leaving the layout worse than the wake did.
+                    //
+                    // Only when it has actually moved: a needless move can
+                    // reorder a tiling tree that was already right.
+                    if let now = placed[id], now != ws {
+                        act(["move-node-to-workspace", ws, "--window-id", id])
+                    }
                     act(["fullscreen", "on", "--no-outer-gaps", "--window-id", id])
                 }
             }
