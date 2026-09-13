@@ -70,10 +70,16 @@ fi
 # (kqueue on ~/.config/omarchy/current), so the symlink swap above IS
 # the notification
 
-# OmniWM draws the focus border while it is the window manager (our
-# ring clips at screen edges there — no outer gaps). Its color lives in
-# settings.toml as 0-1 floats; write the theme's ACTIVE_COLOR
-# (0xAARRGGBB) into it — OmniWM live-reloads, so this recolors at once.
+# OmniWM's own focus border is OFF since 2026-09-13: it has outer gaps now,
+# so omacosy-borders draws the ring under both managers and one ring is
+# enough. Nothing reads the colour written below while `[borders] enabled =
+# false`.
+#
+# The write stays anyway, because it costs one regex and it keeps
+# settings.toml internally consistent — re-enable OmniWM's border and the
+# colour is already the theme's rather than whatever was last mirrored. Its
+# color lives there as 0-1 floats; OmniWM live-reloads, so it would recolor
+# at once.
 OMNIWM_SETTINGS="$HOME/.config/omniwm/settings.toml"
 if [ -f "$OMNIWM_SETTINGS" ] && [ -f "$THEMES_DIR/$NAME/borders.sh" ]; then
   ACTIVE="$(grep -o 'ACTIVE_COLOR=0x[0-9a-fA-F]*' "$THEMES_DIR/$NAME/borders.sh" | head -1 | cut -d= -f2)"
