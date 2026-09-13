@@ -166,6 +166,22 @@ would fix the hidden case and break the visible one: a solo window
 would cover the bar again. That is item 11 in the ledger, diagnosed and
 fixed on 2026-09-01. Leave it alone.
 
+**5. Two engines were bound to the four-finger swipe.** Fixed 2026-09-13,
+upstream #35. `[gestures] workspaceSwipeEnabled` was `true` with
+`workspaceSwipeFingerCount = 4` while `config/gesture/config.omniwm.json`
+also bound `swipe_left`/`swipe_right` on four fingers. A diagonal swipe-up
+therefore switched workspace AND opened the overview; the overview's
+dismiss-restore hid the cause. Measured: 17 consecutive swipe-ups each moved
+the focused workspace in the `workspace-bar` stream, always to an empty one,
+while `omacosy-gesture` logged zero switches of its own. OmniWM's handler is
+now off and `omacosy-gesture` owns all four directions, because it commits a
+gesture to one axis and honours `overlay_active()`. The value reloads live.
+
+**The comment in `bin/omacosy-wm-switch` was wrong, not just stale.** It said
+the horizontal actions "are set to ''" under OmniWM. They never were, and
+with OmniWM's handler off they must not be — blanking them would leave no
+horizontal swipe at all. Corrected in the same commit.
+
 **Out of scope, on purpose.** `fullscreenDisplays()` in
 `helper/bar.swift` still returns early under OmniWM. Its stated reason
 is stale, but the early return is harmless now: with the top gap right,
