@@ -54,11 +54,17 @@ toggle)
   ;;
 status)
   if [ -e "$MARK" ]; then
-    # -s, not -f: an EMPTY file exists, and `grep -c` on it prints 0 and then
-    # exits non-zero, so a `|| echo 0` fallback printed the count twice.
-    n=0
-    [ -s "$OWNED" ] && n=$(grep -c . "$OWNED")
-    echo "on — $n window(s) fullscreened by the rule"
+    if wm_is_omniwm; then
+      # the daemon exits under OmniWM, so solo-owned is an aerospace-era file
+      # and its count describes nothing that is on screen now
+      echo "on — parked: OmniWM fills a lone window itself"
+    else
+      # -s, not -f: an EMPTY file exists, and `grep -c` on it prints 0 and then
+      # exits non-zero, so a `|| echo 0` fallback printed the count twice.
+      n=0
+      [ -s "$OWNED" ] && n=$(grep -c . "$OWNED")
+      echo "on — $n window(s) fullscreened by the rule"
+    fi
   else echo "off"; fi
   ;;
 *)

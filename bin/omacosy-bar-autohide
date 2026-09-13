@@ -19,6 +19,8 @@ set -uo pipefail
 
 CONF="$HOME/.config/omacosy/bar.conf"
 AERO="$HOME/.config/aerospace/aerospace.toml"
+OMNI="$HOME/.config/omniwm/settings.toml"
+OMNICLI="$HOME/.local/bin/omacosy-omni"
 HELPER="$HOME/.local/bin/omacosy-helper"
 MARGIN=8                                   # matches the other three edges
 A="$(command -v aerospace || echo /opt/homebrew/bin/aerospace)"
@@ -26,6 +28,11 @@ A="$(command -v aerospace || echo /opt/homebrew/bin/aerospace)"
 num() { case "$1" in ''|*[!0-9]*) echo "$2" ;; *) echo "$1" ;; esac; }
 bar_height() { num "$("$HELPER" bar-height 2>/dev/null || true)" 34; }
 notch_inset() { num "$("$HELPER" safe-top 2>/dev/null || true)" 0; }
+
+# a live OmniWM answers its socket in ~3 ms; pgrep -f scanned every
+# process for 31 ms per call, and a stale socket after a crash cannot
+# fool a real request the way a file test could
+wm_is_omniwm() { "$OMNICLI" active >/dev/null 2>&1; }
 
 setting() {
   [ -f "$CONF" ] || { echo auto; return; }
@@ -91,6 +98,43 @@ current_gap() {
   esac
 }
 
+# OmniWM keeps ONE global [gaps.outer], and its other three edges are 8 like
+# aerospace's, so the number is one external_gap already returns. There is
+# nothing to compute twice.
+#
+# external_gap, not builtin_gap. One global gap serves every display, so it
+# has to be the one that is never too small: the built-in's subtracts a notch
+# inset an external panel does not have, and using it there would bury the bar
+# under every tiled window. Equal on a notchless machine.
+#
+# The value is written as a FLOAT, always. OmniWM's decoder is strict and an
+# integer where it wants a Double rejects the WHOLE file — and a rejected live
+# reload is silent, log-only, with the in-memory state kept. So the read-back
+# in `status` is the only proof the value ever landed.
+#
+# The substitution is anchored to the [gaps.outer] table. `bottom`, `left` and
+# `right` share it, and the range guards against a second `top =` arriving in
+# another table on a later OmniWM version.
+omni_apply() {
+  local gap="$1"
+  [ -f "$OMNI" ] || return 0
+  grep -qxF "top = $gap.0" "$OMNI" && return 0
+  sed -i '' -E "/^\[gaps\.outer\]/,/^\[general\]/ s|^top *=.*|top = $gap.0|" "$OMNI"
+}
+
+# what is in the file
+omni_file_gap() {
+  [ -f "$OMNI" ] || { echo -; return; }
+  sed -n -E '/^\[gaps\.outer\]/,/^\[general\]/ s|^top *= *([0-9.]+).*|\1|p' "$OMNI" | head -1
+}
+
+# what OmniWM actually resolved, which is not the same question
+omni_live_gap() {
+  wm_is_omniwm || { echo -; return; }
+  "$OMNICLI" query displays 2>/dev/null \
+    | sed -E 's|.*"outerGapTop":([0-9.]+).*|\1|' | head -1
+}
+
 apply() {
   local want="$1" gap
   mkdir -p "$(dirname "$CONF")"
@@ -110,6 +154,14 @@ apply() {
     sed -i '' -E "s|^outer\.top = .*|$line|" "$AERO"
     "$A" reload-config >/dev/null 2>&1
   fi
+  # OmniWM's own top gap, written whether or not it is the running manager: it
+  # reads the file at cold start, so the number is already right before the
+  # next omacosy-wm-switch rather than after it.
+  #
+  # $ex, the external number. OmniWM has one gap for every display and no
+  # per-monitor form in use, so it takes the value that is never too small.
+  # Identical to $bi on a notchless machine.
+  omni_apply "$ex"
   # The native bar's auto-hide is deliberately NOT touched here.
   #
   # It looked like the missing half: `off` left this bar visible while the
@@ -140,6 +192,9 @@ apply() {
   launchctl kickstart -k "gui/$(id -u)/com.omacosy.solo" >/dev/null 2>&1
   printf 'omacosy: bar autohide=%s — built-in gap %s, external %s (%s at rest here)\n' \
     "$want" "$bi" "$ex" "$(hides "$want" && echo hidden || echo visible)"
+  if wm_is_omniwm; then
+    printf '  omniwm top gap %s, live %s\n' "$(omni_file_gap)" "$(omni_live_gap)"
+  fi
 }
 
 case "${1:-status}" in
@@ -153,6 +208,12 @@ case "${1:-status}" in
     printf '  menu bar height %s, notch inset %s, top gap wants %s, aerospace has %s\n' \
       "$(bar_height)" "$(notch_inset)" "$(want_gap "$s")" \
       "$(current_gap)"
+    # an `if`, not a `&&`: this is the last command in the arm, so a missing
+    # OmniWM file would otherwise make `status` itself exit non-zero
+    if [ -f "$OMNI" ]; then
+      printf '  omniwm top gap: file has %s, live says %s\n' \
+        "$(omni_file_gap)" "$(omni_live_gap)"
+    fi
     ;;
   *) echo "usage: omacosy-bar-autohide [on|off|auto|status]" >&2; exit 1 ;;
 esac

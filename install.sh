@@ -176,6 +176,18 @@ sed -e "s|@TERMINAL@|$TERMINAL|g" -e "s|@BROWSER@|$BROWSER|g" \
     -e "s|@OUTER_TOP@|$OUTER_TOP|g" -e "s|@OUTER_TOP_EXT@|$OUTER_TOP_EXT|g" \
   "$REPO_DIR/config/aerospace/aerospace.template.toml" > "$REPO_DIR/config/aerospace/aerospace.toml"
 
+# OmniWM's settings are generated the same way and for the same reason:
+# omacosy-bar-autohide rewrites the top gap at runtime, and a tracked file
+# would put every such write in `git status`. Its decoder is strict and wants
+# a Double, so the template carries the `.0`.
+#
+# OUTER_TOP_EXT, not OUTER_TOP. OmniWM keeps ONE global [gaps.outer] for every
+# display, so it has to take the number that is never too small: the built-in's
+# subtracts a notch inset an external panel does not have, and using it there
+# would bury the bar under every tiled window.
+sed -e "s|@OUTER_TOP_EXT@|$OUTER_TOP_EXT|g" \
+  "$REPO_DIR/config/omniwm/settings.template.toml" > "$REPO_DIR/config/omniwm/settings.toml"
+
 log "Linking configs"
 link "$REPO_DIR/zsh/zshrc"           "$HOME/.zshrc"
 link "$REPO_DIR/config/starship.toml" "$HOME/.config/starship.toml"

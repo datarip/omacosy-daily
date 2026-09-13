@@ -5,6 +5,9 @@
 # as a group. Migration strips comments and reorders tables: the repo
 # copy is the reference, the live copy is state; theme-set rewrites
 # [borders.color] per theme. Mirrored 2026-09-08, live-verified.
+# The settings.toml beside this is GENERATED from here by install.sh, so
+# omacosy-bar-autohide can rewrite the top gap without dirtying the tree.
+# Edit this file, never that one.
 monitorBarOverrides = []
 monitorDwindleOverrides = []
 monitorGapOverrides = []
@@ -53,10 +56,10 @@ fullscreenUsesOuterGaps = true
 size = 8.0
 
 [gaps.outer]
-bottom = 0.0
-left = 0.0
-right = 0.0
-top = 42.0
+bottom = 8.0
+left = 8.0
+right = 8.0
+top = @OUTER_TOP_EXT@.0
 
 [general]
 animationsEnabled = true

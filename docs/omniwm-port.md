@@ -126,6 +126,55 @@ this directory. Version-critical reconciliation:
 - Undocumented gem: system-wide window corner radius via
   NSConvolutionOverride defaults.
 
+## 0.6.10 — [gaps.outer] is applied after all (measured 2026-09-13)
+
+Two statements above are now stale. Both are kept, because this file
+keeps the wrong turns on the record.
+
+**1. [gaps.outer] IS honored under dwindle, on all four edges.** The
+"Dwindle ignores outer gaps" line under "Trial findings" was true on
+0.6.2 and is false on 0.6.10. Measured on both displays with
+`omacosy-omni query displays`: writing `top` and the three sides into
+`~/.config/omniwm/settings.toml` changed `outerGapTop`, `outerGapLeft`,
+`outerGapRight` and `outerGapBottom` within a second, with no restart.
+The kqueue watcher applies a valid edit live, as
+`docs/omniwm-capabilities-config.md` says from a source audit. This is
+the live probe that audit was missing. The comment at
+`helper/bar.swift:3732-3739`, which says OmniWM applies no outer gaps,
+is stale for the same reason. The code it guards is left alone: see
+"out of scope" below.
+
+**2. The top gap was a constant and did not follow `bar.conf`.** Fixed
+2026-09-13. `bin/omacosy-bar-autohide` wrote only AeroSpace's
+`outer.top`, so under OmniWM a hidden bar still cost the whole strip.
+Measured before the fix, on a notchless built-in: `off`, `on` and
+`auto` all gave `outerGapTop=42` and a window top inset of 42, while
+the AeroSpace number moved 38 -> 8 -> 8. `settings.toml` is now a
+generated file, like `aerospace.toml`, written by `install.sh` from
+`settings.template.toml` and owned by `omacosy-bar-autohide`
+afterwards. The command writes both managers' files on every run, and
+prints the number for whichever one is listening.
+
+**3. Where the 42 came from.** It was `34 + 8`: upstream's constant bar
+height plus the margin. PR 8 (upstream #24) took the height from macOS
+instead, and `omacosy-helper bar-height` answers 30 here. So the 42
+described a bar this build does not draw, and over-reserved by 12pt
+even with the bar visible. The correct pair is 38 visible, 8 hidden.
+
+**4. `fullscreenUsesOuterGaps` must stay `true`.** Setting it `false`
+would fix the hidden case and break the visible one: a solo window
+would cover the bar again. That is item 11 in the ledger, diagnosed and
+fixed on 2026-09-01. Leave it alone.
+
+**Out of scope, on purpose.** `fullscreenDisplays()` in
+`helper/bar.swift` still returns early under OmniWM. Its stated reason
+is stale, but the early return is harmless now: with the top gap right,
+nothing covers the bar that should not. Removing it makes the bar duck
+under OmniWM fullscreen windows again, which is its own change with its
+own testing. Per-monitor gaps are also out: OmniWM has
+`[[monitorGapOverrides]]`, but `query displays` does not expose the
+display UUID the override needs, so the one global value stands.
+
 ## 0.6.8 (upgraded 2026-09-08)
 
 How it broke first: 0.6.8 moved the cask from BarutSRB/tap to

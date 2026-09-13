@@ -45,7 +45,9 @@ macOS actually draws instead of a constant.
 
 5 gives the left half of the top edge to this bar and leaves the right
 half to the native one, so status items stay reachable while the bar
-auto-hides. Configured in `config/bar.conf`.
+auto-hides. Configured in `config/bar.conf`. That one setting sizes the
+top gap under both window managers: `outer.top` in `aerospace.toml`, and
+`[gaps.outer] top` in `omniwm/settings.toml`.
 
 6 gives a workspace holding exactly one tiled window the whole display
 with no gaps, and tiles again when a second appears. Configured in
