@@ -67,8 +67,10 @@ outer.right = 8
 # flat panel reports nothing, so the bar's full height is reserved. The
 # question is whether the display has a notch, which is not the same set
 # as whether it is built in: every Apple Silicon laptop before the 2021
-# 14"/16" MacBook Pro is built in and has no notch.
-outer.top = [{ monitor.'built-in' = @OUTER_TOP@ }, 42]
+# 14"/16" MacBook Pro is built in and has no notch. No external display
+# has a notch either, so the second entry is the same sum with nothing
+# taken off it.
+outer.top = [{ monitor.'built-in' = @OUTER_TOP@ }, @OUTER_TOP_EXT@]
 
 # Fixed-size settings windows fight the tiler (resize -> snap back ->
 # relayout flicker); float them instead.

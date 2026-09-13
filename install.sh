@@ -159,7 +159,11 @@ case "$BAR_HEIGHT" in
   ''|*[!0-9]*) BAR_HEIGHT=34 ;;           # no helper yet on a first install
 esac
 BAR_MARGIN=8                              # matches inner/outer gaps in the template
-OUTER_TOP=$(( BAR_HEIGHT + BAR_MARGIN ))
+# No external display has a notch, so its gap is the inset-0 case: the
+# bar's whole height plus the margin. That is also where the built-in
+# starts, before its own inset is taken off below.
+OUTER_TOP_EXT=$(( BAR_HEIGHT + BAR_MARGIN ))
+OUTER_TOP=$OUTER_TOP_EXT
 INSET="$("$HOME/.local/bin/omacosy-helper" safe-top 2>/dev/null || true)"
 case "$INSET" in
   ''|*[!0-9]*) ;;                         # no helper yet, or unusable output
@@ -169,7 +173,7 @@ esac
 
 sed -e "s|@TERMINAL@|$TERMINAL|g" -e "s|@BROWSER@|$BROWSER|g" \
     -e "s|@MUSIC@|$MUSIC|g" -e "s|@MESSENGER@|$MESSENGER|g" \
-    -e "s|@OUTER_TOP@|$OUTER_TOP|g" \
+    -e "s|@OUTER_TOP@|$OUTER_TOP|g" -e "s|@OUTER_TOP_EXT@|$OUTER_TOP_EXT|g" \
   "$REPO_DIR/config/aerospace/aerospace.template.toml" > "$REPO_DIR/config/aerospace/aerospace.toml"
 
 log "Linking configs"
