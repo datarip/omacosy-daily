@@ -130,10 +130,17 @@ omni_apply() {
 # only for `off`. OmniWM cannot, so the bool follows the setting instead:
 #
 #   bar VISIBLE  true   keep the gaps, so a fullscreen window cannot cover it
-#   bar HIDDEN   false  edge to edge, which is what AeroSpace does
+#   bar HIDDEN   false  edge to edge
 #
-# That is what closes docs/omniwm-port.md item 11 without giving up the
-# stretch: the strip is only reserved while there is a bar in it.
+# That closes docs/omniwm-port.md item 11 without giving up the stretch: the
+# strip is only reserved while there is a bar in it.
+#
+# NOT full parity, and saying so matters. This matches aerospace for a LONE
+# window, which is what solo.swift does with the same test. It does NOT match
+# Super+F, which aerospace stretches ALWAYS because the binding carries
+# --no-outer-gaps. So with `off` aerospace fills the screen and OmniWM keeps
+# the strip. One bool cannot serve both, and the alternatives are worse: see
+# docs/omniwm-port.md item 4.
 omni_fullscreen_gaps() {           # omni_fullscreen_gaps <true|false>
   local want="$1"
   [ -f "$OMNI" ] || return 0

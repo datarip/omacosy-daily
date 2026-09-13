@@ -161,10 +161,32 @@ instead, and `omacosy-helper bar-height` answers 30 here. So the 42
 described a bar this build does not draw, and over-reserved by 12pt
 even with the bar visible. The correct pair is 38 visible, 8 hidden.
 
-**4. `fullscreenUsesOuterGaps` must stay `true`.** Setting it `false`
-would fix the hidden case and break the visible one: a solo window
-would cover the bar again. That is item 11 in the ledger, diagnosed and
-fixed on 2026-09-01. Leave it alone.
+**4. `fullscreenUsesOuterGaps` must be `true` WHILE THE BAR IS VISIBLE.**
+Amended later the same day — the first version of this entry said "must stay
+`true`, leave it alone", and `omacosy-bar-autohide` now writes it, so that
+would have left the ledger contradicting the code.
+
+A flat `false` breaks the visible case: a solo window covers the bar again,
+which is item 11, diagnosed and fixed on 2026-09-01. A flat `true` costs the
+stretch: Super+F keeps 8pt on every edge instead of filling the display, which
+a user reported on 2026-09-13 once the side gaps went from 0 to 8 and made it
+visible. So it follows `bar.conf`, like the top gap: `true` when the bar is
+visible, `false` when it hides, because then there is no bar to cover.
+
+**One bool, two features.** `singleWindowFit = "fill"` is defined as the
+FULLSCREEN frame, so this same bool governs Super+F AND every lone window.
+OmniWM cannot tell them apart, which is why the value has to follow the
+setting rather than the command.
+
+**This is NOT full AeroSpace parity, and the PR body must not claim it is.**
+It is parity for a lone window: `helper/solo.swift` keeps the strip only for
+`off`, for the same reason. It is NOT parity for Super+F, which AeroSpace
+binds to `fullscreen --no-outer-gaps` and therefore stretches ALWAYS, over a
+visible bar included. So with `autohide=off`, AeroSpace fills the screen and
+OmniWM keeps the strip. The alternatives were both worse: a flat `false`
+makes a lone window cover a visible bar, which AeroSpace's solo daemon
+specifically avoids, and dropping `singleWindowFit = "fill"` removes
+lone-window fill under OmniWM altogether, since `omacosy-solo` exits there.
 
 **5. Two engines were bound to the four-finger swipe.** Fixed 2026-09-13,
 upstream #35. `[gestures] workspaceSwipeEnabled` was `true` with
