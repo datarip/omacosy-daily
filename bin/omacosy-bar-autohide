@@ -122,6 +122,30 @@ omni_apply() {
   sed -i '' -E "/^\[gaps\.outer\]/,/^\[general\]/ s|^top *=.*|top = $gap.0|" "$OMNI"
 }
 
+# OmniWM's FULLSCREEN frame, which `singleWindowFit = "fill"` also uses: one
+# static bool governs both Super+F and a lone window.
+#
+# AeroSpace expresses this per command — Super+F is `fullscreen
+# --no-outer-gaps`, and the solo daemon reads bar.conf and keeps the strip
+# only for `off`. OmniWM cannot, so the bool follows the setting instead:
+#
+#   bar VISIBLE  true   keep the gaps, so a fullscreen window cannot cover it
+#   bar HIDDEN   false  edge to edge, which is what AeroSpace does
+#
+# That is what closes docs/omniwm-port.md item 11 without giving up the
+# stretch: the strip is only reserved while there is a bar in it.
+omni_fullscreen_gaps() {           # omni_fullscreen_gaps <true|false>
+  local want="$1"
+  [ -f "$OMNI" ] || return 0
+  grep -qxF "fullscreenUsesOuterGaps = $want" "$OMNI" && return 0
+  sed -i '' -E "s|^fullscreenUsesOuterGaps *=.*|fullscreenUsesOuterGaps = $want|" "$OMNI"
+}
+
+omni_fs_gaps_now() {
+  [ -f "$OMNI" ] || { echo -; return; }
+  grep -E '^fullscreenUsesOuterGaps' "$OMNI" | tail -1 | cut -d= -f2 | tr -d ' '
+}
+
 # what is in the file
 omni_file_gap() {
   [ -f "$OMNI" ] || { echo -; return; }
@@ -162,6 +186,8 @@ apply() {
   # per-monitor form in use, so it takes the value that is never too small.
   # Identical to $bi on a notchless machine.
   omni_apply "$ex"
+  # and the fullscreen frame, which has to follow the same setting
+  omni_fullscreen_gaps "$(hides "$want" && echo false || echo true)"
   # The native bar's auto-hide is deliberately NOT touched here.
   #
   # It looked like the missing half: `off` left this bar visible while the
@@ -193,7 +219,8 @@ apply() {
   printf 'omacosy: bar autohide=%s — built-in gap %s, external %s (%s at rest here)\n' \
     "$want" "$bi" "$ex" "$(hides "$want" && echo hidden || echo visible)"
   if wm_is_omniwm; then
-    printf '  omniwm top gap %s, live %s\n' "$(omni_file_gap)" "$(omni_live_gap)"
+    printf '  omniwm top gap %s, live %s; fullscreen keeps gaps: %s\n' \
+      "$(omni_file_gap)" "$(omni_live_gap)" "$(omni_fs_gaps_now)"
   fi
 }
 
@@ -213,6 +240,7 @@ case "${1:-status}" in
     if [ -f "$OMNI" ]; then
       printf '  omniwm top gap: file has %s, live says %s\n' \
         "$(omni_file_gap)" "$(omni_live_gap)"
+      printf '  omniwm fullscreen keeps the outer gaps: %s\n' "$(omni_fs_gaps_now)"
     fi
     ;;
   *) echo "usage: omacosy-bar-autohide [on|off|auto|status]" >&2; exit 1 ;;
