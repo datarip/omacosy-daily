@@ -315,16 +315,54 @@ requires restoring settings.toml.pre-v1 first.
 7. (cosmetic) **Their border decorates their own command palette** —
    mismatched-radius outline; persists with borders disabled, so
    likely the palette's own edge drawing.
-12. **0.6.4 REGRESSION: move-onto hides windows** — 1 left + 2 right,
-   move a right window left: only two windows stay visible; the third
-   parks (isVisible false, layoutReason "standard") and focusing it
-   swaps which window shows, at near-fullscreen frames. Reproduced
-   2026-08-31. Together with #11 this made 0.6.4 unusable; ROLLED BACK
-   to 0.6.3 same day (grants survive — same signing identity; restore
-   settings.toml.pre-v1 only after the 0.6.4 process is fully gone, or
-   its shutdown save overwrites the restore). Do not brew upgrade
-   until upstream fixes land (their HEAD commits already target this
-   area).
+12. **NOT A BUG. Closed 2026-09-14, measured on 0.6.10.** This entry
+   described dwindle's stacking and read it as a fault. Item 11's
+   retraction had already re-diagnosed the same behaviour as BY DESIGN,
+   on the same day, and item 12 was never brought into line. The
+   original text is kept below, as the rest of this file keeps its wrong
+   turns.
+
+   Measured on 0.6.10: three windows on one workspace, `omniwmctl
+   command move left` on the rightmost.
+
+   - one window goes `isVisible false`, `hiddenReason layout-transient`,
+     parked at x=1439
+   - it is still there 6 seconds later, so the state is stable
+   - focusing it SWAPS the pair: the hidden one shows, the showing one
+     parks with the same reason
+   - the showing member is 1412 wide at x=20, not 1424 at x=8. That
+     12-point inset is the member strip named in item 11's retraction
+
+   Two windows in one cell, taking turns. That is `groupWindow(into:
+   neighbor)`, which is what item 11 says it is.
+
+   `move-column left` is unaffected: it swaps, and all three windows
+   stay visible. Hyper+arrows is bound to that, so the keys actually
+   pressed on this machine were never involved.
+
+   **The "do not brew upgrade" instruction is withdrawn.** It was
+   written for 0.6.4; this machine has run 0.6.10 since 2026-09-13.
+   OmniWM has migrated settings automatically since 0.6.4, and the
+   0.6.2 -> 0.6.3 wipe behind the caution is upstream #604 and #606,
+   both closed. Upgrading is safe. DOWNGRADING is not: migration is
+   forward-only, and no `settings.toml.pre-v3` exists on this machine,
+   so a rollback to 0.6.6 or earlier starts from defaults. Copy
+   `settings.toml` before any version change.
+
+   One candidate for the ledger instead: `hiddenReason` reports
+   `layout-transient` for a condition that does not resolve. A stacked
+   member is stable, and the name says the opposite.
+
+   ORIGINAL ENTRY, 2026-08-31, wrong: **0.6.4 REGRESSION: move-onto
+   hides windows** — 1 left + 2 right, move a right window left: only
+   two windows stay visible; the third parks (isVisible false,
+   layoutReason "standard") and focusing it swaps which window shows, at
+   near-fullscreen frames. Reproduced 2026-08-31. Together with #11 this
+   made 0.6.4 unusable; ROLLED BACK to 0.6.3 same day (grants survive —
+   same signing identity; restore settings.toml.pre-v1 only after the
+   0.6.4 process is fully gone, or its shutdown save overwrites the
+   restore). Do not brew upgrade until upstream fixes land (their HEAD
+   commits already target this area).
 11. RESOLVED 2026-09-01, third diagnosis correct: solo windows filled
    the RAW display because dwindle's singleWindowFit="fill" is defined
    as the FULLSCREEN frame (SingleWindowFit.usesFullscreenLayoutFrame),
