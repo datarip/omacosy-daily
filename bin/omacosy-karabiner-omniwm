@@ -50,6 +50,24 @@ SHIFT = SUPER + ["shift"]
 home = os.environ["HOME"]
 apps = {k: os.environ[k] for k in ("TERMINAL", "BROWSER", "MUSIC", "MESSENGER")}
 
+# aerospace routes the music and messenger chords through
+# omacosy-spawn-cmd, which takes the spawn lock and — under OmniWM —
+# preselects the insertion side before the window appears. A bare
+# `open -a` skips both, so a burst of presses lands unshaped. These
+# chords are matched to what aerospace.toml does for them.
+#
+# The browser chord is deliberately NOT wrapped: aerospace opens it
+# bare too, so the two already agree.
+#
+# Guarded like the files chord. omacosy-spawn-cmd lives in personal/,
+# which is not on main, so a build without it keeps the bare command.
+SPAWNCMD = f"{home}/.local/bin/omacosy-spawn-cmd"
+
+
+def serialised(cmd):
+    return f"[ -x {SPAWNCMD} ] && {SPAWNCMD} {cmd} || {cmd}"
+
+
 # workspace slots: OmniWM's native switchWorkspace.N is name-global
 # (always the main set), blind to which screen you are on — these route
 # through omacosy-omni's cursor-display slot resolution instead. The
@@ -77,9 +95,21 @@ rules = slot_rules + [
     # the guest workspaces too on a single display
     rule("next workspace", "tab", SUPER, cmd=f"{home}/.local/bin/omacosy-ws next"),
     rule("previous workspace", "tab", SHIFT, cmd=f"{home}/.local/bin/omacosy-ws prev"),
-    rule("files", "f", SHIFT, cmd="open -a Finder"),
-    rule("music", "m", SHIFT, cmd=f"open -a '{apps['MUSIC']}'"),
-    rule("messenger", "g", SHIFT, cmd=f"open -a '{apps['MESSENGER']}'"),
+    # `open -a Finder` only ACTIVATES Finder: it raises the window that
+    # already exists and never makes a second one, which is the bug
+    # aerospace's binding was fixed for. omacosy-finder-window makes a new
+    # window and serialises the spawn, and omacosy-spawn preselects the
+    # insertion side under OmniWM just as it does under aerospace.
+    #
+    # Guarded, because this file is on main and that script is not: it
+    # arrives with PR 9. Without it the old command still runs, so a build
+    # that lacks the fix keeps the behaviour it had.
+    rule("files", "f", SHIFT,
+         cmd=f"[ -x {home}/.local/bin/omacosy-finder-window ] "
+             f"&& {home}/.local/bin/omacosy-finder-window "
+             f"|| open -a Finder"),
+    rule("music", "m", SHIFT, cmd=serialised(f"open -a '{apps['MUSIC']}'")),
+    rule("messenger", "g", SHIFT, cmd=serialised(f"open -a '{apps['MESSENGER']}'")),
     rule("next theme", "t", SHIFT, cmd=f"{home}/.local/bin/theme-next"),
     rule("next wallpaper", "b", SHIFT, cmd=f"{home}/.local/bin/theme-bg-next"),
     rule("lock", "l", SHIFT, cmd=f"{home}/.local/bin/omacosy-helper lock"),
@@ -92,13 +122,26 @@ rules = slot_rules + [
 with open(path) as f:
     cfg = json.load(f)
 
+if action not in ("install", "remove", "check"):
+    sys.exit("usage: omacosy-karabiner-omniwm <install|remove|check>")
+
 changed = False
+seen = stale = False
 for profile in cfg.get("profiles", []):
     if not profile.get("selected", False) and len(cfg["profiles"]) > 1:
         continue
     cm = profile.setdefault("complex_modifications", {})
     existing = cm.setdefault("rules", [])
     kept = [r for r in existing if not r.get("description", "").startswith(mark)]
+    if action == "check":
+        # Does the keyboard carry what THIS file says? The marker alone
+        # cannot answer that: a rule whose command changed keeps its
+        # description, so a grep for the marker reports healthy rules while
+        # an old command is still live. Compare the rules themselves.
+        seen = True
+        if [r for r in existing if r.get("description", "").startswith(mark)] != rules:
+            stale = True
+        continue
     if action == "install":
         cm["rules"] = kept + rules
         changed = True
@@ -106,6 +149,12 @@ for profile in cfg.get("profiles", []):
         if len(kept) != len(existing):
             changed = True
         cm["rules"] = kept
+
+if action == "check":
+    # unseen counts as stale: nothing was compared, so nothing is proven
+    ok = seen and not stale
+    print("check: " + ("current" if ok else "stale or missing"))
+    sys.exit(0 if ok else 1)
 
 if changed:
     tmp = path + ".tmp"
