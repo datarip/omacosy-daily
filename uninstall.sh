@@ -63,6 +63,17 @@ rm -f /tmp/omacosy-*.log /tmp/omacosy-*.err "/tmp/omacosy-overview-$(id -u).pid"
   /tmp/omacosy-bar-ws /tmp/omacosy-bar-moved /tmp/omacosy-bar-cheatsheet \
   "${TMPDIR:-/tmp}/omacosy-monitor-count"
 rm -rf "/tmp/omacosy-spawn-$(id -u).lock.d"
+# settings.conf holds the user's choices. Ours to remove only when this
+# install created it and it is still exactly the template it copied.
+SETTINGS="$HOME/.config/omacosy/settings.conf"
+if [ -f "$SETTINGS" ]; then
+  if have "created-settings-conf" \
+     && cmp -s "$SETTINGS" "$HOME/.local/state/omacosy/settings.conf.orig"; then
+    rm -f "$SETTINGS"
+  else
+    log "Kept ~/.config/omacosy/settings.conf: it holds your settings"
+  fi
+fi
 rm -f "$HOME/.config/omacosy/ffm-ignore" \
   "$HOME/.config/omacosy/borders.conf" \
   "$HOME/.config/omacosy/bar.conf" \
@@ -195,7 +206,8 @@ fi
 
 # theme-set / theme-next out of ~/.local/bin — only when they are OUR
 # symlinks (a user's own script of the same name survives)
-for t in theme-set theme-next theme-bg-next omacosy-ws omacosy-toggle omacosy-focus-guard omacosy-ws-collapse omacosy-float omacosy-cycle omacosy-update omacosy-spawn omacosy-layout omacosy-finder-window omacosy-solo-fullscreen omacosy-bar-autohide omacosy-wm-switch omacosy-karabiner-omniwm; do
+for t in theme-set theme-next theme-bg-next omacosy-ws omacosy-toggle omacosy-focus-guard omacosy-ws-collapse omacosy-float omacosy-cycle omacosy-update omacosy-spawn omacosy-layout omacosy-finder-window omacosy-solo-fullscreen omacosy-bar-autohide omacosy-wm-switch omacosy-karabiner-omniwm \
+         omacosy-settings omacosy-window-corners omacosy-spawn-cmd omacosy-harvest-zshrc; do
   target="$(readlink "$HOME/.local/bin/$t" 2>/dev/null || true)"
   case "$target" in *omacosy*) rm -f "$HOME/.local/bin/$t" ;; esac
 done
