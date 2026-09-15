@@ -93,11 +93,27 @@ if [ -n "$TERMINAL$BROWSER$MUSIC$MESSENGER" ]; then
     if [ ! -f "$APPS_LOCAL" ] || ! cmp -s "$TMP" "$APPS_LOCAL"; then
       mv -f "$TMP" "$APPS_LOCAL"
       say "app choices written to config/apps.local.conf"
-      say "  run ./install.sh to apply the music and messenger choices"
+      say "  under AeroSpace, run ./install.sh to apply the music and messenger choices"
     else
       rm -f "$TMP"
     fi
   fi
+fi
+
+# the OmniWM chords, and the bar at its restart in step 3, read install.sh's resolved copy
+APPS_CONF="$HOME/.config/omacosy/apps.conf"
+if [ -f "$APPS_CONF" ]; then
+  for k in TERMINAL BROWSER MUSIC MESSENGER; do
+    v="${!k}"
+    { [ -n "$v" ] && is_name "$v"; } || continue
+    grep -qx "$k=$v" "$APPS_CONF" && continue
+    if grep -q "^$k=" "$APPS_CONF"; then
+      sed -i '' "s|^$k=.*|$k=$v|" "$APPS_CONF"
+    else
+      printf '%s=%s\n' "$k" "$v" >> "$APPS_CONF"
+    fi
+    say "$k=$v written to ~/.config/omacosy/apps.conf"
+  done
 fi
 
 # install.sh writes the app names into aerospace.toml, so apps.local.conf
