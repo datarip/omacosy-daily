@@ -1,0 +1,170 @@
+#!/bin/bash
+# omacosy-window-corners — set the radius macOS draws window corners with,
+# and keep the focus ring concentric with it.
+#
+# Two undocumented keys in the global preferences domain override the
+# radius of every window on the system:
+#
+#   NSConvolutionOverride1   standard windows
+#   NSConvolutionOverride2   panels: inspectors, palettes, some dialogs
+#
+# Apple documents neither, and neither has a Settings pane. A value near 0
+# reads as square. Deleting both keys puts the stock radius back, so
+# nothing here is one-way.
+#
+# An app reads the value when it builds a window, so a running app keeps
+# its corners until it is relaunched. Log out and in to change everything.
+#
+#   omacosy-window-corners                 show what is set now
+#   omacosy-window-corners square          square corners (0.1)
+#   omacosy-window-corners round           back to the macOS default
+#   omacosy-window-corners 8               any radius, 0 to 64, in points
+#   omacosy-window-corners square --panels panels as well as windows
+#   omacosy-window-corners square --no-ring leave the ring alone
+#
+# `square` and a number touch standard windows only, because panels are
+# small and square ones read as unfinished rather than deliberate. `round`
+# always clears both keys, so going back is complete whatever was set.
+#
+# THE RING. omacosy-borders draws one focus ring, under aerospace and
+# under OmniWM both, from ~/.config/omacosy/borders.conf. OmniWM's own
+# [borders] is off and has no radius of its own, so that one file is the
+# whole story. A window radius set here without the ring radius to match
+# gives a square ring around a round window, so this script writes
+# `radius=` by the concentric rule the file itself states:
+#
+#   ring radius = window radius + gap + width / 2
+#
+# gap and width are read from the file, so a changed ring width stays
+# concentric. omacosy-borders watches the file and re-reads on write:
+# the ring changes at once, the windows when their app relaunches.
+#
+# Per-app `radius:` lines in that file are commented out while an
+# override is set, because the override flattens every app and a per-app
+# value would then ring one app wrong. `round` puts them back.
+
+set -u
+
+SQUARE="0.1"
+KEY1=NSConvolutionOverride1                 # standard windows
+KEY2=NSConvolutionOverride2                 # panels
+
+BORDERS="$HOME/.config/omacosy/borders.conf"
+# Stock macOS 26 window radius, circle-fitted from live window alpha.
+# The same figure borders.conf records. Used when the override is
+# cleared, because there is then no number to read anywhere.
+STOCK="17.1"
+OFF_MARK="#window-corners-off "
+
+read_key() { defaults read -g "$1" 2>/dev/null; }
+
+# a numeric setting from borders.conf, or $2 when the file or key is absent
+conf_num() {
+  local v=""
+  [ -f "$BORDERS" ] && v="$(sed -n -E "s/^$1=(-?[0-9.]+).*/\1/p" "$BORDERS" | tail -1)"
+  [ -n "$v" ] && echo "$v" || echo "$2"
+}
+
+ring_for() {
+  awk -v w="$1" -v g="$(conf_num gap -1)" -v b="$(conf_num width 3)" \
+    'BEGIN { r = w + g + b / 2; if (r < 0) r = 0; printf "%.1f\n", r }'
+}
+
+show() {
+  local v label
+  for k in "$KEY1" "$KEY2"; do
+    v="$(read_key "$k")"
+    case "$k" in
+      "$KEY1") label="windows" ;;
+      *)       label="panels " ;;
+    esac
+    printf '  %s  %-24s %s\n' "$label" "$k" "${v:-not set (macOS default)}"
+  done
+  if [ -f "$BORDERS" ]; then
+    printf '  %s  %-24s %s\n' "ring   " "borders.conf radius" "$(conf_num radius '?')"
+  else
+    printf '  %s  %-24s %s\n' "ring   " "borders.conf" "missing"
+  fi
+}
+
+# $1 = the window radius now in force, empty for the macOS default
+sync_ring() {
+  if [ ! -f "$BORDERS" ]; then
+    echo "omacosy-window-corners: no $BORDERS, ring left alone"
+    return
+  fi
+  local win ring
+  win="${1:-$STOCK}"
+  ring="$(ring_for "$win")"
+  sed -i '' -E "s|^radius=.*|radius=$ring|" "$BORDERS"
+  if [ -n "$1" ]; then
+    # only matches a live line, so running this twice cannot stack markers
+    sed -i '' "s|^radius:|$OFF_MARK&|" "$BORDERS"
+  else
+    sed -i '' "s|^$OFF_MARK||" "$BORDERS"
+  fi
+  echo "omacosy-window-corners: ring radius $ring, aerospace and OmniWM both"
+}
+
+usage() {
+  # to the first line that is not a comment, then drop it: the header
+  # grows without a line range here having to follow it
+  sed -n '2,/^[^#]/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+  exit "${1:-0}"
+}
+
+MODE=""
+PANELS=0
+RING=1
+for arg in "$@"; do
+  case "$arg" in
+    --panels|-p)  PANELS=1 ;;
+    --no-ring|-R) RING=0 ;;
+    -h|--help)    usage 0 ;;
+    -*)           echo "omacosy-window-corners: unknown option $arg" >&2; usage 1 ;;
+    *)            [ -n "$MODE" ] && { echo "omacosy-window-corners: one mode at a time" >&2; usage 1; }
+                  MODE="$arg" ;;
+  esac
+done
+
+if [ -z "$MODE" ]; then
+  echo "omacosy-window-corners: current state"
+  show
+  exit 0
+fi
+
+case "$MODE" in
+  square)                 VALUE="$SQUARE" ;;
+  round|default|reset|off) VALUE="" ;;
+  *)
+    # A bad value here is written into a global preference every app
+    # reads, so it is checked rather than passed through. 64 is where the
+    # override stops having an effect.
+    case "$MODE" in
+      *[!0-9.]*|*.*.*) echo "omacosy-window-corners: '$MODE' is not a radius" >&2; usage 1 ;;
+    esac
+    case "$MODE" in
+      *[0-9]*) ;;
+      *) echo "omacosy-window-corners: '$MODE' is not a radius" >&2; usage 1 ;;
+    esac
+    awk -v v="$MODE" 'BEGIN { exit !(v >= 0 && v <= 64) }' \
+      || { echo "omacosy-window-corners: a radius is 0 to 64, got $MODE" >&2; exit 1; }
+    VALUE="$MODE" ;;
+esac
+
+if [ -z "$VALUE" ]; then
+  # Both keys, always. Half a restore leaves panels square with no name
+  # for why, and `defaults delete` on an absent key is not an error worth
+  # showing.
+  for k in "$KEY1" "$KEY2"; do defaults delete -g "$k" 2>/dev/null || true; done
+  echo "omacosy-window-corners: cleared, macOS draws its own corners again"
+else
+  defaults write -g "$KEY1" -float "$VALUE"
+  [ "$PANELS" = 1 ] && defaults write -g "$KEY2" -float "$VALUE"
+  echo "omacosy-window-corners: radius $VALUE on windows$([ "$PANELS" = 1 ] && echo " and panels")"
+fi
+
+[ "$RING" = 1 ] && sync_ring "$VALUE"
+
+echo "omacosy-window-corners: running apps keep their corners until they restart"
+show

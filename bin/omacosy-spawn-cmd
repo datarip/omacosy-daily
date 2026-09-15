@@ -1,0 +1,48 @@
+#!/bin/bash
+# omacosy-spawn-cmd <command...> — run a command that opens a window,
+# serialized the way omacosy-spawn serializes an app.
+#
+# omacosy-spawn takes an APP and ends in `open -na "$APP"`. Finder
+# refuses that: it is always running, so asking for a new instance
+# fails with "Launch failed". `open ~` is what actually makes Finder
+# produce a window, so this takes the whole command instead.
+#
+# Everything else is omacosy-spawn's logic: mkdir lock (macOS has no
+# flock), then wait until omacosy-helper split-hint has stamped a
+# newer window id into the state file before letting the next spawn
+# go. Caps so a launch that never shows a window cannot wedge the key.
+[ "$#" -gt 0 ] || exit 1
+
+LOCK="/tmp/omacosy-spawn-$(id -u).lock.d"
+for i in $(seq 120); do
+  mkdir "$LOCK" 2>/dev/null && break
+  [ "$i" -ge 100 ] && rm -rf "$LOCK"
+  sleep 0.05
+done
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+
+# Same OmniWM path as omacosy-spawn: preselect the insertion side, then
+# wait for the window to appear. No state, no prediction.
+if "$HOME/.local/bin/omacosy-omni" active >/dev/null 2>&1; then
+  OMNI="$HOME/.local/bin/omacosy-omni"
+  mult="$(sed -n 's/^splitWidthMultiplier = //p' "$HOME/.config/omniwm/settings.toml" 2>/dev/null | head -1)"
+  "$OMNI" preselect-for-focused "${mult:-1.4}" >/dev/null 2>&1 || true
+  before="$("$OMNI" window-count 2>/dev/null || echo 0)"
+  "$OMNI" wait-window "$before" 2000 >/dev/null 2>&1 &
+  waiter=$!
+  "$@"
+  wait "$waiter" 2>/dev/null || true
+  exit 0
+fi
+
+STATE="/tmp/omacosy-split-state-$(id -u)"
+prev=0
+[ -f "$STATE" ] && prev=$(cut -d' ' -f1 "$STATE")
+"$@"
+for _ in $(seq 40); do
+  cur=0
+  [ -f "$STATE" ] && cur=$(cut -d' ' -f1 "$STATE")
+  [ "${cur%.*}" -gt "${prev%.*}" ] 2>/dev/null && exit 0
+  sleep 0.05
+done
+exit 0

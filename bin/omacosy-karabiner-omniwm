@@ -50,17 +50,17 @@ SHIFT = SUPER + ["shift"]
 home = os.environ["HOME"]
 apps = {k: os.environ[k] for k in ("TERMINAL", "BROWSER", "MUSIC", "MESSENGER")}
 
-# aerospace routes the music and messenger chords through
-# omacosy-spawn-cmd, which takes the spawn lock and — under OmniWM —
-# preselects the insertion side before the window appears. A bare
-# `open -a` skips both, so a burst of presses lands unshaped. These
-# chords are matched to what aerospace.toml does for them.
+# With SERIALIZE_APP_SPAWNS=1, omacosy-settings routes aerospace's music
+# and messenger chords through omacosy-spawn-cmd, which takes the spawn
+# lock and — under OmniWM — preselects the insertion side before the
+# window appears. A bare `open -a` skips both, so a burst of presses
+# lands unshaped. These chords are matched to that.
 #
 # The browser chord is deliberately NOT wrapped: aerospace opens it
 # bare too, so the two already agree.
 #
-# Guarded like the files chord. omacosy-spawn-cmd lives in personal/,
-# which is not on main, so a build without it keeps the bare command.
+# Guarded like the files chord, so a build without omacosy-spawn-cmd
+# keeps the bare command.
 SPAWNCMD = f"{home}/.local/bin/omacosy-spawn-cmd"
 
 
