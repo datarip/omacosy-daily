@@ -1,0 +1,365 @@
+#!/bin/bash
+# omacosy-settings — apply ~/.config/omacosy/settings.conf after any
+# install.sh run.
+#
+# install.sh regenerates aerospace.toml and re-copies borders.conf, so the
+# app choices, the workspace rules, the ring radius and the launch chords
+# go back to the defaults on every run. This puts your values back. It
+# touches no source file, rebuilds nothing and updates nothing.
+#
+#   ./install.sh && omacosy-settings
+#
+# The values live outside the clone, so no git operation can reach them.
+# If the file is missing, the first run copies config/settings.template.conf
+# there. docs/customising.md explains every key.
+
+set -u
+
+SETTINGS="$HOME/.config/omacosy/settings.conf"
+AERO="$HOME/.config/aerospace/aerospace.toml"
+BORDERS="$HOME/.config/omacosy/borders.conf"
+BARCONF="$HOME/.config/omacosy/bar.conf"
+BIN="$HOME/.local/bin"
+
+# The clone this command links into. A clone under ~/Documents gets copies
+# instead of links, and then there is no link to follow.
+REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+[ -f "$REPO_DIR/install.sh" ] || REPO_DIR=""
+
+say()  { printf 'omacosy-settings: %s\n' "$*"; }
+warn() { printf 'omacosy-settings: WARNING — %s\n' "$*" >&2; }
+has_text() { printf '%s' "$1" | grep -q '[^[:space:]]'; }
+
+# Values end up inside sed expressions and single-quoted TOML strings, so
+# anything outside these characters is refused rather than substituted.
+is_name()   { case "$1" in ''|*[!A-Za-z0-9\ ._-]*) return 1 ;; esac; }
+is_id()     { case "$1" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac; }
+is_number() { case "$1" in ''|*[!0-9.]*|*.*.*) return 1 ;; *[0-9]*) return 0 ;; *) return 1 ;; esac; }
+
+# ── settings ──────────────────────────────────────────────────────
+if [ ! -f "$SETTINGS" ]; then
+  if [ -n "$REPO_DIR" ] && [ -f "$REPO_DIR/config/settings.template.conf" ]; then
+    mkdir -p "$(dirname "$SETTINGS")"
+    cp "$REPO_DIR/config/settings.template.conf" "$SETTINGS"
+    say "created $SETTINGS from the template."
+    say "  It holds example values. Edit it, then run omacosy-settings again."
+  else
+    warn "no $SETTINGS, and no template to copy it from"
+    exit 1
+  fi
+fi
+if ! bash -n "$SETTINGS" 2>/dev/null; then
+  warn "$SETTINGS is not valid shell syntax; nothing was applied"
+  bash -n "$SETTINGS"
+  exit 1
+fi
+
+# A key the file leaves out keeps its default. Empty means "leave it alone".
+TERMINAL="" BROWSER="" MUSIC="" MESSENGER=""
+APP_WORKSPACE_RULES="" APP_FLOAT_RULES=""
+RING_RADIUS="" WINDOW_CORNER="" SERIALIZE_APP_SPAWNS="0"
+# shellcheck source=/dev/null
+. "$SETTINGS"
+
+say "settings read from $SETTINGS"
+CHANGED=0
+
+# ── 1. app choices ────────────────────────────────────────────────
+# Written into the clone, because install.sh reads config/apps.local.conf
+# from the repo it runs in and generates ~/.config/omacosy/apps.conf from
+# it. The next install would undo a write to the generated file.
+#
+# An empty value is left out, not written blank: install.sh warns about
+# `MUSIC=`, and an absent key gives the same default without the warning.
+if [ -n "$TERMINAL$BROWSER$MUSIC$MESSENGER" ]; then
+  if [ -z "$REPO_DIR" ]; then
+    warn "cannot find the clone, so config/apps.local.conf was left alone"
+  else
+    APPS_LOCAL="$REPO_DIR/config/apps.local.conf"
+    TMP="$APPS_LOCAL.$$"
+    {
+      echo "# Written by omacosy-settings from ~/.config/omacosy/settings.conf. Edit that file."
+      echo "# install.sh reads this and generates ~/.config/omacosy/apps.conf from it."
+      for k in TERMINAL BROWSER MUSIC MESSENGER; do
+        v="${!k}"
+        [ -z "$v" ] && continue
+        if is_name "$v"; then
+          printf '%s=%s\n' "$k" "$v"
+        else
+          warn "ignoring $k: an app name cannot contain '$v'"
+        fi
+      done
+    } > "$TMP"
+    if [ ! -f "$APPS_LOCAL" ] || ! cmp -s "$TMP" "$APPS_LOCAL"; then
+      mv -f "$TMP" "$APPS_LOCAL"
+      say "app choices written to config/apps.local.conf"
+      say "  run ./install.sh to apply the music and messenger choices"
+    else
+      rm -f "$TMP"
+    fi
+  fi
+fi
+
+# install.sh writes the app names into aerospace.toml, so apps.local.conf
+# changes the next install and not today. Patch the terminal and browser
+# chords as well, so the change takes effect on reload.
+patch_chord() {
+  local key=$1 app=$2 cur
+  { [ -f "$AERO" ] && [ -n "$app" ] && is_name "$app"; } || return 0
+  cur="$(grep -m1 "^$key = " "$AERO" | sed -E 's/.*"([^"]*)".*/\1/')"
+  [ "$cur" = "$app" ] && return 0
+  sed -i '' -E "s|^($key = .*)\"[^\"]*\"(.*)$|\1\"$app\"\2|" "$AERO"
+  CHANGED=1
+  say "$key now launches $app"
+}
+patch_chord cmd-ctrl-alt-enter       "$TERMINAL"
+patch_chord cmd-ctrl-alt-shift-enter "$BROWSER"
+
+# ── 2. window corners and the focus ring ──────────────────────────
+# install.sh re-copies borders.conf, so the ring radius goes back to the
+# default. The window corner radius is a global preference that no
+# installer writes. omacosy-window-corners sets it and keeps the ring
+# concentric with it, so a set WINDOW_CORNER decides the ring radius.
+RING_BEFORE="$(cksum < "$BORDERS" 2>/dev/null)"
+if [ -n "$WINDOW_CORNER" ]; then
+  if ! is_number "$WINDOW_CORNER"; then
+    warn "WINDOW_CORNER '$WINDOW_CORNER' is not a number; corners left alone"
+  elif [ -x "$BIN/omacosy-window-corners" ]; then
+    CUR_CORNER="$(defaults read -g NSConvolutionOverride1 2>/dev/null || true)"
+    "$BIN/omacosy-window-corners" "$WINDOW_CORNER" >/dev/null 2>&1
+    [ "$CUR_CORNER" != "$WINDOW_CORNER" ] \
+      && say "window corner radius = $WINDOW_CORNER (relaunch apps to see it)"
+  else
+    warn "omacosy-window-corners is not installed; corners left alone. Run ./install.sh"
+  fi
+elif [ -n "$RING_RADIUS" ] && [ -f "$BORDERS" ]; then
+  if is_number "$RING_RADIUS"; then
+    sed -i '' -E "s|^radius=.*|radius=$RING_RADIUS|" "$BORDERS"
+  else
+    warn "RING_RADIUS '$RING_RADIUS' is not a number; ring left alone"
+  fi
+fi
+if [ -f "$BORDERS" ] && [ "$(cksum < "$BORDERS")" != "$RING_BEFORE" ]; then
+  # restarted, not left to notice: sed replaces the file it watches
+  pkill -f omacosy-borders 2>/dev/null || true
+  say "ring radius = $(sed -n 's/^radius=//p' "$BORDERS" | tail -1)"
+fi
+
+# ── 3. top gap ────────────────────────────────────────────────────
+# install.sh may have replaced aerospace.toml from the template, so the
+# gap for the current bar setting has to be written again. The number
+# belongs to omacosy-bar-autohide: it asks macOS for the bar height and
+# the notch inset, and writes AeroSpace's per-monitor form.
+if [ -x "$BIN/omacosy-bar-autohide" ]; then
+  WANT=auto
+  if [ -f "$BARCONF" ]; then
+    case "$(grep -E '^autohide *=' "$BARCONF" | tail -1 | cut -d= -f2 | tr -d ' ')" in
+      on) WANT=on ;; off) WANT=off ;;
+    esac
+  fi
+  "$BIN/omacosy-bar-autohide" "$WANT" >/dev/null 2>&1 && CHANGED=1
+  say "top gap left to omacosy-bar-autohide ($WANT)"
+else
+  warn "omacosy-bar-autohide is not installed; top gap left alone. Run ./install.sh"
+fi
+
+# ── 4. omniwm: what install.sh undoes ─────────────────────────────
+# install.sh COPIES karabiner.json from the repo, so the omacosy-omniwm
+# rules that omacosy-wm-switch injected are gone after every install.
+# Under OmniWM those rules are the ONLY route to every chord that RUNS
+# something — terminal, launcher, files, music, theme, lock, the
+# cheatsheet, close, the nine workspace slots — because OmniWM's hotkeys
+# cannot exec. Caps Lock -> Super survives, so Super looks alive while
+# every chord is dead.
+#
+# install.sh also ends with `Starting AeroSpace` unconditionally, so an
+# install under OmniWM leaves BOTH managers tiling the same windows.
+#
+# Both steps act only when OmniWM is the manager ANSWERING its socket. The
+# karabiner rules must NOT be live under AeroSpace, whose own bindings
+# already grab these chords: both firing would double every launch.
+if "$BIN/omacosy-omni" active >/dev/null 2>&1; then
+  KARAOMNI="$BIN/omacosy-karabiner-omniwm"
+  # `check`, not a grep for the marker. The marker says SOME rules are
+  # there, not that they are the ones this build writes: a rule whose
+  # command changed keeps its description. check compares the live rules
+  # against the generated set.
+  if [ -x "$KARAOMNI" ] && ! "$KARAOMNI" check >/dev/null 2>&1; then
+    "$KARAOMNI" install >/dev/null 2>&1 \
+      && say "OmniWM exec chords refreshed in karabiner"
+  fi
+  # the same line omacosy-wm-switch uses. OmniWM never stopped, so only
+  # the manager install.sh started has to go.
+  if pgrep -qf '/Applications/AeroSpace.app'; then
+    osascript -e 'quit app "AeroSpace"' >/dev/null 2>&1
+    say "quit the AeroSpace that install.sh started (OmniWM is the manager)"
+  fi
+fi
+
+# ── 5. aerospace: app -> workspace rules ──────────────────────────
+# Appended once, under a marker. install.sh regenerates aerospace.toml,
+# which drops the block, and the next run appends it again. Any
+# "omacosy-*: app rules" marker counts, so a file that an older tool wrote
+# never gets a second copy.
+if [ -f "$AERO" ] && has_text "$APP_WORKSPACE_RULES" \
+   && ! grep -qE '^# omacosy-[a-z-]+: app rules' "$AERO"; then
+  n=0
+  {
+    printf '\n# omacosy-settings: app rules — edit them in\n'
+    printf '# ~/.config/omacosy/settings.conf, not here. install.sh regenerates this file.\n'
+    while read -r appid ws _; do
+      [ -z "$appid" ] && continue
+      if ! is_id "$appid" || ! is_id "${ws:-}"; then
+        warn "skipping app rule '$appid ${ws:-}': want '<bundle id> <workspace>'"
+        continue
+      fi
+      printf '\n[[on-window-detected]]\nif.app-id = %s\nrun = %s\n' \
+        "'$appid'" "'move-node-to-workspace $ws'"
+      n=$((n + 1))
+    done <<< "$APP_WORKSPACE_RULES"
+  } >> "$AERO"
+  CHANGED=1
+  say "$n app rules appended to aerospace.toml"
+fi
+
+# ── 6. omniwm: the same rules, written through omniwmctl ──────────
+# The same two lists, a different file and a different writer.
+#
+# OmniWM keeps window rules in ~/.config/omniwm/settings.toml and rewrites
+# that file itself, keys sorted and comments dropped. A marker comment would
+# not survive its next save, so the rules are their own marker:
+# `omniwmctl query rules` says what is already there, so this runs clean
+# twice.
+#
+# omniwmctl is also the only safe writer. OmniWM's TOML decoder is strict,
+# and a file it cannot decode is moved aside to settings.toml.corrupt at
+# the next cold start and replaced with defaults.
+#
+# Already-open windows do not move; a rule fires when a window is admitted.
+# `omniwmctl rule apply` re-applies to running apps, and is left to you
+# because with no selector it moves every window at once.
+#
+# Rules are added and corrected, never removed. Remove one with
+# `omniwmctl rule remove <id>`.
+if { has_text "$APP_WORKSPACE_RULES" || has_text "$APP_FLOAT_RULES"; } \
+   && "$BIN/omacosy-omni" active >/dev/null 2>&1; then
+  if ! OMNI_RULES="$(omniwmctl query rules --format json 2>/dev/null)"; then
+    warn "OmniWM is the manager but its IPC socket did not answer; its app rules were left alone"
+  else
+    OMNI_RULES="$OMNI_RULES" \
+    APP_WORKSPACE_RULES="$APP_WORKSPACE_RULES" \
+    APP_FLOAT_RULES="$APP_FLOAT_RULES" \
+    python3 - <<'OMNIRULES'
+import json, os, subprocess
+
+# Every field `rule add|replace` can set. Anything absent from a replace is
+# dropped, so an existing rule has to be handed back whole.
+MATCHERS = (("bundleId", "--bundle-id"),
+            ("appNameSubstring", "--app-name-substring"),
+            ("titleSubstring", "--title-substring"),
+            ("titleRegex", "--title-regex"),
+            ("axRole", "--ax-role"),
+            ("axSubrole", "--ax-subrole"))
+EFFECTS = (("layout", "--layout"),
+           ("assignToWorkspace", "--assign-to-workspace"),
+           ("initialContainerPrimarySpan", "--initial-container-primary-span"),
+           ("minWidth", "--min-width"),
+           ("minHeight", "--min-height"))
+SERVER_ONLY = ("id", "isValid", "position", "specificity", "validationMessages")
+
+rules = json.loads(os.environ["OMNI_RULES"])["result"]["payload"]["rules"]
+
+# (matcher field, matcher value, effect field, effect value)
+wanted = []
+for line in os.environ["APP_WORKSPACE_RULES"].split("\n"):
+    parts = line.split()
+    if len(parts) == 2:
+        wanted.append(("bundleId", parts[0], "assignToWorkspace", parts[1]))
+for line in os.environ["APP_FLOAT_RULES"].split("\n"):
+    entry = line.strip()
+    if entry.startswith("title:"):
+        wanted.append(("titleSubstring", entry[6:], "layout", "float"))
+    elif entry:
+        wanted.append(("bundleId", entry, "layout", "float"))
+
+def owned(key, value):
+    """The rule this entry owns: matches on that one field and no other."""
+    for rule in rules:
+        if rule.get(key) == value and not any(
+                rule.get(k) for k, _ in MATCHERS if k != key):
+            return rule
+    return None
+
+added = changed = failed = 0
+for key, value, field, target in wanted:
+    have = owned(key, value)
+    if have is not None and str(have.get(field, "")) == target:
+        continue
+    if have is None:
+        argv, fields = ["rule", "add"], {key: value, field: target}
+    else:
+        argv = ["rule", "replace", have["id"]]
+        fields = {k: v for k, v in have.items() if k not in SERVER_ONLY}
+        fields[field] = target
+    for name, flag in MATCHERS + EFFECTS:
+        if fields.get(name) not in (None, ""):
+            argv += [flag, str(fields[name])]
+    done = subprocess.run(["omniwmctl"] + argv,
+                          capture_output=True, text=True)
+    if done.returncode != 0:
+        failed += 1
+        print("omacosy-settings: WARNING — omniwm rule for %s failed: %s"
+              % (value, (done.stderr or done.stdout).strip().split("\n")[0]))
+    elif have is None:
+        added += 1
+    else:
+        changed += 1
+
+if added or changed or failed:
+    print("omacosy-settings: omniwm rules — %d added, %d corrected, %d failed"
+          % (added, changed, failed))
+else:
+    print("omacosy-settings: omniwm rules already match (%d checked)"
+          % len(wanted))
+OMNIRULES
+  fi
+fi
+
+# ── 7. serialised launch chords ───────────────────────────────────
+# The template gives the music and messenger chords a bare `open -a`.
+# omacosy-spawn-cmd takes the spawn lock first, so a burst of presses
+# opens one window at a time, and under OmniWM it sets the insertion side
+# before the window appears.
+if [ "$SERIALIZE_APP_SPAWNS" = "1" ] && [ -f "$AERO" ] \
+   && [ -x "$BIN/omacosy-spawn-cmd" ] \
+   && ! grep -q 'omacosy-spawn-cmd' "$AERO"; then
+  sed -i '' -E \
+    "s|^(cmd-ctrl-alt-shift-[mg] = 'exec-and-forget )(open )|\1\$HOME/.local/bin/omacosy-spawn-cmd \2|" \
+    "$AERO"
+  grep -q 'omacosy-spawn-cmd' "$AERO" \
+    && { CHANGED=1; say "$(grep -c 'omacosy-spawn-cmd' "$AERO") launch chords serialised"; }
+fi
+
+[ "$CHANGED" = "1" ] && { aerospace reload-config 2>/dev/null || true; }
+
+# ── report ────────────────────────────────────────────────────────
+chord() { grep -m1 "^$1 = " "$AERO" 2>/dev/null | sed -E 's/.*"([^"]*)".*/\1/'; }
+echo
+say "done"
+echo "  Super+Return:        $(chord cmd-ctrl-alt-enter)"
+echo "  Super+Shift+Return:  $(chord cmd-ctrl-alt-shift-enter)"
+if [ -n "$REPO_DIR" ]; then
+  echo "  running from:        $REPO_DIR ($(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null))"
+else
+  echo "  running from:        cannot tell (the commands are copies, not links)"
+fi
+echo "  top gap:             $(grep -E '^outer.top' "$AERO" 2>/dev/null | head -1)"
+RULES="$(grep -c 'move-node-to-workspace' "$AERO" 2>/dev/null)"
+echo "  app rules:           ${RULES:-0}"
+if "$BIN/omacosy-omni" active >/dev/null 2>&1; then
+  echo -n "  omniwm rules:        "; omniwmctl query rules --format tsv 2>/dev/null \
+    | awk -F'\t' 'NR>1 {if ($5 != "-") a++; if ($4 == "float") f++}
+                   END {printf "%d assigned, %d float\n", a, f}'
+fi
+echo "  window corners:      $(defaults read -g NSConvolutionOverride1 2>/dev/null || echo 'macOS default')"
+echo "  ring radius:         $(sed -n 's/^radius=//p' "$BORDERS" 2>/dev/null | tail -1)"
