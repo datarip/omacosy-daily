@@ -113,6 +113,9 @@ git clone https://github.com/datarip/omacosy-daily.git ~/.local/share/omacosy &&
 cd ~/.local/share/omacosy && ./install.sh
 ```
 
+Upstream omacosy already in `~/.local/share/omacosy`? Run its
+`./uninstall.sh`, delete that folder, then run the command above.
+
 Then put your own apps and values in `~/.config/omacosy/settings.conf`
 and run `omacosy-settings`. See [Your own settings](#your-own-settings).
 
