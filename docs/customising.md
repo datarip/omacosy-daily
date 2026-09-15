@@ -186,7 +186,6 @@ It removes what `install.sh` added, and restores what it replaced:
 - `~/.config/omacosy/settings.conf`: removed only if `install.sh` made
   it and you never edited it;
 - the Homebrew packages that `install.sh` added. Packages you had before
-  stay.
-
-It does not reset the window corners. If you set them, run
-`omacosy-window-corners round` first.
+  stay;
+- the window corners: both corner keys are deleted, so macOS draws its
+  own corners again. An app shows them after a relaunch.

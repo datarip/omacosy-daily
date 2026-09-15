@@ -115,6 +115,11 @@ else
   defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadFourFingerHorizSwipeGesture -int 2 2>/dev/null || true
   defaults delete com.apple.dock showMissionControlGestureEnabled 2>/dev/null || true
 fi
+# Window corners back to the macOS default. omacosy-window-corners writes
+# these two undocumented global keys and records no prior value, so both
+# are deleted, the same as `omacosy-window-corners round`.
+defaults delete -g NSConvolutionOverride1 2>/dev/null || true
+defaults delete -g NSConvolutionOverride2 2>/dev/null || true
 killall cfprefsd 2>/dev/null || true
 killall SystemUIServer 2>/dev/null || true
 killall Dock 2>/dev/null || true
