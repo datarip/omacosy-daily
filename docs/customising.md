@@ -1,0 +1,192 @@
+# Customising omacosy
+
+This page tells you where your own settings go, and what `install.sh`
+resets each time it runs.
+
+## 1. What install.sh owns, and what is yours
+
+`install.sh` regenerates or re-copies these files on every run. An edit
+you make to one of them is gone after the next install.
+
+| File | On every `install.sh` run |
+| --- | --- |
+| `~/.config/aerospace/aerospace.toml` | regenerated from `config/aerospace/aerospace.template.toml` |
+| `~/.config/omniwm/settings.toml` | regenerated from `config/omniwm/settings.template.toml` |
+| `~/.config/omacosy/borders.conf` | re-copied from `config/borders.conf` |
+| `~/.config/omacosy/ffm-ignore`, `~/.config/omacosy/gesture.json` | re-copied from the clone |
+| `~/.config/karabiner/karabiner.json` | re-copied from the clone |
+
+These files are yours. `install.sh` creates them once, or never, and does
+not overwrite them:
+
+| File | What it holds |
+| --- | --- |
+| `~/.config/omacosy/settings.conf` | app choices, workspace rules, float rules, ring radius, window corners |
+| `~/.config/omacosy/bar.conf` | bar auto-hide, where the top edge splits, the slide time |
+| `~/.config/omacosy/solo-fullscreen` | its presence turns the one-window fullscreen on |
+| `~/.zshrc.local` | your shell config |
+
+`omacosy-settings` reads `settings.conf` and writes your values back into
+the files `install.sh` resets. Run it after every install:
+
+```sh
+./install.sh && omacosy-settings
+```
+
+Under OmniWM there is a second reason. `install.sh` starts AeroSpace and
+resets the Karabiner rules that OmniWM's chords need. `omacosy-settings`
+quits that AeroSpace and puts the rules back.
+
+## 2. Find a bundle id
+
+A workspace rule names an app by its bundle id. Ask macOS for it, with
+the app's name as it shows in `/Applications`, without `.app`:
+
+```sh
+osascript -e 'id of app "Safari"'
+# com.apple.Safari
+```
+
+## 3. Put your apps on your workspaces
+
+`APP_WORKSPACE_RULES` in `settings.conf` holds one rule per line:
+`<bundle id> <workspace>`. To send Visual Studio Code to workspace 4,
+find its bundle id:
+
+```sh
+osascript -e 'id of app "Visual Studio Code"'
+# com.microsoft.VSCode
+```
+
+Add a line to the list:
+
+```sh
+APP_WORKSPACE_RULES="
+com.apple.Safari        1
+com.apple.mail          2
+com.apple.Terminal      3
+com.microsoft.VSCode    4
+"
+```
+
+Then apply it:
+
+```sh
+./install.sh && omacosy-settings
+```
+
+Under AeroSpace, `omacosy-settings` appends the rules to
+`aerospace.toml` once. A changed list needs the fresh `aerospace.toml`
+that `install.sh` writes. Under OmniWM, `omacosy-settings` alone adds a
+new rule and corrects a changed one. It does not remove a rule. List the
+rules with `omniwmctl query rules`, and remove one with
+`omniwmctl rule remove <id>`.
+
+A rule applies when a window opens. Windows that are already open stay
+where they are.
+
+`APP_FLOAT_RULES` lists the windows that float instead of tile, one per
+line: a bundle id, or `title:` followed by part of the window title.
+OmniWM reads this list. AeroSpace takes its float rules from its own
+template.
+
+The same file sets the apps the four launch chords open: `TERMINAL`,
+`BROWSER`, `MUSIC` and `MESSENGER`. Give the app's name. An empty value
+keeps the default from `config/apps.conf`. A changed app takes effect
+after `./install.sh && omacosy-settings`.
+
+`SERIALIZE_APP_SPAWNS="1"` sends the music and messenger chords through
+`omacosy-spawn-cmd`, so a burst of presses opens one window at a time.
+
+## 4. The focus ring and the window corners
+
+The ring colour comes from the theme. Change it with `theme-set <name>`
+or Super+Shift+T.
+
+The ring radius is `RING_RADIUS` in `settings.conf`. The ring sits
+concentric with a window when:
+
+```
+ring radius = window corner radius + gap + width / 2
+```
+
+`gap` and `width` are in `~/.config/omacosy/borders.conf`.
+
+`WINDOW_CORNER` sets the radius macOS draws every window's corners with.
+Empty leaves the macOS default alone. When it is set, the ring radius
+follows it by the rule above, and `RING_RADIUS` is not used. To try a
+value before you put it in `settings.conf`:
+
+```sh
+omacosy-window-corners square      # 0.1, square corners
+omacosy-window-corners 8           # any radius from 0 to 64
+omacosy-window-corners round       # back to the macOS default
+omacosy-window-corners             # show what is set now
+```
+
+An app reads the corner radius when it opens a window. Relaunch an app to
+see the new corners.
+
+## 5. Keep your shell config
+
+`install.sh` writes `~/.zshrc` once, as a short stub file that loads
+omacosy's shell setup. Put your own config in `~/.zshrc.local`. The
+omacosy shell setup loads it.
+
+If you had a `~/.zshrc` before, `install.sh` copied it to
+`~/.zshrc.local` and kept a backup of the original. If `~/.zshrc.local`
+already existed, the old `~/.zshrc` was not merged into it. The install
+said so, and named the backup.
+
+Installers append to `~/.zshrc`. Those lines land in your own file, not
+in the clone, and `install.sh` never rewrites them. To move them into
+`~/.zshrc.local`:
+
+```sh
+omacosy-harvest-zshrc
+```
+
+The first run adds a marker line to the end of `~/.zshrc` and moves
+nothing. After that, each run moves the lines below the marker. Lines
+that were in `~/.zshrc` before the first run stay above the marker, so
+run it once soon after the install. It backs up both files to
+`~/.local/state/omacosy-harvest/` before it writes.
+
+## 6. What survives a re-install
+
+| File | `install.sh` | `omacosy-settings` |
+| --- | --- | --- |
+| `~/.config/omacosy/settings.conf` | kept | reads it |
+| `~/.config/omacosy/bar.conf` | kept | reads `autohide` |
+| `~/.config/omacosy/solo-fullscreen` | kept | — |
+| the `~/.zshrc` stub, and lines appended to it | kept | — |
+| `~/.zshrc.local` | kept | — |
+| `aerospace.toml` | regenerated | writes your values back |
+| OmniWM `settings.toml` | regenerated | writes your rules back, under OmniWM |
+| `~/.config/omacosy/borders.conf` | re-copied | writes the ring radius back |
+| `config/apps.local.conf` in the clone | read | rewritten from `settings.conf` |
+| the window corner preference | kept | set from `WINDOW_CORNER` |
+
+A hand edit to a regenerated or re-copied file is lost at the next
+install. Put the value in `settings.conf` instead.
+
+## 7. Undo all of it
+
+```sh
+./uninstall.sh
+```
+
+It removes what `install.sh` added, and restores what it replaced:
+
+- the commands in `~/.local/bin`, the launch agents and the configs;
+- `~/.zshrc`: the stub is removed and your earlier `~/.zshrc` comes
+  back. If you added lines to the stub, it is kept as a backup;
+- `~/.zshrc.local`: removed only if `install.sh` made it and it is still
+  an exact copy of your restored `~/.zshrc`. Otherwise it is kept;
+- `~/.config/omacosy/settings.conf`: removed only if `install.sh` made
+  it and you never edited it;
+- the Homebrew packages that `install.sh` added. Packages you had before
+  stay.
+
+It does not reset the window corners. If you set them, run
+`omacosy-window-corners round` first.
