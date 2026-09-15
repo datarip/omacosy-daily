@@ -396,6 +396,14 @@ cp "$REPO_DIR/config/borders.conf" "$HOME/.config/omacosy/borders.conf"
 # -n, unlike borders.conf above: this file is the only place the bar
 # behaviour can be overridden, so a re-run must not throw a choice away.
 cp -n "$REPO_DIR/config/bar.conf" "$HOME/.config/omacosy/bar.conf" 2>/dev/null || true
+# The values omacosy-settings applies. Written once, like bar.conf, and
+# marked only when this run creates it, so uninstall.sh removes a file it
+# made and keeps one it did not. The .orig copy tells it "never edited".
+if [ ! -e "$HOME/.config/omacosy/settings.conf" ]; then
+  cp "$REPO_DIR/config/settings.template.conf" "$HOME/.config/omacosy/settings.conf"
+  cp "$REPO_DIR/config/settings.template.conf" "$STATE_DIR/settings.conf.orig"
+  mark "created-settings-conf"
+fi
 # app choices, RESOLVED (apps.local.conf already applied), for the same
 # reason: the bar's activity pill launches $TERMINAL and cannot read the
 # repo from a launchd agent when the clone is TCC-protected
@@ -492,6 +500,10 @@ link "$REPO_DIR/bin/omacosy-finder-window" "$HOME/.local/bin/omacosy-finder-wind
 link "$REPO_DIR/bin/omacosy-cycle" "$HOME/.local/bin/omacosy-cycle"
 link "$REPO_DIR/bin/omacosy-solo-fullscreen" "$HOME/.local/bin/omacosy-solo-fullscreen"
 link "$REPO_DIR/bin/omacosy-bar-autohide" "$HOME/.local/bin/omacosy-bar-autohide"
+link "$REPO_DIR/bin/omacosy-settings" "$HOME/.local/bin/omacosy-settings"
+link "$REPO_DIR/bin/omacosy-window-corners" "$HOME/.local/bin/omacosy-window-corners"
+link "$REPO_DIR/bin/omacosy-spawn-cmd" "$HOME/.local/bin/omacosy-spawn-cmd"
+link "$REPO_DIR/bin/omacosy-harvest-zshrc" "$HOME/.local/bin/omacosy-harvest-zshrc"
 
 # --- 3. omarchy theme convention -------------------------------------------
 # Canonical theme state lives at ~/.config/omarchy/current/theme (what the
