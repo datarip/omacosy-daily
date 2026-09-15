@@ -194,6 +194,20 @@ if "$BIN/omacosy-omni" active >/dev/null 2>&1; then
     osascript -e 'quit app "AeroSpace"' >/dev/null 2>&1
     say "quit the AeroSpace that install.sh started (OmniWM is the manager)"
   fi
+  # install.sh loads ffm; it fights OmniWM's own focus-follows-mouse, so omacosy-wm-switch parks it
+  if launchctl list com.omacosy.ffm >/dev/null 2>&1; then
+    launchctl bootout "gui/$(id -u)/com.omacosy.ffm" 2>/dev/null \
+      && say "stopped omacosy-ffm (OmniWM has its own focus-follows-mouse)"
+  fi
+  # install.sh copies the AeroSpace swipe config; the daemon reads it only at start
+  GESTURE_OMNI="$REPO_DIR/config/gesture/config.omniwm.json"
+  if [ -n "$REPO_DIR" ] && [ -f "$GESTURE_OMNI" ] \
+     && ! cmp -s "$GESTURE_OMNI" "$HOME/.config/omacosy/gesture.json"; then
+    cp "$GESTURE_OMNI" "$HOME/.config/omacosy/gesture.json"
+    launchctl load "$HOME/Library/LaunchAgents/com.omacosy.gesture.plist" 2>/dev/null || true
+    launchctl kickstart -k "gui/$(id -u)/com.omacosy.gesture" 2>/dev/null || true
+    say "swipe config set for OmniWM, and omacosy-gesture restarted"
+  fi
 fi
 
 # ── 5. aerospace: app -> workspace rules ──────────────────────────
