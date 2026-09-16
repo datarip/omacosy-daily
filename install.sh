@@ -398,6 +398,17 @@ if [ ! -x "$HOME/.local/bin/omacosy-solo" ] || [ "$REPO_DIR/helper/solo.swift" -
   swiftc -O -F /System/Library/PrivateFrameworks -framework SkyLight -o "$HOME/.local/bin/omacosy-solo" "$REPO_DIR/helper/solo.swift"
 fi
 
+# Cmd+H and the Dock icon, under OmniWM. Two behaviours: hiding the last
+# window of a workspace used to take you off it, and clicking the Dock icon
+# of a hidden app did not bring you to it. Both come from OmniWM following
+# an app activation macOS made on its own; helper/recall.swift has the
+# measurements. AeroSpace never sees this — it exits at startup unless
+# OmniWM answers its socket.
+if [ ! -x "$HOME/.local/bin/omacosy-recall" ] || [ "$REPO_DIR/helper/recall.swift" -nt "$HOME/.local/bin/omacosy-recall" ]; then
+  log "Building omacosy-recall"
+  swiftc -O -o "$HOME/.local/bin/omacosy-recall" "$REPO_DIR/helper/recall.swift"
+fi
+
 # focused-window border ring (replaces JankyBorders; no permissions;
 # SkyLight for the window-server event notifications)
 if [ ! -x "$HOME/.local/bin/omacosy-borders" ] || [ "$REPO_DIR/helper/borders.swift" -nt "$HOME/.local/bin/omacosy-borders" ]; then
@@ -411,6 +422,7 @@ if security find-identity -p codesigning -v 2>/dev/null | grep -q "Apple Develop
   codesign -f -s "Apple Development" --identifier com.omacosy.ffm "$HOME/.local/bin/omacosy-ffm" 2>/dev/null || true
   codesign -f -s "Apple Development" --identifier com.omacosy.borders "$HOME/.local/bin/omacosy-borders" 2>/dev/null || true
   codesign -f -s "Apple Development" --identifier com.omacosy.solo "$HOME/.local/bin/omacosy-solo" 2>/dev/null || true
+  codesign -f -s "Apple Development" --identifier com.omacosy.recall "$HOME/.local/bin/omacosy-recall" 2>/dev/null || true
   # the BUNDLE is signed now; the identifier is what grants key on
   codesign -f -s "Apple Development" --identifier com.omacosy.bar "$BAR_APP" 2>/dev/null || true
   codesign -f -s "Apple Development" --identifier com.omacosy.overview "$HOME/.local/bin/omacosy-overview" 2>/dev/null || true
@@ -499,6 +511,24 @@ cat > "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" <<PLIST
 PLIST
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" 2>/dev/null || true
 launchctl load "$HOME/Library/LaunchAgents/com.omacosy.solo.plist"
+
+# exits 0 on purpose under AeroSpace, so KeepAlive=true would respawn it
+# forever. Restart-on-failure only, same contract as the solo agent.
+cat > "$HOME/Library/LaunchAgents/com.omacosy.recall.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.omacosy.recall</string>
+  <key>ProgramArguments</key><array><string>$HOME/.local/bin/omacosy-recall</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardErrorPath</key><string>/tmp/omacosy-recall.err</string>
+</dict>
+</plist>
+PLIST
+launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.recall.plist" 2>/dev/null || true
+launchctl load "$HOME/Library/LaunchAgents/com.omacosy.recall.plist"
 
 
 cat > "$HOME/Library/LaunchAgents/com.omacosy.bar.plist" <<PLIST

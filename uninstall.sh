@@ -30,6 +30,8 @@ launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" 2>/dev/n
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.dwindle.plist" "$HOME/.local/bin/omacosy-dwindle"
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" "$HOME/.local/bin/omacosy-solo"
+launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.recall.plist" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.omacosy.recall.plist" "$HOME/.local/bin/omacosy-recall"
 rm -f "$HOME/.local/state/omacosy/solo-owned"
 # the daemon's event subscriber is a child process, so unloading the agent
 # orphans it rather than ending it. -P 1 only reaches an orphan, so a
