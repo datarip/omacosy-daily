@@ -87,6 +87,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#44](https://github.com/paulsp94/omacosy/pull/44) | OPEN | fix(spawn): a burst of launch chords opens one window, 13 s late |
 | [#42](https://github.com/paulsp94/omacosy/pull/42) | OPEN | fix(install): keep a real ~/.zshrc working, and out of the clone |
 | [#41](https://github.com/paulsp94/omacosy/pull/41) | OPEN | fix(uninstall): stop relinking ~/.zshrc to one machine's dotfiles path |
 | [#40](https://github.com/paulsp94/omacosy/pull/40) | OPEN | fix(install): quote the app names written to apps.conf |
