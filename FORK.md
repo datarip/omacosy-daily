@@ -49,6 +49,7 @@ requests are where they can become everyone's. See
 | `omacosy-harvest-zshrc` moves installer appends out of `~/.zshrc` into `~/.zshrc.local` | `bin/omacosy-harvest-zshrc` |
 | `~/.zshrc` is a real stub file, not a link into the clone. An existing `~/.zshrc` is copied to `~/.zshrc.local` first, and `uninstall.sh` puts it back | `install.sh`, `uninstall.sh` |
 | OmniWM's `settings.toml` is generated from `settings.template.toml`, so OmniWM's rewrites of it never make the clone dirty | `install.sh`, `config/omniwm/` |
+| Both window-manager configs are **seeded once and never overwritten**. Your keybindings, and everything OmniWM writes through its own interface, survive every install. When the shipped default moves you are told, and given the path to diff against | `install.sh` (`seed_config`) |
 
 ## Your settings
 
@@ -57,8 +58,14 @@ requests are where they can become everyone's. See
 | `~/.config/omacosy/settings.conf` | app choices, app-to-workspace rules, float rules, ring radius, window corners | yes |
 | `~/.config/omacosy/bar.conf` | `autohide`, `split`, `slide` | yes |
 | `~/.config/omacosy/solo-fullscreen` | its presence turns the one-window fullscreen on | yes |
+| `config/aerospace/aerospace.toml` | your AeroSpace keybindings and layout | yes — seeded once, then yours |
+| `config/omniwm/settings.toml` | everything OmniWM saves for itself | yes — seeded once, then OmniWM's |
 
-`docs/customising.md` explains all three, and what `install.sh` resets.
+The last two are written once and then left alone. When a new version ships a
+different default, `install.sh` keeps yours and prints the `diff` command to
+compare against `~/.local/state/omacosy/<name>.shipped`.
+
+`docs/customising.md` explains them, and what `install.sh` resets.
 
 ## Installing this instead of upstream
 
