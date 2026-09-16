@@ -2,10 +2,12 @@
 # omacosy-settings — apply ~/.config/omacosy/settings.conf after any
 # install.sh run.
 #
-# install.sh regenerates aerospace.toml and re-copies borders.conf, so the
-# app choices, the workspace rules, the ring radius and the launch chords
-# go back to the defaults on every run. This puts your values back. It
-# touches no source file, rebuilds nothing and updates nothing.
+# install.sh SEEDS aerospace.toml and the OmniWM settings.toml once and then
+# leaves them alone, so your edits and everything OmniWM writes for itself
+# survive an install. It still re-copies borders.conf, so the ring radius goes
+# back to its default on every run. This applies your values to both: the ring
+# radius, and the chords, app rules and workspace rules inside aerospace.toml,
+# in place. It touches no source file, rebuilds nothing and updates nothing.
 #
 #   ./install.sh && omacosy-settings
 #
@@ -93,7 +95,6 @@ if [ -n "$TERMINAL$BROWSER$MUSIC$MESSENGER" ]; then
     if [ ! -f "$APPS_LOCAL" ] || ! cmp -s "$TMP" "$APPS_LOCAL"; then
       mv -f "$TMP" "$APPS_LOCAL"
       say "app choices written to config/apps.local.conf"
-      say "  under AeroSpace, run ./install.sh to apply the music and messenger choices"
     else
       rm -f "$TMP"
     fi
@@ -121,11 +122,15 @@ if [ -f "$APPS_CONF" ]; then
 fi
 
 # install.sh writes the app names into aerospace.toml, so apps.local.conf
-# changes the next install and not today. Patch the terminal and browser
-# chords as well, so the change takes effect on reload.
+# changes the next install and not today. install.sh no longer rewrites
+# aerospace.toml either — it is seeded once and left alone — so all four
+# chords are patched here, in place, and take effect on reload.
 patch_chord() {
   local key=$1 app=$2 cur
   { [ -f "$AERO" ] && [ -n "$app" ] && is_name "$app"; } || return 0
+  # the file is seeded once and yours to edit, so the binding may be gone.
+  # Without this the sed matches nothing and we still claim we changed it.
+  grep -q "^$key = " "$AERO" || return 0
   cur="$(grep -m1 "^$key = " "$AERO" | sed -E 's/.*"([^"]*)".*/\1/')"
   [ "$cur" = "$app" ] && return 0
   sed -i '' -E "s|^($key = .*)\"[^\"]*\"(.*)$|\1\"$app\"\2|" "$AERO"
@@ -134,6 +139,8 @@ patch_chord() {
 }
 patch_chord cmd-ctrl-alt-enter       "$TERMINAL"
 patch_chord cmd-ctrl-alt-shift-enter "$BROWSER"
+patch_chord cmd-ctrl-alt-shift-m     "$MUSIC"
+patch_chord cmd-ctrl-alt-shift-g     "$MESSENGER"
 
 # ── 2. window corners and the focus ring ──────────────────────────
 # install.sh re-copies borders.conf, so the ring radius goes back to the
@@ -231,29 +238,78 @@ if "$BIN/omacosy-omni" active >/dev/null 2>&1; then
 fi
 
 # ── 5. aerospace: app -> workspace rules ──────────────────────────
-# Appended once, under a marker. install.sh regenerates aerospace.toml,
-# which drops the block, and the next run appends it again. Any
-# "omacosy-*: app rules" marker counts, so a file that an older tool wrote
-# never gets a second copy.
-if [ -f "$AERO" ] && has_text "$APP_WORKSPACE_RULES" \
-   && ! grep -qE '^# omacosy-[a-z-]+: app rules' "$AERO"; then
-  n=0
-  {
-    printf '\n# omacosy-settings: app rules — edit them in\n'
-    printf '# ~/.config/omacosy/settings.conf, not here. install.sh regenerates this file.\n'
-    while read -r appid ws _; do
-      [ -z "$appid" ] && continue
-      if ! is_id "$appid" || ! is_id "${ws:-}"; then
-        warn "skipping app rule '$appid ${ws:-}': want '<bundle id> <workspace>'"
-        continue
-      fi
-      printf '\n[[on-window-detected]]\nif.app-id = %s\nrun = %s\n' \
-        "'$appid'" "'move-node-to-workspace $ws'"
-      n=$((n + 1))
-    done <<< "$APP_WORKSPACE_RULES"
-  } >> "$AERO"
-  CHANGED=1
-  say "$n app rules appended to aerospace.toml"
+# install.sh no longer regenerates aerospace.toml, so the block can no longer
+# be dropped and re-appended: it is DELIMITED and replaced in place, and a
+# change in settings.conf reaches the file on the next run.
+#
+# An older file carries only the opening marker and the block runs to the end.
+# That tail is replaced too, but ONLY when every line of it still looks like
+# something we wrote — a comment, a blank line, or an [[on-window-detected]]
+# entry. Anything else down there is yours, and the file is left alone.
+AERO_START='# omacosy-settings: app rules — start'
+AERO_END='# omacosy-settings: app rules — end'
+
+build_app_rules() {        # prints the block, sets RULES_N
+  RULES_N=0
+  printf '%s\n' "$AERO_START"
+  printf '# Edit these in ~/.config/omacosy/settings.conf, not here.\n'
+  printf '# Everything between the two markers is rewritten by omacosy-settings.\n'
+  while read -r appid ws _; do
+    [ -z "$appid" ] && continue
+    if ! is_id "$appid" || ! is_id "${ws:-}"; then
+      warn "skipping app rule '$appid ${ws:-}': want '<bundle id> <workspace>'"
+      continue
+    fi
+    printf '\n[[on-window-detected]]\nif.app-id = %s\nrun = %s\n' \
+      "'$appid'" "'move-node-to-workspace $ws'"
+    RULES_N=$((RULES_N + 1))
+  done <<< "$APP_WORKSPACE_RULES"
+  printf '%s\n' "$AERO_END"
+}
+
+# every line after the legacy marker is one we could have written
+legacy_tail_is_ours() {
+  awk -v m="$1" '
+    found { if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^#/ || $0 ~ /^\[\[on-window-detected\]\]$/ \
+             || $0 ~ /^if\.app-id = / || $0 ~ /^run = /) next; else { print "no"; exit } }
+    index($0, m) == 1 { found = 1 }
+  ' "$2" | grep -q no && return 1
+  return 0
+}
+
+if [ -f "$AERO" ] && has_text "$APP_WORKSPACE_RULES"; then
+  AERO_HEAD="$(mktemp)"; AERO_TAIL="$(mktemp)"; AERO_OUT="$(mktemp)"
+  SPLIT=ok
+  if grep -qF "$AERO_END" "$AERO"; then
+    # delimited: head is everything above the start marker, tail everything
+    # below the end marker, so anything of yours on either side survives
+    awk -v s="$AERO_START" 'index($0, s) == 1 { exit } { print }' "$AERO" > "$AERO_HEAD"
+    awk -v e="$AERO_END" 'seen { print } index($0, e) == 1 { seen = 1 }' "$AERO" > "$AERO_TAIL"
+  elif grep -qE '^# omacosy-[a-z-]+: app rules' "$AERO"; then
+    LEGACY="$(grep -m1 -E '^# omacosy-[a-z-]+: app rules' "$AERO")"
+    if legacy_tail_is_ours "$LEGACY" "$AERO"; then
+      awk -v m="$LEGACY" 'index($0, m) == 1 { exit } { print }' "$AERO" > "$AERO_HEAD"
+      : > "$AERO_TAIL"
+    else
+      warn "aerospace.toml has lines of your own below the app-rules marker — left alone."
+      warn "  Move them above the marker and re-run to have the rules updated."
+      SPLIT=
+    fi
+  else
+    cat "$AERO" > "$AERO_HEAD"; printf '\n' >> "$AERO_HEAD"; : > "$AERO_TAIL"
+  fi
+  if [ -n "$SPLIT" ]; then
+    # a brace group, not a subshell: build_app_rules must set RULES_N here
+    { cat "$AERO_HEAD"; build_app_rules; cat "$AERO_TAIL"; } > "$AERO_OUT"
+    if cmp -s "$AERO_OUT" "$AERO"; then
+      :
+    else
+      cat "$AERO_OUT" > "$AERO"
+      CHANGED=1
+      say "$RULES_N app rules written to aerospace.toml"
+    fi
+  fi
+  rm -f "$AERO_HEAD" "$AERO_TAIL" "$AERO_OUT"
 fi
 
 # ── 6. omniwm: the same rules, written through omniwmctl ──────────

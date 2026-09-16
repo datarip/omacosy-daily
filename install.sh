@@ -244,10 +244,40 @@ case "$INSET" in
      if [ "$OUTER_TOP" -lt "$BAR_MARGIN" ]; then OUTER_TOP=$BAR_MARGIN; fi ;;
 esac
 
+# A generated config belongs to whoever edits it next: you, or the window
+# manager writing its own state into it. So it is written ONCE and never
+# rewritten — an install that overwrote it would throw away your keybindings,
+# or everything OmniWM had saved through its own interface, with no warning.
+#
+# The shipped version is kept in STATE_DIR. When it changes, you are told and
+# given the path to diff against. The copy lives there and NOT beside the file:
+# an untracked file inside the clone would dirty it, and omacosy-update refuses
+# a dirty clone.
+seed_config() {            # DEST NAME — generated content on stdin
+  local dest=$1 name=$2
+  local shipped="$STATE_DIR/$name.shipped"
+  local tmp="$STATE_DIR/.$name.new"
+  mkdir -p "$STATE_DIR"
+  cat > "$tmp"
+  if [ ! -f "$dest" ]; then
+    mv "$tmp" "$dest"
+    cp "$dest" "$shipped"
+    log "Wrote $dest"
+    return
+  fi
+  # first run after this change: start tracking, say nothing
+  if [ ! -f "$shipped" ]; then mv "$tmp" "$shipped"; return; fi
+  if cmp -s "$tmp" "$shipped"; then rm -f "$tmp"; return; fi
+  mv "$tmp" "$shipped"
+  log "The shipped $name changed. Yours is kept — compare with:"
+  log "  diff \"$dest\" \"$shipped\""
+}
+
 sed -e "s|@TERMINAL@|$TERMINAL|g" -e "s|@BROWSER@|$BROWSER|g" \
     -e "s|@MUSIC@|$MUSIC|g" -e "s|@MESSENGER@|$MESSENGER|g" \
     -e "s|@OUTER_TOP@|$OUTER_TOP|g" -e "s|@OUTER_TOP_EXT@|$OUTER_TOP_EXT|g" \
-  "$REPO_DIR/config/aerospace/aerospace.template.toml" > "$REPO_DIR/config/aerospace/aerospace.toml"
+  "$REPO_DIR/config/aerospace/aerospace.template.toml" \
+  | seed_config "$REPO_DIR/config/aerospace/aerospace.toml" aerospace.toml
 
 # OmniWM's settings are generated the same way and for the same reason:
 # omacosy-bar-autohide rewrites the top gap at runtime, and a tracked file
@@ -259,7 +289,8 @@ sed -e "s|@TERMINAL@|$TERMINAL|g" -e "s|@BROWSER@|$BROWSER|g" \
 # subtracts a notch inset an external panel does not have, and using it there
 # would bury the bar under every tiled window.
 sed -e "s|@OUTER_TOP_EXT@|$OUTER_TOP_EXT|g" \
-  "$REPO_DIR/config/omniwm/settings.template.toml" > "$REPO_DIR/config/omniwm/settings.toml"
+  "$REPO_DIR/config/omniwm/settings.template.toml" \
+  | seed_config "$REPO_DIR/config/omniwm/settings.toml" settings.toml
 
 log "Linking configs"
 zshrc_setup "$REPO_DIR"
