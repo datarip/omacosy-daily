@@ -87,6 +87,10 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#42](https://github.com/paulsp94/omacosy/pull/42) | OPEN | fix(install): keep a real ~/.zshrc working, and out of the clone |
+| [#41](https://github.com/paulsp94/omacosy/pull/41) | OPEN | fix(uninstall): stop relinking ~/.zshrc to one machine's dotfiles path |
+| [#40](https://github.com/paulsp94/omacosy/pull/40) | OPEN | fix(install): quote the app names written to apps.conf |
+| [#39](https://github.com/paulsp94/omacosy/pull/39) | OPEN | fix(install): match Karabiner's current agent label |
 | [#37](https://github.com/paulsp94/omacosy/pull/37) | OPEN | fix(gesture): the trackpad arms at once when OmniWM is the manager |
 | [#36](https://github.com/paulsp94/omacosy/pull/36) | OPEN | fix(bar): a window-manager switch is noticed while the bar runs |
 | [#35](https://github.com/paulsp94/omacosy/pull/35) | OPEN | fix(omniwm): one engine owns the four-finger swipe |
