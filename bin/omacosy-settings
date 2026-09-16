@@ -106,11 +106,15 @@ if [ -f "$APPS_CONF" ]; then
   for k in TERMINAL BROWSER MUSIC MESSENGER; do
     v="${!k}"
     { [ -n "$v" ] && is_name "$v"; } || continue
-    grep -qx "$k=$v" "$APPS_CONF" && continue
+    # quoted, like install.sh writes it: is_name allows spaces, and
+    # bin/omacosy-karabiner-omniwm SOURCES this file, so an unquoted
+    # two-word name runs the second word as a command and the chord
+    # silently falls back to its default
+    grep -qx "$k=\"$v\"" "$APPS_CONF" && continue
     if grep -q "^$k=" "$APPS_CONF"; then
-      sed -i '' "s|^$k=.*|$k=$v|" "$APPS_CONF"
+      sed -i '' "s|^$k=.*|$k=\"$v\"|" "$APPS_CONF"
     else
-      printf '%s=%s\n' "$k" "$v" >> "$APPS_CONF"
+      printf '%s="%s"\n' "$k" "$v" >> "$APPS_CONF"
     fi
     say "$k=$v written to ~/.config/omacosy/apps.conf"
   done
