@@ -17,7 +17,11 @@
 # the chords arrive as ordinary modifier combos.
 set -euo pipefail
 
-KARABINER="$HOME/.config/karabiner/karabiner.json"
+# Overridable, so the generator can be aimed at a copy. Hardcoded, the only
+# way to test a change to this file is to run it — and running it rewrites
+# the keyboard you are testing with. That happened once, by accident, and
+# cost the live Finder and music chords until they were reinstalled.
+KARABINER="${KARABINER:-$HOME/.config/karabiner/karabiner.json}"
 APPS="$HOME/.config/omacosy/apps.conf"   # resolved by install.sh
 MARK="omacosy-omniwm"                     # rule-description prefix, removal key
 
