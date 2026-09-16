@@ -67,6 +67,14 @@ func SLSRegisterNotifyProc(_ proc: NotifyProc, _ event: UInt32, _ context: Unsaf
 func SLSGetEventPort(_ cid: Int32, _ port: UnsafeMutablePointer<mach_port_t>) -> CGError
 @_silgen_name("SLEventCreateNextEvent")
 func SLEventCreateNextEvent(_ cid: Int32) -> Unmanaged<CGEvent>?
+// Whether the NATIVE menu bar is on screen, asked of the window server
+// instead of guessed from the pointer. Visibility is a property of a SPACE
+// and every display has its own current space, so the pair answers the
+// question per display. See nativeMenuBarRevealed.
+@_silgen_name("SLSManagedDisplayGetCurrentSpace")
+func SLSManagedDisplayGetCurrentSpace(_ cid: Int32, _ display: CFString) -> UInt64
+@_silgen_name("SLSIsMenuBarVisibleOnSpace")
+func SLSIsMenuBarVisibleOnSpace(_ cid: Int32, _ space: UInt64) -> Bool
 
 let EVENT_WINDOW_MOVE: UInt32 = 806
 let EVENT_WINDOW_RESIZE: UInt32 = 807
@@ -3399,6 +3407,7 @@ final class BarSurface {
     var latchedBar = false
     var yielded = false          // notched: stood aside for the native bar
     var yieldSeq = 0             // cancels a pending return, see setYielded
+    var followSeq = 0            // drops an overtaken ask, see followNativeBar
     // Where the window is on its vertical travel. Only a sliding surface
     // ever leaves .down.
     var slide: BarSlide = .down
@@ -3784,6 +3793,79 @@ let barBaseLevel = NSWindow.Level(rawValue: -20)
 // which looked like macOS chrome winning, and was our own daemon.
 let barRevealLevel = NSWindow.Level(rawValue: 1002)
 let revealEdge: CGFloat = 2 // how close to the top edge counts as asking
+// How far down the strip the native bar is worth asking about. Outside it
+// macOS has never had its bar on screen, so a pointer crossing the middle
+// of the display asks nothing.
+let yieldWatch: CGFloat = barHeight + 12
+
+// Is the NATIVE menu bar on screen on this display, right now?
+//
+// Two SkyLight calls and no window list walk. The display's UUID names its
+// current space and menu bar visibility is a property of a space, so the
+// answer is per display — which it has to be, because macOS reveals its bar
+// on the display the pointer is on and leaves the others alone.
+func nativeMenuBarRevealed(on screen: NSScreen) -> Bool {
+    guard let uuid = CGDisplayCreateUUIDFromDisplayID(screenID(screen))?.takeRetainedValue(),
+          let name = CFUUIDCreateString(nil, uuid) else { return false }
+    let space = SLSManagedDisplayGetCurrentSpace(SLSMainConnectionID(), name)
+    guard space != 0 else { return false }
+    return SLSIsMenuBarVisibleOnSpace(SLSMainConnectionID(), space)
+}
+
+// Stand aside if, and only if, the native bar is actually on screen.
+//
+// The rule used to be a distance, `fromTop <= revealEdge`, 2 points. macOS
+// uses its own and it is not that one: measured by gliding the pointer up
+// the screen a point at a time, its bar drops at fromTop <= 4 and stays
+// down long past the strip. Stop the pointer anywhere in between and the
+// native bar was down while this one stayed put in front of it, showing
+// through the gaps between the pills. Threshold against threshold could
+// only ever be close; this asks the window server the question itself.
+//
+// The asking OUTLIVES the move, because neither transition has happened yet
+// when the pointer stops. macOS takes about 100ms to drop its bar — 94, 97
+// and 105ms over three runs — and about 200ms to take it back once the
+// pointer has settled somewhere else, and no further move is coming to ask
+// on. Park the pointer just below the strip and the answer at move time is
+// "still down"; ask only then and the bar never comes back at all.
+//
+// So each move asks for the next 0.6s, and goes on asking for as long as
+// this bar is still aside. Both ends terminate: the grace period expires,
+// and `yielded` is cleared by the answer this loop is waiting for.
+//
+// The sequence number drops the repeats of a move a later one has overtaken,
+// so a pointer crossing the strip leaves one asker behind, not one per move.
+//
+// Two rates, because the two waits are not the same wait. Inside the grace
+// period something is settling and the answer is worth 0.08s: later than
+// that and this bar is still there when the native one finishes its 167ms
+// drop, which is the overlap being fixed. Once aside, the only thing left
+// to wait for is the native bar going away — and the ordinary way that
+// happens is the pointer leaving, which is a move, which asks at once and
+// starts a fresh grace period of its own. The slow rate is for the native
+// bar leaving with the pointer parked: Escape, a space switch, an app going
+// fullscreen. A quarter of a second is soon enough for those, and it is
+// what keeps a pointer left in the native menu bar from polling at 12Hz for
+// as long as it sits there. Measured parked for 30s at this rate: 0.02s and
+// 0.04s of CPU, about a tenth of one per cent of a core.
+let followStep: TimeInterval = 0.08
+let followIdle: TimeInterval = 0.25
+let followGrace: TimeInterval = 0.6
+
+func followNativeBar(_ surface: BarSurface) {
+    surface.followSeq += 1
+    askNativeBar(surface, seq: surface.followSeq, until: Date() + followGrace)
+}
+
+func askNativeBar(_ surface: BarSurface, seq: Int, until: Date) {
+    guard surface.followSeq == seq else { return }
+    setYielded(nativeMenuBarRevealed(on: surface.screen), on: surface)
+    let settling = Date() < until
+    guard settling || surface.yielded else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + (settling ? followStep : followIdle)) {
+        askNativeBar(surface, seq: seq, until: until)
+    }
+}
 // macOS does not start collapsing the native menu bar the instant the
 // pointer leaves it. It waits, and a bar that does not wait is ahead of it
 // for the whole travel, which is exactly when the native bar shows.
@@ -3935,25 +4017,28 @@ func pointerAtScreenTop() {
             // It takes priority over standing aside, because there is nothing
             // to stand aside FROM while the bar is not on screen.
             setRevealed(true, on: surface)
-        } else {
-            // EITHER half stands aside, not just the right one.
-            //
-            // The split exists for an auto-hiding bar, where the two bars take
-            // turns in an empty strip and which half you enter decides which
-            // one arrives. A bar that never hides is already occupying that
-            // strip, so the question is not which bar arrives but whether the
-            // native one may cover it — and the answer does not depend on
-            // where along the top edge the pointer went in. Splitting it there
-            // made the left half a dead end: the native bar came up and this
-            // bar stayed in front of it, which is the overlap the split was
-            // meant to end.
-            setYielded(true, on: surface)
         }
-    } else if fromTop > barHeight + 12 {
+    } else if fromTop > yieldWatch {
         surface.atTopEdge = false
-        setYielded(false, on: surface)
         // a popup keeps it up: its anchor must not vanish under the pointer
         if surface.revealed, openPopup == nil { setRevealed(false, on: surface) }
+    }
+    // Standing aside is asked OUTSIDE the distance test, because it is not a
+    // distance question. It is also not a question about which half of the
+    // edge the pointer entered: the split exists for an auto-hiding bar,
+    // where the two take turns in an empty strip and the half you enter
+    // decides which one arrives. A bar that never hides already occupies
+    // that strip, so the only question is whether the native one is covering
+    // it.
+    //
+    // `!surface.revealed` leaves the fullscreen path alone: a bar that has
+    // just climbed out from under a fullscreen window has nothing to stand
+    // aside from, and yielding would put it straight back under.
+    //
+    // `|| surface.yielded` keeps asking after the pointer has left the band,
+    // which is how a bar that stood aside comes back.
+    if !surface.autohide, !surface.revealed, fromTop <= yieldWatch || surface.yielded {
+        followNativeBar(surface)
     }
 }
 
@@ -4041,19 +4126,22 @@ func updateBarVisibility(_ surface: BarSurface, covered: Set<CGDirectDisplayID>?
     // opt in sees a change. An auto-hiding surface never asks whether a
     // fullscreen window covers it: hidden is already its resting state.
     // `yielded` means this bar stood aside so the native one could be used.
-    // It was SET by a pointer move into the native half and cleared only by
-    // another pointer move, because both live in pointerAtScreenTop, which
-    // runs on a global .mouseMoved monitor. Use the native menu and then
-    // reach for the keyboard — switch workspace, open a window — and the bar
-    // stayed stood aside indefinitely, with nothing on screen to explain it.
-    // Measured: warp the pointer to the middle of the display and switch
-    // workspace, and the bar is still gone; one real mouse move brings it
-    // back.
+    // It is set and cleared from pointerAtScreenTop, which runs on a global
+    // .mouseMoved monitor. Use the native menu and then reach for the
+    // keyboard — switch workspace, open a window — and the bar stayed stood
+    // aside indefinitely, with nothing on screen to explain it. Measured:
+    // warp the pointer to the middle of the display and switch workspace,
+    // and the bar is still gone; one real mouse move brings it back.
     //
     // Re-checked here instead, where visibility is decided, so ANY trigger
-    // undoes it and not just a move. It costs one coordinate comparison.
-    if surface.yielded,
-       surface.screen.frame.maxY - NSEvent.mouseLocation.y > barHeight + 12 {
+    // undoes it and not just a move.
+    //
+    // The check is THIS SCREEN's native bar, not the pointer's distance from
+    // this screen's top edge. The distance form read the pointer wherever it
+    // was: with the displays' tops aligned, as they are here, it could not
+    // bite, but one display sitting higher than the other would have cleared
+    // one bar's yield because of a pointer on the other screen.
+    if surface.yielded, !nativeMenuBarRevealed(on: surface.screen) {
         // Through setYielded, so this takes the collapse hold as well. It
         // leaves `yielded` true for now and the bar stays aside for this
         // pass, which is right: the native bar may still be travelling.
@@ -4064,7 +4152,13 @@ func updateBarVisibility(_ surface: BarSurface, covered: Set<CGDirectDisplayID>?
         hide = !surface.revealed
     } else {
         let cov = covered ?? fullscreenDisplays()
-        hide = surface.yielded || (cov.contains(screenID(surface.screen)) && !surface.revealed)
+        // `revealed` outranks both reasons to be hidden, and it has to. It
+        // is set on one display only, by a top-edge hover on a display a
+        // fullscreen window has covered, and it means "the user asked for
+        // this bar". Standing aside is asked on the way to that edge, so
+        // reaching it with `yielded` set — which is the ordinary approach —
+        // left the reveal with nothing to show.
+        hide = !surface.revealed && (surface.yielded || cov.contains(screenID(surface.screen)))
     }
     // unconditional either way: isVisible can desync from the window
     // server, which is how borders.swift ended up with a stuck shroud. A
