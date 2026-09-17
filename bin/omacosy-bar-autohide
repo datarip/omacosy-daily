@@ -250,5 +250,42 @@ case "${1:-status}" in
       printf '  omniwm fullscreen keeps the outer gaps: %s\n' "$(omni_fs_gaps_now)"
     fi
     ;;
-  *) echo "usage: omacosy-bar-autohide [on|off|auto|status]" >&2; exit 1 ;;
+  # Does this bar own the top strip at rest on a display that cannot spare it?
+  # omacosy-fullscreen asks, because it decides the same thing this file
+  # already computes and two copies of it would drift.
+  #
+  # Only `off` keeps the bar on screen at rest. On a notched panel the answer
+  # is still no: macOS excludes the camera strip from the usable area, so a
+  # window cannot reach the bar there and there is nothing to protect.
+  # ASSUMED, not measured — this machine has no notch. See
+  # notes/notched/TEST-REQUEST.md.
+  # The top gap, for omacosy-fullscreen, which has two of them to write.
+  #   rest        bar height + margin - inset, what a tiled window leaves
+  #   fullscreen  bar height - inset, flush with the bar and no margin
+  # A fullscreen window takes everything the bar does not, so the margin that
+  # separates tiles from the bar is a strip of desktop with nothing in it —
+  # and omacosy-borders drew its ring top edge into it.
+  top-gap)
+    case "${3:-builtin}" in
+      external) i=0 ;;
+      *) i=$(notch_inset) ;;
+    esac
+    case "${2:-rest}" in
+      fullscreen) g=$(( $(bar_height) - i )); [ "$g" -lt 0 ] && g=0; echo "$g" ;;
+      *) case "${3:-builtin}" in
+           external) external_gap "$(setting)" ;;
+           *) builtin_gap "$(setting)" ;;
+         esac ;;
+    esac
+    ;;
+  keeps-strip)
+    s=$(setting)
+    case "${2:-builtin}" in
+      # no external display has a notch, so the inset is 0 by definition and
+      # `auto` hides the bar there
+      external) [ "$s" = off ] && echo yes || echo no ;;
+      *) { [ "$s" = off ] && [ "$(notch_inset)" -eq 0 ]; } && echo yes || echo no ;;
+    esac
+    ;;
+  *) echo "usage: omacosy-bar-autohide [on|off|auto|status|keeps-strip]" >&2; exit 1 ;;
 esac

@@ -51,7 +51,7 @@ on-focus-changed = ['exec-and-forget $HOME/.local/bin/omacosy-helper split-hint'
 # Tell the bar which workspace is focused — a bash builtin redirect,
 # no extra process, and a regular file so a dead reader cannot wedge it
 exec-on-workspace-change = ['/bin/bash', '-c',
-  'touch /tmp/omacosy-ws-switch; echo "$AEROSPACE_FOCUSED_WORKSPACE" > /tmp/omacosy-bar-ws; $HOME/.local/bin/omacosy-focus-guard'
+  'touch /tmp/omacosy-ws-switch; echo "$AEROSPACE_FOCUSED_WORKSPACE" > /tmp/omacosy-bar-ws; $HOME/.local/bin/omacosy-focus-guard; $HOME/.local/bin/omacosy-fullscreen sync &'
 ]
 
 [gaps]
@@ -71,6 +71,20 @@ outer.right = 8
 # has a notch either, so the second entry is the same sum with nothing
 # taken off it.
 outer.top = [{ monitor.'built-in' = @OUTER_TOP@ }, @OUTER_TOP_EXT@]
+
+# A window opening beside a NATIVE fullscreen one. aerospace does not manage a
+# native fullscreen window — it lives in its own macOS Space — so the new
+# window is laid out alone and takes the whole workspace while the other stays
+# stranded in a Space you have to swipe back to. Measured 2026-09-17.
+#
+# FIRST, and with check-further-callbacks, so it sees every window and the
+# rules below still run. aerospace stops at the first matching callback
+# otherwise: measured, a trailing catch-all never fired for an app that had a
+# rule of its own.
+[[on-window-detected]]
+if = 'true'
+check-further-callbacks = true
+run = 'exec-and-forget $HOME/.local/bin/omacosy-fullscreen yield'
 
 # Fixed-size settings windows fight the tiler (resize -> snap back ->
 # relayout flicker); float them instead.

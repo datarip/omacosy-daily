@@ -1,0 +1,622 @@
+#!/usr/bin/env bash
+# omacosy-fullscreen [sync|yield|status] — the two things aerospace's own
+# fullscreen commands leave undone. Not a key binding.
+#
+#   sync    the gaps a LONE window's fullscreen needs.  Called by omacosy-solo
+#           and by aerospace's exec-on-workspace-change.
+#   yield   a native fullscreen window gives way to a second window on its
+#           workspace.  Called by an on-window-detected rule.
+#
+# This is NOT Super+F. Super+F is aerospace's own `fullscreen`, which zooms one
+# window inside its workspace and keeps the outer gaps and the focus ring, so
+# the zoomed window matches the tiling it came from.
+#
+# omacosy-solo-fullscreen is the other feature: a workspace holding ONE window
+# shows it as full screen. That one should have no gaps and no ring, and
+# aerospace cannot express it. Measured 2026-09-17, one display 1440x900, bar
+# visible:
+#
+#   fullscreen                  8,38 1424x853   the Super+F frame, ring drawn
+#   fullscreen --no-outer-gaps  0,0  1440x900   takes the strip the bar is in
+#   macos-native-fullscreen     0,0  1440x900   the same pixels as the line above
+#   wanted, for a lone window   0,30 1440x870   flush with the bar, no ring
+#
+# `fullscreen --help` has one flag and it is all four gaps or none, so the last
+# frame has to come from the gaps themselves. While the daemon is showing a
+# lone window full screen, that display's side and bottom gaps go to 0 and its
+# top gap drops from "bar height + margin" to "bar height". omacosy-bar-autohide
+# owns both numbers — see `top-gap` there.
+#
+# ONLY a workspace holding ONE window counts. A Super+F window is fullscreen
+# too, and flipping the gaps for it would take away the gaps and the ring that
+# Super+F is for.
+#
+# The gaps cannot be flipped and restored around the call. Measured: aerospace
+# re-lays out a fullscreen window on `reload-config`, so putting the gaps back
+# immediately snapped the window from 0,38 to 8,38. The state has to persist,
+# which is what `sync` is for.
+#
+# ONE case needs any of this: the bar is visible at rest AND the display has
+# no notch. omacosy-bar-autohide owns that question too — see `keeps-strip`.
+#
+# Under OmniWM this is not the path: its dwindle fills a lone window itself and
+# the gaps are a different mechanism. This exits without acting.
+
+set -uo pipefail
+
+A="$(command -v aerospace || echo /opt/homebrew/bin/aerospace)"
+AERO="$HOME/.config/aerospace/aerospace.toml"
+AUTOHIDE="$HOME/.local/bin/omacosy-bar-autohide"
+HELPER="$HOME/.local/bin/omacosy-helper"
+# the whole setting for omacosy-solo-fullscreen is whether this file exists
+MARKER="$HOME/.config/omacosy/solo-fullscreen"
+LOCK="/tmp/omacosy-fullscreen-gaps.lock"
+OMNI_SETTINGS="$HOME/.config/omniwm/settings.toml"
+OMNICLI="$HOME/.local/bin/omacosy-omni"
+# The outer gaps as they are at rest, captured the first time they are flipped.
+# OmniWM's gaps are plain scalars with nowhere to carry a default, unlike
+# aerospace's per-monitor expression, so the resting value has to be recorded
+# before it is overwritten.
+OMNI_REST="$HOME/.local/state/omacosy/omni-gaps-rest"
+YLOCK="/tmp/omacosy-fullscreen-yield.lock"
+
+wm_is_omniwm() { "$HOME/.local/bin/omacosy-omni" active >/dev/null 2>&1; }
+
+# Two callers can ask at the same moment: the workspace-change hook and
+# omacosy-solo, both woken by the same window event. Without this they read
+# and wrote the file at once and left it EMPTY — measured, 2026-09-17, a live
+# aerospace.toml truncated to 0 bytes. mkdir is the atomic primitive here;
+# macOS ships no flock(1).
+lock() {
+  local i=0 t
+  while ! mkdir "$LOCK" 2>/dev/null; do
+    t=$(stat -f %m "$LOCK" 2>/dev/null) || t=0
+    # a lock older than ten seconds belongs to a run that died holding it
+    if [ "$t" -ne 0 ] && [ $(($(date +%s) - t)) -gt 10 ]; then
+      rmdir "$LOCK" 2>/dev/null
+      continue
+    fi
+    i=$((i + 1))
+    [ "$i" -gt 40 ] && return 1
+    sleep 0.1
+  done
+  trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+  return 0
+}
+
+# One repair at a time, and the loser does not wait — it LEAVES. A burst of
+# Super+Enter fires this rule once per window, and several copies flattening
+# and swapping the same tree is how a spiral comes out mirrored: measured
+# 2026-09-17, a four-window burst matched the baseline twice and came out
+# mirrored the third time, while the baseline itself was identical all three
+# times. Whoever holds the lock re-scans in its own loop, so a violation the
+# loser saw is not lost.
+try_lock_yield() {
+  local t
+  mkdir "$YLOCK" 2>/dev/null && { trap 'rmdir "$YLOCK" 2>/dev/null' EXIT INT TERM; return 0; }
+  t=$(stat -f %m "$YLOCK" 2>/dev/null) || t=0
+  # a lock older than the loop can possibly live belongs to a run that died
+  if [ "$t" -ne 0 ] && [ $(($(date +%s) - t)) -gt 20 ]; then
+    rmdir "$YLOCK" 2>/dev/null
+    mkdir "$YLOCK" 2>/dev/null && { trap 'rmdir "$YLOCK" 2>/dev/null' EXIT INT TERM; return 0; }
+  fi
+  return 1
+}
+
+monitor_name() {
+  "$A" list-monitors --format '%{monitor-id}|%{monitor-name}' 2>/dev/null \
+    | awk -F'|' -v id="$1" '$1 == id { print $2 }'
+}
+
+# aerospace's own key for a monitor in a gap expression. `built-in` is a
+# pattern it understands; everything else goes in by name.
+monitor_key() {
+  local n
+  n=$(monitor_name "$1")
+  case "$n" in *Built-in*) echo "built-in" ;; *) echo "$n" ;; esac
+}
+
+# which side of omacosy-bar-autohide's own split this monitor falls on
+monitor_kind() {
+  case "$(monitor_name "$1")" in *Built-in*) echo builtin ;; *) echo external ;; esac
+}
+
+# Monitors showing a LONE window, full screen. Not "showing a fullscreen
+# window": Super+F zooms a window inside a workspace that holds others, and
+# that one keeps its gaps and its ring.
+#
+# The test is the situation, not the daemon's bookkeeping. solo-owned was tried
+# first and is wrong: it lists every window the rule has ever fullscreened, so
+# a window it once owned still matched after a second window arrived and the
+# rule had handed it back. Counting what is on the workspace cannot drift.
+#
+#   marker       the user asked for this feature at all
+#   visible      a parked workspace's windows are off screen, and the gaps on
+#                that monitor belong to whatever IS on screen there
+#   exactly one  tiled window, counted the way omacosy-solo counts it: a
+#                floating window is not in the tiling, and a hidden app keeps
+#                its window in the list
+#   fullscreen   and that one window is in it
+fullscreen_monitors() {
+  [ -e "$MARKER" ] || return 0
+  "$A" list-windows --all \
+    --format '%{monitor-id}|%{workspace}|%{workspace-is-visible}|%{window-layout}|%{window-is-fullscreen}' \
+    2>/dev/null \
+    | awk -F'|' '
+        $3 == "true" && $4 != "floating" && $4 != "macos_native_window_of_hidden_app" {
+          k = $1 "|" $2; n[k]++; mon[k] = $1; if ($5 == "true") f[k]++
+        }
+        END { for (k in n) if (n[k] == 1 && f[k] == 1) print mon[k] }
+      ' | sort -u
+}
+
+# The value a side edge goes back to, read from the file rather than hardcoded
+# so the margin stays whatever the config says. A plain `outer.left = 8` gives
+# 8, and the flipped form `[{ monitor.'built-in' = 0 }, 8]` gives its last
+# entry. That is how the default survives a flip: it is written back every
+# time.
+edge_default() {
+  local line
+  line=$(grep -E "^outer\.$1 = " "$AERO" 2>/dev/null | tail -1)
+  case "$line" in
+    "") echo 8 ;;
+    *\]*) echo "$line" | sed -E "s|.*, *([0-9]+) *\].*|\1|" ;;
+    *) echo "$line" | sed -E "s|.*= *([0-9]+).*|\1|" ;;
+  esac
+}
+
+# The four lines the config should hold, given what is fullscreen now.
+# Printed one per line as `outer.<edge> = <value>`, nothing written.
+wanted_lines() {
+  local keys=() id e def k bi_flipped=0 ex_flipped=0 line bi ex
+  for id in $(fullscreen_monitors); do
+    [ "$("$AUTOHIDE" keeps-strip "$(monitor_kind "$id")" 2>/dev/null)" = yes ] || continue
+    keys+=("$(monitor_key "$id")")
+    case "$(monitor_kind "$id")" in builtin) bi_flipped=1 ;; *) ex_flipped=1 ;; esac
+  done
+
+  # The top edge, in the two-element form omacosy-bar-autohide also writes, so
+  # the two agree on the shape of the line. With more than one external display
+  # the second number covers all of them together: an external showing a
+  # fullscreen window would pull its neighbours flush as well. 8 points, on a
+  # display arrangement this machine does not have. Named entries, the way the
+  # side edges do it, is the fix if that ever matters.
+  if [ "$bi_flipped" -eq 1 ]; then bi=$("$AUTOHIDE" top-gap fullscreen builtin)
+  else bi=$("$AUTOHIDE" top-gap rest builtin); fi
+  if [ "$ex_flipped" -eq 1 ]; then ex=$("$AUTOHIDE" top-gap fullscreen external)
+  else ex=$("$AUTOHIDE" top-gap rest external); fi
+  echo "outer.top = [{ monitor.'built-in' = $bi }, $ex]"
+
+  for e in left right bottom; do
+    def=$(edge_default "$e")
+    if [ ${#keys[@]} -eq 0 ]; then
+      echo "outer.$e = $def"
+    else
+      line="outer.$e = ["
+      for k in "${keys[@]}"; do line="$line{ monitor.'$k' = 0 }, "; done
+      echo "$line$def]"
+    fi
+  done
+}
+
+# Idempotent. Reads first, and only takes the lock and touches the file when a
+# line has actually moved, so the common case is two aerospace queries and no
+# write at all.
+sync_gaps() {
+  local want tmp wantfile n_before n_after e
+  want=$(wanted_lines) || return 0
+  [ -n "$want" ] || return 0
+
+  local need=0
+  while IFS= read -r line; do
+    grep -qxF "$line" "$AERO" 2>/dev/null || need=1
+  done <<<"$want"
+  [ "$need" -eq 1 ] || return 0
+
+  lock || { echo "omacosy-fullscreen: could not take the gap lock" >&2; return 1; }
+
+  # Re-read under the lock: the run we waited for may have written exactly
+  # what this one wanted.
+  want=$(wanted_lines)
+  need=0
+  while IFS= read -r line; do
+    grep -qxF "$line" "$AERO" 2>/dev/null || need=1
+  done <<<"$want"
+  if [ "$need" -eq 0 ]; then rmdir "$LOCK" 2>/dev/null; trap - EXIT INT TERM; return 0; fi
+
+  n_before=$(wc -l <"$AERO")
+  # One pass for all four edges, one write. awk and not sed because a monitor
+  # NAME goes into the replacement, and a name is user data: it can hold any
+  # character sed would read as syntax.
+  #
+  # The wanted lines arrive as a FILE, not through -v. BSD awk reads an escape
+  # sequence in a -v value and rejects a literal newline in it: "newline in
+  # string", four lines lost, and the line-count guard below is what caught it.
+  tmp=$(mktemp) || { rmdir "$LOCK" 2>/dev/null; trap - EXIT INT TERM; return 1; }
+  wantfile=$(mktemp) || { rm -f "$tmp"; rmdir "$LOCK" 2>/dev/null; trap - EXIT INT TERM; return 1; }
+  printf '%s\n' "$want" >"$wantfile"
+  awk '
+    NR == FNR { split($0, p, " = "); m[p[1]] = $0; next }
+    { split($0, f, " = "); if (f[1] in m) { print m[f[1]] } else { print } }
+  ' "$wantfile" "$AERO" >"$tmp"
+  rm -f "$wantfile"
+  n_after=$(wc -l <"$tmp")
+
+  # The truncation this lock exists to prevent also has to be impossible to
+  # write out: a result that lost or gained a line is not a gap change.
+  if [ ! -s "$tmp" ] || [ "$n_before" != "$n_after" ]; then
+    echo "omacosy-fullscreen: refusing to write, $n_before lines in and $n_after out" >&2
+    rm -f "$tmp"; rmdir "$LOCK" 2>/dev/null; trap - EXIT INT TERM
+    return 1
+  fi
+  # cat, not mv: ~/.config/aerospace is a symlink into the repo and the file's
+  # own permissions are worth keeping
+  cat "$tmp" >"$AERO" && rm -f "$tmp"
+  "$A" reload-config >/dev/null 2>&1
+  rmdir "$LOCK" 2>/dev/null
+  trap - EXIT INT TERM
+  return 0
+}
+
+# A window in macOS native fullscreen has LEFT aerospace's tiling. aerospace
+# does not own that Space and will not touch it, so a second window opening on
+# the same workspace is laid out alone and takes the whole workspace, while the
+# native one stays stranded in a Space you have to swipe back to. Measured
+# 2026-09-17: FreeTube native, a terminal opened, and the terminal came up at
+# 8,8 1424x883 with FreeTube nowhere on screen.
+#
+# So a workspace that has a tiled window AND a native fullscreen one is a
+# workspace that cannot show both. Take the native one out and let aerospace
+# tile them together.
+#
+# Whole-machine scan rather than "the window that was just detected". It is one
+# IPC call, it is idempotent, and it repairs the state whatever caused it —
+# including a window aerospace moved onto that workspace rather than one that
+# opened there.
+# The invariant: a workspace never holds a native fullscreen window AND a
+# tiled one at the same time. That state shows only one of them — aerospace
+# lays out nothing for a window in its own macOS Space — so the other is
+# stranded behind a swipe.
+#
+# Enforced in a bounded loop, not a single pass, because the state can come
+# straight back. Measured 2026-09-17: a terminal was native, a second terminal
+# was opened, the first was pulled out correctly, and macOS put the NEW window
+# into the fullscreen Space that was still open — same forbidden state, a
+# different window in it. One pass fixes the window it can see; the loop
+# fixes the situation.
+yield_native() {
+  local pass=0 out rows acted tiled nat id ws fid
+  while [ "$pass" -lt 4 ]; do
+    out=$("$A" list-windows --all --format '%{workspace}|%{window-layout}|%{window-id}' 2>/dev/null) || return 0
+    # The cheap exit, and it is almost every window you ever open: no native
+    # fullscreen window anywhere means there is nothing this rule can do.
+    case "$out" in *macos_native_fullscreen*) ;; *) return 0 ;; esac
+
+    # one row per window to recover: <tiled on that ws> <native on that ws> <id>
+    rows=$(printf '%s\n' "$out" | awk -F'|' '
+      $2 == "macos_native_fullscreen" { nat[$1] = nat[$1] " " $3; natn[$1]++; next }
+      # counted the way omacosy-solo counts: a float is not in the tiling, and
+      # a hidden app keeps its window in the list
+      $2 != "floating" && $2 != "macos_native_window_of_hidden_app" { tiled[$1]++ }
+      END {
+        for (ws in nat) {
+          if (tiled[ws] < 1) continue
+          n = split(nat[ws], ids, " ")
+          for (i = 1; i <= n; i++) print tiled[ws], natn[ws], ids[i], ws
+        }
+      }
+    ')
+    # Nothing to do. A lone window in native fullscreen with nothing beside it
+    # is a RESTING state, so this is where the loop stops rather than waiting
+    # to see whether it changes.
+    [ -n "$rows" ] || return 0
+
+    acted=0
+    # a here-string, not a pipe: a pipe would put this in a subshell and `acted`
+    # would never come back
+    while read -r tiled nat id ws; do
+      [ -n "$id" ] || continue
+      "$A" macos-native-fullscreen off --window-id "$id" >/dev/null 2>&1 || continue
+      acted=1
+
+      # Put it back in FRONT of the window that displaced it. While it was in
+      # its own Space the workspace's tree was empty, so the new window became
+      # the only node and the recovered one is appended AFTER it — the window
+      # that was there first ends up on the right. Measured 2026-09-17.
+      #
+      # Only when the answer is not a guess: exactly one window to come back
+      # to, and exactly one coming back. With more of either, where it belongs
+      # is unknowable — it left the tiling and the tree keeps no memory of its
+      # slot — so it is left where aerospace put it.
+      if [ "$tiled" = 1 ] && [ "$nat" = 1 ]; then
+        # Wait for the window to actually be back in the tiling, rather than
+        # sleeping a guess at how long that takes. It was 0.4 s, and 0.4 s is
+        # long enough for the NEXT window of a Super+Enter burst to be placed
+        # into a tree this has not repaired yet. The hint's own log said so:
+        # a good run read the first terminal's slot as 708x883, half the
+        # screen, while a bad one read the second terminal's as 467x883 —
+        # three columns, because the repair had not landed.
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+          case "$("$A" list-windows --workspace "$ws" \
+                    --format '%{window-id}|%{window-layout}' 2>/dev/null \
+                  | awk -F'|' -v w="$id" '$1 == w { print $2 }')" in
+            ""|macos_native_fullscreen) sleep 0.05 ;;
+            *) break ;;
+          esac
+        done
+
+        # ORIENTATION, then order. A workspace keeps the orientation of the
+        # container it had, and while the window was in its own Space the tree
+        # was empty, so the pair comes back into a leftover split rather than
+        # the one dwindle would choose. Measured 2026-09-17: with the root left
+        # at v_tiles, a window recovered from native fullscreen and the window
+        # beside it came back stacked full width, on a display where dwindle
+        # puts two windows side by side. It looked random because it depended
+        # on what the workspace had been doing before.
+        #
+        # The direction comes from omacosy-helper, which owns the rule that
+        # split-hint uses, so there is one copy of it.
+        # Flatten FIRST, then set the root. Neither alone is reliable:
+        # measured 2026-09-17, a workspace whose root was already v_tiles held
+        # the pair in a nested container, so `layout` on the root answered
+        # "Already in the requested v_tiles mode" and changed nothing, and
+        # `layout --window-id` said the same of the window's own parent.
+        # Flattened, the two windows are direct children of the root and the
+        # root's orientation decides the split — measured both ways.
+        #
+        # Safe here because this branch is the two-window case by definition:
+        # there is no nesting worth keeping.
+        "$A" flatten-workspace-tree --workspace "$ws" >/dev/null 2>&1
+        case "$("$HELPER" split-dir 2>/dev/null)" in
+          horizontal) "$A" layout h_tiles --workspace "$ws" --root >/dev/null 2>&1 ;;
+          vertical) "$A" layout v_tiles --workspace "$ws" --root >/dev/null 2>&1 ;;
+        esac
+        "$A" swap dfs-prev --window-id "$id" >/dev/null 2>&1
+      fi
+    done <<<"$rows"
+
+    [ "$acted" -eq 1 ] || return 0
+
+    # Re-arm the dwindle hint. Two reasons, both measured 2026-09-17:
+    #
+    # The hint for the window that opened beside the native one was computed
+    # while the native one was still in its own Space, so it read the WHOLE
+    # workspace as that window's slot instead of half of it — and it prepares
+    # the split for the window after next, which is then the wrong shape.
+    #
+    # And the flatten above removes the container the hint had already
+    # prepared. Without this the third window was appended to the root instead
+    # of splitting the focused slot: three columns of 471, 467, 471 where
+    # dwindle gives 708 beside a stacked 708x438 pair.
+    #
+    # Same entry point aerospace's on-focus-changed uses, so there is one
+    # implementation of the rule and this cannot drift from it.
+    fid=$("$A" list-windows --focused --format '%{window-id}' 2>/dev/null | head -1)
+    [ -n "$fid" ] && AEROSPACE_WINDOW_ID="$fid" "$HELPER" split-hint >/dev/null 2>&1
+
+    pass=$((pass + 1))
+    # let macOS finish closing the Space, and let a window that is still
+    # arriving land somewhere, before looking again
+    sleep 0.6
+  done
+}
+
+# Called by omacosy-spawn BEFORE it opens a window. A lone window in its own
+# macOS Space is a resting state, so `yield` cannot act on it — the violation
+# only exists once a second window is there, and by then aerospace is already
+# placing that window while the recovery re-arranges the tree underneath it.
+# Every attempt to win that race after the fact failed: measured 2026-09-17, a
+# four-window burst matched the baseline 6/6 with no native fullscreen, and
+# 4/6, then 3/6, with one, depending on which way the repair was hurried.
+#
+# A spawn KNOWS a window is coming. Recovering first turns the whole problem
+# into the baseline case — the workspace already holds a tiled window when the
+# new one arrives, so dwindle places it exactly as it would any other time,
+# and none of yield's repair work is needed at all.
+prespawn() {
+  local ws ids id i lay fid prev now
+  # ONE query, `--workspace focused`, because this runs on every Super+Enter
+  # and the answer is almost always "nothing to do". 40 ms, measured.
+  ids=$("$A" list-windows --workspace focused --format '%{window-id}|%{window-layout}' 2>/dev/null \
+        | awk -F'|' '$2 == "macos_native_fullscreen" { print $1 }')
+  [ -n "$ids" ] || return 0
+  ws=$("$A" list-workspaces --focused 2>/dev/null | head -1)
+  [ -n "$ws" ] || return 0
+
+  for id in $ids; do
+    "$A" macos-native-fullscreen off --window-id "$id" >/dev/null 2>&1
+  done
+  # Wait for the Space to finish closing. The caller is holding the terminal
+  # key while this runs, so it is bounded and then gives up rather than wedge.
+  for i in $(seq 1 30); do
+    lay=$("$A" list-windows --workspace "$ws" --format '%{window-layout}' 2>/dev/null \
+          | grep -c macos_native_fullscreen)
+    [ "$lay" = 0 ] && break
+    sleep 0.05
+  done
+
+  # And then wait for the FRAME, not just the layout. aerospace calls the
+  # window tiled the moment it knows, while macOS is still animating the Space
+  # out: measured 2026-09-17, prespawn returned in 0.4 s with the two windows
+  # still at 0,0 1440x900 and -137,8 708x883, mid-flight. The hint below then
+  # read a moving frame, gave up, and the next window was appended as a third
+  # column instead of splitting a slot.
+  for id in $ids; do
+    prev=""
+    for i in $(seq 1 30); do
+      now=$("$HELPER" frame "$id" 2>/dev/null)
+      [ -n "$now" ] && [ "$now" = "$prev" ] && break
+      prev="$now"
+      sleep 0.05
+    done
+  done
+
+  # Re-arm the dwindle hint for whatever is focused now. The recovered window
+  # re-entered the tree without a focus change, so no hint was computed for the
+  # shape it landed in, and the window about to be spawned would be APPENDED
+  # rather than splitting a slot. Measured 2026-09-17: a workspace holding a
+  # browser and a native fullscreen terminal came out as three columns of 471,
+  # 467 and 471 when a third window was opened, instead of the staircase.
+  #
+  # Same entry point aerospace's on-focus-changed uses, so one implementation
+  # of the rule.
+  fid=$("$A" list-windows --focused --format '%{window-id}' 2>/dev/null | head -1)
+  [ -n "$fid" ] && AEROSPACE_WINDOW_ID="$fid" "$HELPER" split-hint >/dev/null 2>&1
+  return 0
+}
+
+# --- OmniWM ----------------------------------------------------------------
+#
+# The same idea as the aerospace path and for the same reason, with different
+# levers. `[dwindle] singleWindowFit = "fill"` gives a lone window the
+# FULLSCREEN frame, and `[gaps] fullscreenUsesOuterGaps` decides whether that
+# frame keeps the outer gaps — one bool for two features, which is the user's
+# own upstream request, BarutSRB/OmniWM#690. Neither value gives what is
+# wanted:
+#
+#   flag true    1424x854 at 8,38   gaps kept — reads as a tiled window
+#   flag false   1440x900 at 0,0    no gaps at all, and it covers the bar
+#   wanted       1440x870 at 0,30   flush with the bar, nothing else
+#
+# So the gaps themselves move, exactly as under aerospace. OmniWM re-reads
+# settings.toml at runtime — measured 2026-09-17, the live value followed a
+# file edit inside four seconds and the window moved with it — which is what
+# makes this possible at all.
+#
+# Only while the visible workspace holds ONE window. With two, Super+F must
+# still zoom with its gaps and its ring, and it shares this same frame.
+omni_write_gaps() {                 # omni_write_gaps <top> <side>
+  local tmp
+  tmp=$(mktemp) || return 1
+  awk -v t="$1" -v s="$2" '
+    /^\[gaps\.outer\]/ { print; ing = 1; next }
+    ing && /^\[/ { ing = 0 }
+    ing && /^top = / { print "top = " t ".0"; next }
+    ing && /^(left|right|bottom) = / { split($0, f, " "); print f[1] " = " s ".0"; next }
+    { print }
+  ' "$OMNI_SETTINGS" >"$tmp" || { rm -f "$tmp"; return 1; }
+  # same line count or nothing: the guard that caught a truncated
+  # aerospace.toml earlier today applies here too
+  if [ ! -s "$tmp" ] || [ "$(wc -l <"$tmp")" != "$(wc -l <"$OMNI_SETTINGS")" ]; then
+    rm -f "$tmp"; return 1
+  fi
+  cat "$tmp" >"$OMNI_SETTINGS" && rm -f "$tmp"
+}
+
+omni_read_gaps() {                  # prints "<top> <left>"
+  awk '/^\[gaps\.outer\]/ { ing = 1; next }
+       ing && /^\[/ { ing = 0 }
+       ing && /^top = / { t = $3 }
+       ing && /^left = / { l = $3 }
+       END { printf "%d %d\n", t, l }' "$OMNI_SETTINGS"
+}
+
+# Tiled windows on the VISIBLE workspace. A window in macOS native fullscreen
+# still counts: OmniWM keeps its slot and draws a placeholder in it, so the
+# workspace is not showing one window even though only one is on screen.
+omni_visible_count() {
+  local cur
+  cur=$(/opt/homebrew/bin/omniwmctl query workspaces 2>/dev/null | python3 -c "
+import json, sys
+try:
+    for w in json.load(sys.stdin)['result']['payload']['workspaces']:
+        if w.get('isVisible') or w.get('isCurrent'):
+            print(w['number']); break
+except Exception:
+    sys.exit(1)
+") || return 1
+  [ -n "$cur" ] || return 1
+  # A window's own workspace object carries no visibility flag — only a
+  # number — so the visible one has to be looked up first and matched here.
+  /opt/homebrew/bin/omniwmctl query windows 2>/dev/null | python3 -c "
+import json, sys
+cur = int(sys.argv[1]); n = 0
+try:
+    wins = json.load(sys.stdin)['result']['payload']['windows']
+except Exception:
+    sys.exit(1)
+for w in wins:
+    ws = w.get('workspace') or {}
+    if ws.get('number') == cur:
+        n += 1
+print(n)
+" "$cur"
+}
+
+# Put the outer gaps back to what they were before anything was flipped.
+# Called on its own before a spawn: a window is about to arrive, so the
+# workspace is about to stop being a lone one whatever it is now.
+omni_restore() {
+  local rest_top rest_side
+  if [ -s "$OMNI_REST" ]; then
+    read -r rest_top rest_side <"$OMNI_REST"
+    rm -f "$OMNI_REST"
+  else
+    # nothing recorded, so nothing was flipped: leave the file alone rather
+    # than assert a default over whatever the user has set
+    return 0
+  fi
+  omni_write_gaps "${rest_top:-38}" "${rest_side:-8}"
+}
+
+omni_sync() {
+  local keeps count top
+  keeps=$("$AUTOHIDE" keeps-strip builtin 2>/dev/null)
+  count=$(omni_visible_count) || return 0
+  [ -n "$count" ] || return 0
+
+  # The marker gates it, exactly as it does under aerospace: this IS
+  # omacosy-solo-fullscreen's feature, with a different lever. Switched off,
+  # a lone window keeps its gaps and its ring on both managers.
+  if [ -e "$MARKER" ] && [ "$keeps" = yes ] && [ "$count" = 1 ]; then
+    # record what to come back to, once, before overwriting it
+    if [ ! -s "$OMNI_REST" ]; then
+      mkdir -p "$(dirname "$OMNI_REST")"
+      omni_read_gaps >"$OMNI_REST"
+    fi
+    top=$("$AUTOHIDE" top-gap fullscreen builtin 2>/dev/null)
+    omni_write_gaps "${top:-30}" 0
+  else
+    omni_restore
+  fi
+}
+
+main() {
+  # OmniWM has its own levers; only `sync` means anything there
+  # OmniWM has its own levers. `sync` sets the gaps from what is on the
+  # visible workspace; `prespawn` puts them back before a window arrives, so
+  # the newcomer lands in the resting layout instead of the flush one and then
+  # being re-laid out a moment later. `yield` means nothing here: OmniWM keeps
+  # a native fullscreen window in its tiling and reserves its slot, so nothing
+  # is ever stranded — measured 2026-09-17, and the placeholder it draws says
+  # so in words. That difference is deliberate, not a gap in this file.
+  if wm_is_omniwm; then
+    case "${1:-sync}" in
+      sync) lock && { omni_sync; rmdir "$LOCK" 2>/dev/null; trap - EXIT INT TERM; } ;;
+      prespawn) lock && { omni_restore; rmdir "$LOCK" 2>/dev/null; trap - EXIT INT TERM; } ;;
+    esac
+    exit 0
+  fi
+  case "${1:-sync}" in
+    sync) ;;
+    yield) try_lock_yield || exit 0; yield_native; exit 0 ;;
+    prespawn) prespawn; exit 0 ;;
+    status)
+      printf 'strip to protect: built-in %s, external %s\n' \
+        "$("$AUTOHIDE" keeps-strip builtin 2>/dev/null)" \
+        "$("$AUTOHIDE" keeps-strip external 2>/dev/null)"
+      printf 'monitors showing a lone window, full screen: %s\n' \
+        "$(fullscreen_monitors | tr '\n' ' ')"
+      printf 'solo-fullscreen feature: %s\n' "$([ -e "$MARKER" ] && echo on || echo off)"
+      echo 'in the config now:'
+      grep -E "^outer\.(top|left|right|bottom) = " "$AERO" | sed 's/^/  /'
+      echo 'wanted:'
+      wanted_lines | sed 's/^/  /'
+      exit 0
+      ;;
+    *) echo "usage: omacosy-fullscreen [sync|yield|prespawn|status]" >&2; exit 1 ;;
+  esac
+  sync_gaps
+}
+
+main "$@"

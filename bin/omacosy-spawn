@@ -110,6 +110,29 @@ while :; do
   sleep 0.05
 done
 
+# Bring a window back from macOS native fullscreen before opening anything.
+# A window in its own Space is not in the tiling, so a new window would be laid
+# out alone and take the whole workspace while the other stayed stranded. The
+# repair can be done afterwards, and omacosy-fullscreen's on-window-detected
+# rule does exactly that for windows that do not come through here — but doing
+# it afterwards races aerospace placing the new window, and a burst then comes
+# out mirrored or flat. Measured 2026-09-17: a four-window burst matched the
+# baseline 6 times in 6 with no native fullscreen, and 4 in 6 with one.
+#
+# Done here, the workspace already holds a tiled window when the new one
+# arrives, so this is simply the ordinary case and there is no race to win.
+# Costs one query per spawn, and nothing at all when no window is in a Space.
+#
+# INSIDE the lock, deliberately. Run before it, two presses of a fast burst
+# both recover at once and then race each other into the lock, and the one
+# that finds the work already done goes first — measured 2026-09-17, one run
+# in two at 10 ms spacing came out with three columns where the staircase
+# should be. Held here, the recovery is part of the same serialised step as
+# the window it precedes.
+if [ -x "$HOME/.local/bin/omacosy-fullscreen" ]; then
+  "$HOME/.local/bin/omacosy-fullscreen" prespawn >/dev/null 2>&1 || true
+fi
+
 # Under OmniWM the split is native, but its insertion side is not
 # omarchy's: with smartSplit off a new window goes RIGHT in horizontal
 # splits and ABOVE in vertical ones (frames are y-up; "second child"
@@ -141,6 +164,10 @@ if wm_is_omniwm; then
   waiter=$!
   "${SPAWN[@]}"
   wait "$waiter" 2>/dev/null || true
+  # No sync here: omacosy-solo keeps the gaps in step from the window-server
+  # event stream, which sees the close and the swipe this path cannot. The
+  # prespawn above stays, because it runs BEFORE the window exists and saves it
+  # landing in the flush layout and being re-laid out a moment later.
   exit 0
 fi
 

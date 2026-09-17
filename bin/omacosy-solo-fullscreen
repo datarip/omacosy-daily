@@ -36,7 +36,12 @@ case "${1:-toggle}" in
 on)
   mkdir -p "$(dirname "$MARK")" "$(dirname "$OWNED")" && : >"$MARK"
   if wm_is_omniwm; then
-    echo "omacosy: solo fullscreen on — OmniWM already fills a lone window; this takes effect under AeroSpace"
+    # OmniWM fills a lone window by itself, but with the OUTER GAPS still on
+    # it — its fullscreenUsesOuterGaps is one bool for two features and cannot
+    # say "no gaps here, gaps for Super+F" (BarutSRB/OmniWM#690). The daemon
+    # moves the gaps instead, so the frame matches AeroSpace's.
+    launchctl kickstart -k "$AGENT" 2>/dev/null
+    echo "omacosy: a lone window now fills the display below the bar. Undo: omacosy-solo-fullscreen off"
   else
     launchctl kickstart -k "$AGENT" 2>/dev/null
     echo "omacosy: a lone window now goes fullscreen. Undo: omacosy-solo-fullscreen off"
@@ -46,7 +51,12 @@ off)
   rm -f "$MARK"
   # stop it BEFORE handing back, or it would put the windows straight back
   launchctl kill TERM "$AGENT" 2>/dev/null
-  wm_is_omniwm || release
+  if wm_is_omniwm; then
+    # hand the gaps back; with the marker gone this restores them
+    "$HOME/.local/bin/omacosy-fullscreen" sync >/dev/null 2>&1 || true
+  else
+    release
+  fi
   echo "omacosy: solo fullscreen off"
   ;;
 toggle)
@@ -55,9 +65,14 @@ toggle)
 status)
   if [ -e "$MARK" ]; then
     if wm_is_omniwm; then
-      # the daemon exits under OmniWM, so solo-owned is an aerospace-era file
-      # and its count describes nothing that is on screen now
-      echo "on — parked: OmniWM fills a lone window itself"
+      # solo-owned is an aerospace-era file: under OmniWM the daemon issues no
+      # fullscreen command and owns no windows. It moves the OUTER GAPS
+      # instead, so what to report is whether they are currently moved.
+      if grep -qxF "top = 38.0" "$HOME/.config/omniwm/settings.toml" 2>/dev/null; then
+        echo "on — OmniWM: gaps at rest, the workspace is not showing one window"
+      else
+        echo "on — OmniWM: a lone window is filling the display below the bar"
+      fi
     else
       # -s, not -f: an EMPTY file exists, and `grep -c` on it prints 0 and then
       # exits non-zero, so a `|| echo 0` fallback printed the count twice.

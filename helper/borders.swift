@@ -252,6 +252,20 @@ func isFullscreen(_ r: CGRect) -> Bool {
         if r.origin.y - d.origin.y < inset + 3, r.height >= d.height - inset - 6 {
             return true
         }
+        // omacosy-fullscreen's shape, added 2026-09-17: the bar keeps the top
+        // strip and the window takes everything else, so it does NOT start at
+        // the display top and the test above cannot see it. The ring was left
+        // drawn, and its top edge showed in the strip below the bar.
+        //
+        // Full width AND flush with the bottom edge is the signature. A tiled
+        // window cannot have it: outer.left and outer.right are only ever 0
+        // while a fullscreen window is on that display, which is the state
+        // this is trying to recognise.
+        if r.width >= d.width - 2,
+           (d.origin.y + d.height) - (r.origin.y + r.height) < 2,
+           r.origin.x - d.origin.x < 2 {
+            return true
+        }
     }
     return false
 }

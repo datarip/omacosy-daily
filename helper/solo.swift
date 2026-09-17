@@ -189,20 +189,72 @@ let barStaysVisible: Bool = {
 // fullscreen window — so every workspace holding one window lost the bar.
 // Keeping the gaps puts the window below the bar instead: it still gets
 // everything else, and "always visible" keeps meaning what it says.
-let fullscreenArgs: [String] = barStaysVisible
-    ? ["fullscreen", "on", "--fail-if-noop"]
-    : ["fullscreen", "on", "--no-outer-gaps", "--fail-if-noop"]
+//
+// Which of the two is right is a question about the DISPLAY, not about the
+// setting alone. `barStaysVisible` answers half of it. The other half is the
+// notch: a notched panel excludes the camera strip from the usable area, so a
+// window cannot reach a bar drawn at the top there, and keeping the gaps only
+// costs 8 points on every edge for nothing.
+//
+// Per monitor, because the answer differs across a notched laptop with a flat
+// monitor beside it. `monitor-appkit-nsscreen-screens-id` is aerospace's own
+// index into NSScreen.screens, which is what carries the inset.
+//
+// The notched half is ASSUMED, not measured — this machine has no notch. See
+// notes/notched/TEST-REQUEST.md. If it comes back the other way, this map
+// collapses to `barStaysVisible` and nothing else here changes.
+var stripProtected: [String: Bool] = [:]
+
+func rebuildStripMap() {
+    var m: [String: Bool] = [:]
+    for line in aerospace(["list-monitors", "--format",
+                           "%{monitor-id}|%{monitor-appkit-nsscreen-screens-id}"])
+        .split(separator: "\n") {
+        let f = line.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard f.count >= 2, let idx = Int(f[1]), idx >= 1, idx <= NSScreen.screens.count
+        else { continue }
+        m[f[0]] = barStaysVisible && NSScreen.screens[idx - 1].safeAreaInsets.top == 0
+    }
+    stripProtected = m
+}
+
+// Unknown monitor falls back to the setting alone, which is what this file did
+// before the map existed. A wake answers before aerospace does, and a wrong
+// 8 points is better than a window over the bar.
+func fullscreenArgs(on monitor: String?) -> [String] {
+    let protected = monitor.flatMap { stripProtected[$0] } ?? barStaysVisible
+    return protected
+        ? ["fullscreen", "on", "--fail-if-noop"]
+        : ["fullscreen", "on", "--no-outer-gaps", "--fail-if-noop"]
+}
+
+// Where the strip IS protected, `fullscreen` alone still leaves 8 points on
+// three edges, because aerospace applies all four outer gaps or none. The
+// side gaps are dropped for as long as a fullscreen window is on screen, and
+// omacosy-fullscreen owns that: it is the same state Super+F sets, so both
+// have to go through one place or they would write over each other.
+func syncFullscreenGaps() {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: NSHomeDirectory() + "/.local/bin/omacosy-fullscreen")
+    p.arguments = ["sync"]
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    try? p.run()
+    p.waitUntilExit()
+}
 
 // --- the rule's input -----------------------------------------------------
 
 struct Solo {
     var tiledIDs: [String: [String]] = [:]
     var fullscreenIDs: Set<String> = []
+    // which display each window is on, for the gap question above
+    var monitorOf: [String: String] = [:]
 }
 
 // Narrower than the bar's: the app name and the focused flag belong to the
 // chips, and this process does not draw any.
-let windowFormat = "%{workspace}|%{window-layout}|%{window-id}|%{window-is-fullscreen}"
+let windowFormat = "%{workspace}|%{window-layout}|%{window-id}|%{window-is-fullscreen}|%{monitor-id}"
 
 func soloSnapshot() -> Solo {
     var s = Solo()
@@ -214,9 +266,19 @@ func soloSnapshot() -> Solo {
         // holding Zed plus a Cmd+H'd Notes lists two, so a plain count
         // refuses to fullscreen a workspace that is SHOWING one window.
         // Floating windows are left out for the same reason.
-        guard f[1] != "floating", f[1] != "macos_native_window_of_hidden_app" else { continue }
+        //
+        // And macos_native_fullscreen, added 2026-09-17. That window is in its
+        // own macOS Space and aerospace lays out nothing for it, so a
+        // workspace holding it plus one tiled window has ONE window on screen
+        // while a plain count says two. omacosy-fullscreen's `yield` rule
+        // normally takes the native one out as soon as a second window
+        // appears; this is what keeps the count honest in the gap before it
+        // does, and if the user puts it back by hand.
+        guard f[1] != "floating", f[1] != "macos_native_window_of_hidden_app",
+              f[1] != "macos_native_fullscreen" else { continue }
         s.tiledIDs[f[0], default: []].append(f[2])
         if f[3] == "true" { s.fullscreenIDs.insert(f[2]) }
+        if f.count >= 5 { s.monitorOf[f[2]] = f[4] }
     }
     return s
 }
@@ -361,6 +423,11 @@ func applyAutoFullscreen(_ s: Solo) {
     // tiled until that workspace was next visited. The snapshot already
     // carries them, and `fullscreen on --window-id` works off screen.
     for (ws, ids) in s.tiledIDs { applySolo(ws, ids, s) }
+
+    // After the loop, not before: the gaps follow what is fullscreen NOW, and
+    // the loop is what decides that. Cheap when nothing moved — it reloads the
+    // config only when a gap line actually changes.
+    syncFullscreenGaps()
 }
 
 func applySolo(_ ws: String, _ ids: [String], _ s: Solo) {
@@ -410,7 +477,7 @@ func applySolo(_ ws: String, _ ids: [String], _ s: Solo) {
         // fullscreen and the user can press Super+F in the gap before this
         // runs; without the flag the rule would then claim a window it never
         // touched, and undo that Super+F the next time the count moved.
-        guard actChanged(fullscreenArgs + ["--window-id", id]) else {
+        guard actChanged(fullscreenArgs(on: s.monitorOf[id]) + ["--window-id", id]) else {
             // Changed nothing. Either the window was already fullscreen —
             // someone else's doing, in the gap since the snapshot — or the
             // call failed. Do not claim it either way, and do NOT record an
@@ -643,7 +710,7 @@ func finishWake(_ why: String) {
                     if let now = placed[id], now != ws {
                         act(["move-node-to-workspace", ws, "--window-id", id])
                     }
-                    act(fullscreenArgs.filter { $0 != "--fail-if-noop" } + ["--window-id", id])
+                    act(fullscreenArgs(on: nil).filter { $0 != "--fail-if-noop" } + ["--window-id", id])
                 }
             }
         }
@@ -741,7 +808,12 @@ NSWorkspace.shared.notificationCenter.addObserver(
 // this last acted on mean nothing afterwards
 NotificationCenter.default.addObserver(
     forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
-) { _ in forgetSoloCounts() }
+) { _ in
+    // and the insets with them: a notched laptop can lose or gain a flat
+    // monitor beside it, and that changes which displays have a strip to keep
+    rebuildStripMap()
+    forgetSoloCounts()
+}
 
 // --- entry ----------------------------------------------------------------
 
@@ -756,10 +828,64 @@ guard autoFullscreenSolo else {
     tlog("switched off (no marker file), nothing to do")
     exit(0)
 }
-guard !omniwmActive() else {
-    tlog("OmniWM is running; its dwindle already fills a lone window")
-    exit(0)
+// Under OmniWM this daemon issues no fullscreen command: OmniWM's own
+// `singleWindowFit = "fill"` already fills a lone window. What it does instead
+// is keep the OUTER GAPS in step with what the visible workspace holds,
+// because the frame this fork wants — flush with the bar, no ring — is not one
+// OmniWM can express. Its `fullscreenUsesOuterGaps` is a single bool serving
+// both the fullscreen command and singleWindowFit, which is the user's own
+// upstream request, BarutSRB/OmniWM#690.
+//
+// It has to be resident, and this is the process that already can be. OmniWM
+// has no hooks at all: no on-window-detected, and its workspace swipes go
+// through the gesture daemon in C rather than any shell command, so a window
+// closing or a swipe is seen by nothing else. The SkyLight stream below is
+// window-server level and sees all of it.
+//
+// Same marker, so it is the same opt-in: `omacosy-solo-fullscreen off` stops
+// the daemon and a lone window keeps its gaps and its ring, on both managers.
+let omniMode = omniwmActive()
+
+// Debounced: a workspace switch fires several events at once, and the work is
+// a config write OmniWM re-reads. One write per settled change, not six.
+var omniSyncSeq = 0
+func kickOmniSync() {
+    omniSyncSeq += 1
+    let seq = omniSyncSeq
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+        guard seq == omniSyncSeq else { return }
+        work.async { syncFullscreenGaps() }
+    }
 }
+
+if omniMode {
+    tlog("OmniWM: keeping the outer gaps in step with the visible workspace")
+    let omniNotify: NotifyProc = { event, _, _, _ in
+        DispatchQueue.main.async {
+            if event == EVENT_WINDOW_CREATE || event == EVENT_WINDOW_DESTROY {
+                rebuildSubscriptions() // a new window is not subscribed until asked
+            }
+            kickOmniSync()
+        }
+    }
+    for e in [EVENT_WINDOW_CREATE, EVENT_WINDOW_DESTROY, EVENT_WINDOW_ORDER,
+              EVENT_WINDOW_VISIBILITY, EVENT_WINDOW_MOVE, EVENT_WINDOW_RESIZE] {
+        _ = SLSRegisterNotifyProc(omniNotify, e, nil)
+    }
+    rebuildSubscriptions()
+    NotificationCenter.default.addObserver(
+        forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+    ) { _ in kickOmniSync() }
+    kickOmniSync()   // and once now, for the state it started in
+    tlog("omacosy-solo up (omniwm gaps mode)")
+    let omniApp = NSApplication.shared
+    omniApp.setActivationPolicy(.prohibited)
+    omniApp.run()
+}
+
+// Before the first evaluation: an empty map sends every window down the
+// fallback path, which is the wrong frame on a notched display.
+rebuildStripMap()
 
 let notify: NotifyProc = { event, _, _, _ in
     DispatchQueue.main.async {

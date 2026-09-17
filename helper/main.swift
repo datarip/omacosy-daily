@@ -132,6 +132,46 @@ case "displays":
         print("\(i + 1)\t\(notched)")
     }
 
+case "frame":
+    // "x y w h" for one window id, from the window list rather than the
+    // Accessibility API so this needs no grant of its own — the same source
+    // split-hint reads. Used to wait out macOS's fullscreen Space animation:
+    // aerospace reports a window as tiled again the moment IT knows, while the
+    // frame is still travelling, and a hint computed against a moving frame is
+    // thrown away.
+    guard args.count >= 3, let fwid = UInt32(args[2]),
+        let flist = CGWindowListCopyWindowInfo(.optionIncludingWindow, fwid) as? [[String: Any]],
+        let fb = flist.first?[kCGWindowBounds as String] as? [String: CGFloat],
+        let fx = fb["X"], let fy = fb["Y"], let fw = fb["Width"], let fh = fb["Height"]
+    else { exit(1) }
+    print("\(Int(fx)) \(Int(fy)) \(Int(fw)) \(Int(fh))")
+
+case "split-dir":
+    // Which way dwindle splits a slot: "horizontal" for side by side,
+    // "vertical" for stacked. Asked for by omacosy-fullscreen, which has to
+    // put a workspace back the way the split hint would have left it after a
+    // window comes out of macOS native fullscreen — that window left the
+    // tiling, so no hint was ever computed for it and the workspace keeps
+    // whatever orientation it had before.
+    //
+    // A subcommand rather than two lines of arithmetic in the caller: this is
+    // the SAME rule as split-hint's `direction`, a few hundred lines below,
+    // and two copies of it would drift apart the first time the multiplier
+    // moves.
+    //
+    // With no arguments it answers for the main display's own size. The
+    // tiling area is that minus the outer gaps, which are a few points on a
+    // side and cannot change which edge is longer on any real panel.
+    let sdW: CGFloat, sdH: CGFloat
+    if args.count >= 4, let w = Double(args[2]), let h = Double(args[3]) {
+        sdW = CGFloat(w); sdH = CGFloat(h)
+    } else {
+        let b = CGDisplayBounds(CGMainDisplayID())
+        sdW = b.width; sdH = b.height
+    }
+    let sdMultiplier: CGFloat = CGDisplayBounds(CGMainDisplayID()).width >= 2560 ? 1.4 : 1.0
+    print(sdW >= sdH * sdMultiplier ? "horizontal" : "vertical")
+
 case "bar-height":
     // How tall macOS draws the menu bar, in points. install.sh reserves room
     // for the bar with it. Asked rather than assumed, for the same reason
