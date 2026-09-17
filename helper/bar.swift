@@ -3739,15 +3739,27 @@ func safeTop(for display: CGRect) -> CGFloat {
 
 func fullscreenDisplays() -> Set<CGDirectDisplayID> {
     var covered: Set<CGDirectDisplayID> = []
-    // Under OmniWM the width test below cannot separate a tiled window
-    // from a fullscreen one: its 0.6.3 dwindle applies no outer gaps
-    // (resolved settings say 42, layout applies 0 — upstream bug, see
-    // docs/omniwm-port.md), so ordinary tiles take the side gaps too
-    // and EVERYTHING reads as fullscreen — the bar lived in
-    // hover-reveal permanently. Until the gap bug is fixed the bar
-    // stays visible under OmniWM, accepting that it overlaps a real
-    // fullscreen window instead of ducking away.
-    if omniwmActive() { return covered }
+    // The OmniWM exemption is gone, 2026-09-17, and borders.swift dropped
+    // the same one on 2026-09-13 for the same reason. It existed because
+    // 0.6.3's dwindle applied no outer gaps, so every tile started at the
+    // display edge at full width and read as fullscreen — the bar lived in
+    // hover-reveal permanently. The cost of keeping it was the opposite
+    // failure: with autohide off the bar sits at level 1002, above normal
+    // windows, and nothing ever lowered it, so it was drawn OVER a video in
+    // macOS native fullscreen.
+    //
+    // OmniWM 0.6.10 applies the gaps. Measured here on 2026-09-17, one
+    // display 1440x900, outer 8/8/8 and top 38:
+    //
+    //   tiled, two windows     8,38 708x854    fails the width test
+    //   lone window (fill)     8,38 1424x854   fails it too, 16 points short
+    //   Super+F zoom           8,38 1424x854   the same, and it must NOT
+    //                                          count: it does not cover the bar
+    //   native fullscreen      0,0  1440x900   trips all three
+    //
+    // The lone-window frame is the one to watch if the gap flip below ever
+    // changes: at top 30 with no side gaps it is 0,30 1440x870, which still
+    // fails on the top edge, which is right — the bar is not covered.
     guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
     else { return covered }
     var ids = [CGDirectDisplayID](repeating: 0, count: 8)
