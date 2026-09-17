@@ -3789,7 +3789,17 @@ func fullscreenDisplays() -> Set<CGDirectDisplayID> {
             // ordinary tiled Arc reads as fullscreen. WIDTH is what
             // separates them — `--no-outer-gaps` means exactly that, the
             // window takes the side gaps too, and a tiled one never does.
+            // The LEFT edge too, and not only the top. `intersects` is true
+            // for a window overlapping the display by a single point, and a
+            // window manager parks the workspaces you are not looking at just
+            // off the right edge. OmniWM parks them at FULL SIZE: measured
+            // 2026-09-17, Notes sat at 1439,0 1440x900 — one point of overlap
+            // — and passed all three tests, so the bar ducked for a window
+            // that was not on screen at all. aerospace never showed it because
+            // it parks windows at their tiled size, 1424 wide here, which
+            // fails the width test on its own.
             if rect.origin.y - display.origin.y < inset + 3,
+               rect.origin.x - display.origin.x < 2,
                rect.height >= display.height - inset - 6,
                rect.width >= display.width - 2 {
                 covered.insert(ids[i])
