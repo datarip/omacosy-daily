@@ -92,9 +92,9 @@ The fixes this build offers upstream, and their state today.
 | [#45](https://github.com/paulsp94/omacosy/pull/45) | OPEN | fix(omniwm): Cmd+H leaves the workspace, and the Dock icon does not return to it |
 | [#44](https://github.com/paulsp94/omacosy/pull/44) | OPEN | fix(spawn): a burst of launch chords opens one window, 13 s late |
 | [#42](https://github.com/paulsp94/omacosy/pull/42) | OPEN | fix(install): keep a real ~/.zshrc working, and out of the clone |
-| [#41](https://github.com/paulsp94/omacosy/pull/41) | OPEN | fix(uninstall): stop relinking ~/.zshrc to one machine's dotfiles path |
-| [#40](https://github.com/paulsp94/omacosy/pull/40) | OPEN | fix(install): quote the app names written to apps.conf |
-| [#39](https://github.com/paulsp94/omacosy/pull/39) | OPEN | fix(install): match Karabiner's current agent label |
+| [#41](https://github.com/paulsp94/omacosy/pull/41) | MERGED | fix(uninstall): stop relinking ~/.zshrc to one machine's dotfiles path |
+| [#40](https://github.com/paulsp94/omacosy/pull/40) | MERGED | fix(install): quote the app names written to apps.conf |
+| [#39](https://github.com/paulsp94/omacosy/pull/39) | MERGED | fix(install): match Karabiner's current agent label |
 | [#37](https://github.com/paulsp94/omacosy/pull/37) | OPEN | fix(gesture): the trackpad arms at once when OmniWM is the manager |
 | [#36](https://github.com/paulsp94/omacosy/pull/36) | OPEN | fix(bar): a window-manager switch is noticed while the bar runs |
 | [#35](https://github.com/paulsp94/omacosy/pull/35) | OPEN | fix(omniwm): one engine owns the four-finger swipe |
