@@ -52,6 +52,15 @@ start_aerospace_world() {
   # service". Both, in this order, cover both states.
   launchctl load "$HOME/Library/LaunchAgents/com.omacosy.gesture.plist" 2>/dev/null || true
   launchctl kickstart -k "gui/$(id -u)/com.omacosy.gesture" 2>/dev/null || true
+  # omacosy-solo decides at STARTUP which manager it is serving: under
+  # aerospace it runs the solo-fullscreen rule, under OmniWM it keeps the outer
+  # gaps in step with the visible workspace instead. A handover leaves it in
+  # the wrong mode, so it needs the same restart the gesture daemon gets. It
+  # exits by itself when the feature is switched off, so this is safe either
+  # way — and before 2026-09-17 nothing restarted it at all, which left it dead
+  # for a whole session after a switch back from OmniWM.
+  launchctl load "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" 2>/dev/null || true
+  launchctl kickstart -k "gui/$(id -u)/com.omacosy.solo" 2>/dev/null || true
 }
 
 stop_aerospace_world() {
@@ -115,6 +124,15 @@ omniwm)
   # so the copy above needs a real restart and not just a bootstrap
   launchctl load "$HOME/Library/LaunchAgents/com.omacosy.gesture.plist" 2>/dev/null || true
   launchctl kickstart -k "gui/$(id -u)/com.omacosy.gesture" 2>/dev/null || true
+  # omacosy-solo decides at STARTUP which manager it is serving: under
+  # aerospace it runs the solo-fullscreen rule, under OmniWM it keeps the outer
+  # gaps in step with the visible workspace instead. A handover leaves it in
+  # the wrong mode, so it needs the same restart the gesture daemon gets. It
+  # exits by itself when the feature is switched off, so this is safe either
+  # way — and before 2026-09-17 nothing restarted it at all, which left it dead
+  # for a whole session after a switch back from OmniWM.
+  launchctl load "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" 2>/dev/null || true
+  launchctl kickstart -k "gui/$(id -u)/com.omacosy.solo" 2>/dev/null || true
   echo
   echo "  VERIFY NOW: switch workspaces with Super+1 and Super+2."
   echo "  Type 'yes' within 90 seconds if it works."
