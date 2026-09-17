@@ -87,6 +87,8 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#47](https://github.com/paulsp94/omacosy/pull/47) | OPEN | feat(bar): the icon-only pills are squares |
+| [#46](https://github.com/paulsp94/omacosy/pull/46) | OPEN | fix(aerospace): Super+F comes out identical to Super+N |
 | [#45](https://github.com/paulsp94/omacosy/pull/45) | OPEN | fix(omniwm): Cmd+H leaves the workspace, and the Dock icon does not return to it |
 | [#44](https://github.com/paulsp94/omacosy/pull/44) | OPEN | fix(spawn): a burst of launch chords opens one window, 13 s late |
 | [#42](https://github.com/paulsp94/omacosy/pull/42) | OPEN | fix(install): keep a real ~/.zshrc working, and out of the clone |
