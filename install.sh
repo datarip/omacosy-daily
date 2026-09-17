@@ -337,6 +337,13 @@ if [ ! -x "$HOME/.local/bin/omacosy-helper" ] || [ "$REPO_DIR/helper/main.swift"
   swiftc -O -F /System/Library/PrivateFrameworks -framework DisplayServices -o "$HOME/.local/bin/omacosy-helper" "$REPO_DIR/helper/main.swift"
 fi
 
+# The custom theme's wallpaper directory. Creating it is the whole setup:
+# drop an image in and Super+Shift+T reaches a fifth theme whose colours
+# come from that image. It is left EMPTY, so a user who ignores it sees no
+# change at all. mkdir -p on an existing directory is a no-op, and nothing
+# here writes into it or changes its ownership.
+mkdir -p "$HOME/Pictures/wallpapers"
+
 # theme colours computed from one wallpaper, for the custom theme. Its own
 # binary rather than a subcommand: every binary here compiles from a single
 # source, so nothing in main.swift can call seedStrip() in bar.swift, and a
@@ -563,6 +570,7 @@ launchctl load "$HOME/Library/LaunchAgents/com.omacosy.bar.plist"
 link "$REPO_DIR/bin/theme-set"  "$HOME/.local/bin/theme-set"
 link "$REPO_DIR/bin/theme-next" "$HOME/.local/bin/theme-next"
 link "$REPO_DIR/bin/theme-bg-next" "$HOME/.local/bin/theme-bg-next"
+link "$REPO_DIR/bin/omacosy-custom-theme" "$HOME/.local/bin/omacosy-custom-theme"
 link "$REPO_DIR/bin/omacosy-toggle" "$HOME/.local/bin/omacosy-toggle"
 link "$REPO_DIR/bin/omacosy-ws" "$HOME/.local/bin/omacosy-ws"
 link "$REPO_DIR/bin/omacosy-focus-guard" "$HOME/.local/bin/omacosy-focus-guard"
