@@ -337,6 +337,15 @@ if [ ! -x "$HOME/.local/bin/omacosy-helper" ] || [ "$REPO_DIR/helper/main.swift"
   swiftc -O -F /System/Library/PrivateFrameworks -framework DisplayServices -o "$HOME/.local/bin/omacosy-helper" "$REPO_DIR/helper/main.swift"
 fi
 
+# theme colours computed from one wallpaper, for the custom theme. Its own
+# binary rather than a subcommand: every binary here compiles from a single
+# source, so nothing in main.swift can call seedStrip() in bar.swift, and a
+# fault in this file must not be able to stop the menu bar from building.
+if [ ! -x "$HOME/.local/bin/omacosy-derive" ] || [ "$REPO_DIR/helper/derive.swift" -nt "$HOME/.local/bin/omacosy-derive" ]; then
+  log "Building omacosy-derive"
+  swiftc -O -o "$HOME/.local/bin/omacosy-derive" "$REPO_DIR/helper/derive.swift"
+fi
+
 # workspace overview overlay (4-finger swipe up)
 if [ ! -x "$HOME/.local/bin/omacosy-overview" ] || [ "$REPO_DIR/helper/overview.swift" -nt "$HOME/.local/bin/omacosy-overview" ]; then
   log "Building omacosy-overview"
