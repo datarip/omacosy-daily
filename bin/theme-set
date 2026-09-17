@@ -11,22 +11,52 @@ REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 THEMES_DIR="$REPO_DIR/themes"
 CURRENT_DIR="$HOME/.config/omarchy/current"
 
+CUSTOM="$REPO_DIR/bin/omacosy-custom-theme"
+STATE_DIR="$HOME/.local/state/omacosy"
+CUSTOM_INDEX="$STATE_DIR/custom-index"
+
+# "custom" is listed only when its wallpaper directory exists and holds an
+# image. omacosy-custom-theme owns that rule.
+have_custom() { [ -x "$CUSTOM" ] && "$CUSTOM" dir >/dev/null 2>&1; }
+names() { for t in "$THEMES_DIR"/*/; do basename "$t"; done; have_custom && echo custom; }
+
 case "${1:-list}" in
   list)
-    for t in "$THEMES_DIR"/*/; do basename "$t"; done
+    names
     exit 0
     ;;
 esac
 
 NAME="$1"
-if [ ! -d "$THEMES_DIR/$NAME" ]; then
+
+# Every shipped theme is a directory under themes/. The custom theme is
+# not: its colours are computed per wallpaper, so it resolves to a
+# GENERATED directory whose name changes with the wallpaper. Everything
+# below this point works on THEME_DIR and does not care which it got.
+if [ "$NAME" = custom ] && have_custom; then
+  # The custom theme REMEMBERS its wallpaper, where a shipped theme
+  # restarts at its first image. A shipped theme holds 3 to 7 wallpapers
+  # so restarting costs nothing; a custom folder can hold hundreds, and
+  # restarting would put everything past the first few out of reach.
+  IMG=""
+  if [ -f "$CUSTOM_INDEX" ]; then
+    IMG="$(cat "$CUSTOM_INDEX")"
+    [ -f "$IMG" ] || IMG=""
+  fi
+  [ -n "$IMG" ] || IMG="$("$CUSTOM" list | head -1)"
+  THEME_DIR="$("$CUSTOM" theme "$IMG")" || exit 1
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$IMG" > "$CUSTOM_INDEX"
+elif [ -d "$THEMES_DIR/$NAME" ]; then
+  THEME_DIR="$THEMES_DIR/$NAME"
+else
   echo "theme-set: unknown theme '$NAME'. Available:" >&2
-  for t in "$THEMES_DIR"/*/; do basename "$t"; done >&2
+  names >&2
   exit 1
 fi
 
 mkdir -p "$CURRENT_DIR"
-ln -sfn "$THEMES_DIR/$NAME" "$CURRENT_DIR/theme"
+ln -sfn "$THEME_DIR" "$CURRENT_DIR/theme"
 
 # Korren: prefer its hand-tuned built-in theme when one matches; fall
 # back to live-deriving from the omarchy palette. Korren watches its
@@ -44,7 +74,7 @@ fi
 # omacosy-helper wraps NSWorkspace (System Events wallpaper scripting
 # half-broke on macOS 14+: some desktops return "missing value" and
 # silently keep the old picture); osascript remains as fallback.
-WALL="$(ls "$THEMES_DIR/$NAME"/backgrounds/* 2>/dev/null | head -1)"
+WALL="$(ls "$THEME_DIR"/backgrounds/* 2>/dev/null | head -1)"
 if [ -n "$WALL" ]; then
   # theme-bg-next cycles through the rest; a theme switch restarts the
   # cycle at the first image, so the remembered position moves with it
@@ -81,8 +111,8 @@ fi
 # color lives there as 0-1 floats; OmniWM live-reloads, so it would recolor
 # at once.
 OMNIWM_SETTINGS="$HOME/.config/omniwm/settings.toml"
-if [ -f "$OMNIWM_SETTINGS" ] && [ -f "$THEMES_DIR/$NAME/borders.sh" ]; then
-  ACTIVE="$(grep -o 'ACTIVE_COLOR=0x[0-9a-fA-F]*' "$THEMES_DIR/$NAME/borders.sh" | head -1 | cut -d= -f2)"
+if [ -f "$OMNIWM_SETTINGS" ] && [ -f "$THEME_DIR/borders.sh" ]; then
+  ACTIVE="$(grep -o 'ACTIVE_COLOR=0x[0-9a-fA-F]*' "$THEME_DIR/borders.sh" | head -1 | cut -d= -f2)"
   if [ -n "$ACTIVE" ]; then
     python3 - "$OMNIWM_SETTINGS" "$ACTIVE" <<'PY'
 import re, sys
