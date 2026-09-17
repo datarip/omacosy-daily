@@ -547,16 +547,28 @@ print(n)
 # Called on its own before a spawn: a window is about to arrive, so the
 # workspace is about to stop being a lone one whatever it is now.
 omni_restore() {
-  local rest_top rest_side
+  local rest_side top _ignored
   if [ -s "$OMNI_REST" ]; then
-    read -r rest_top rest_side <"$OMNI_REST"
+    read -r _ignored rest_side <"$OMNI_REST"
     rm -f "$OMNI_REST"
   else
     # nothing recorded, so nothing was flipped: leave the file alone rather
     # than assert a default over whatever the user has set
     return 0
   fi
-  omni_write_gaps "${rest_top:-38}" "${rest_side:-8}"
+
+  # The TOP gap is ASKED FOR, never restored from the snapshot. It belongs to
+  # omacosy-bar-autohide and it changes when `autohide` does, so a value
+  # recorded before that change is wrong by the time it is put back.
+  #
+  # Measured 2026-09-17: with autohide off and a lone window the snapshot held
+  # 38; switching autohide on made omacosy-bar-autohide write 8, correctly,
+  # and this function then wrote 38 back over it. The bar was hidden and
+  # OmniWM still reserved its strip, so two tiled windows sat under an empty
+  # 38 point band. The side gap is the only number here that is ours to
+  # remember — omacosy-bar-autohide never touches left, right or bottom.
+  top=$("$AUTOHIDE" top-gap rest builtin 2>/dev/null)
+  omni_write_gaps "${top:-38}" "${rest_side:-8}"
 }
 
 omni_sync() {
