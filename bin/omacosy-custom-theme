@@ -248,8 +248,36 @@ cmd_follow() {
 
 cmd_rebuild() {
   local d n=0; d="$(cmd_dir)" || { echo "omacosy-custom-theme: nothing to rebuild" >&2; return 1; }
-  rm -rf "$DERIVED"
+
+  # What is on screen right now, so it can be put back and RELOADED. A
+  # derived directory is named after a hash of its wallpaper's path, so a
+  # rebuild recreates it under the same name — which means the symlink in
+  # ~/.config/omarchy/current never changes, kqueue never fires, and the bar
+  # and the borders daemon keep serving the palette they already have. The
+  # files on disk are new and the desktop still shows the old colours.
+  local wasCustom="" showing=""
+  if [ "$(cmd_current 2>/dev/null)" = custom ] && [ -f "$CUSTOM_INDEX" ]; then
+    wasCustom=1; showing="$(cat "$CUSTOM_INDEX")"
+  fi
+
+  # Not `rm -rf` on the live tree: that leaves current/theme dangling for as
+  # long as the rebuild takes. Build beside it and swap.
+  local tmp="$DERIVED.rebuilding"
+  rm -rf "$tmp"; mkdir -p "$tmp"
+  local keep="$DERIVED"
+  DERIVED="$tmp"
   while IFS= read -r f; do cmd_theme "$f" >/dev/null && n=$((n+1)); done < <(images "$d")
+  DERIVED="$keep"
+  rm -rf "$DERIVED.old"
+  [ -d "$DERIVED" ] && mv "$DERIVED" "$DERIVED.old"
+  mv "$tmp" "$DERIVED"
+  rm -rf "$DERIVED.old"
+
+  # The reload. Re-creating the symlink IS the notification, so it has to
+  # happen after the files are in place.
+  if [ -n "$wasCustom" ] && [ -f "$showing" ]; then
+    local dir; dir="$(cmd_theme "$showing")" && ln -sfn "$dir" "$HOME/.config/omarchy/current/theme"
+  fi
   echo "rebuilt $n themes from $d"
 }
 
