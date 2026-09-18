@@ -559,11 +559,31 @@ That is the whole setup. No config file, no flag. An empty or missing
 directory hides the feature: the cycle stays four themes and nothing is
 printed.
 
-The colors come from the same measurement the bar already uses to match
-the real macOS menu bar, extended into a full palette using the lightness
-ladder all four shipped themes share. Every color is then checked against
-the surface it sits on and corrected until it passes — verified across 66
-wallpapers with no failures.
+**How the colors are chosen.** The bar's own background keeps the
+measurement omacosy already makes to match the real macOS menu bar — a
+34-point strip across the top of the picture. Everything else reads the
+**whole** image, because a strip across the top is usually sky and says
+nothing about the picture: a power-station photo measures near-grey at the
+top and orange everywhere else.
+
+The picture's hue is its pixels weighted by saturation x value cubed. The
+cube is fitted, not chosen — a moonlit scene that is 61% dark purple by
+area and 7% bright blue glow reads as blue, and only the cube agrees.
+
+**A pastel wallpaper gets a pastel theme, a saturated one gets neon.** The
+accent's saturation follows the picture rather than a fixed floor: across a
+48-image folder, pastel wallpapers average an accent saturation of 0.53 and
+saturated ones 0.77.
+
+**The bar and the focus ring always name the same color.** They differ only
+in treatment — the ring keeps more of the picture's saturation and stays
+brighter, because it is a stroke on a window rather than text on a pill.
+
+Every color is then checked against the surface it sits on and corrected
+until it passes. Seven contrast floors, taken from the gaps the four
+shipped themes already hold, verified across 65 wallpapers with no
+failures. The derivation is pure: the same image always yields the same
+palette, so a cached theme and a fresh one cannot disagree.
 
 Optionally, a day and a night theme that follow the macOS appearance, so
 sunrise and sunset are macOS's schedule rather than a second one:

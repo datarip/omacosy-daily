@@ -43,7 +43,7 @@ requests are where they can become everyone's. See
 
 | Change | Where |
 | --- | --- |
-| A fifth theme, `custom`, where **every wallpaper is its own theme**: drop images in `~/Pictures/wallpapers` and `Super+Shift+B` recomputes the bar, pill, icon and ring colours from each picture. An empty directory hides it entirely, and the four shipped themes are untouched. [docs/derived-themes.md](docs/derived-themes.md) | `helper/derive.swift`, `bin/omacosy-custom-theme`, `bin/theme-set`, `bin/theme-next`, `bin/theme-bg-next` |
+| A fifth theme, `custom`, where **every wallpaper is its own theme**: drop images in `~/Pictures/wallpapers` and `Super+Shift+B` recomputes the bar, pill, icon and ring colours from each picture. The hue comes from the whole image weighted by saturation x value cubed, a pastel wallpaper gets a pastel theme and a saturated one gets neon, the bar and the ring always name the same colour, and seven contrast floors hold across 65 wallpapers. An empty directory hides it entirely, and the four shipped themes are untouched. [docs/derived-themes.md](docs/derived-themes.md) | `helper/derive.swift`, `bin/omacosy-custom-theme`, `bin/theme-set`, `bin/theme-next`, `bin/theme-bg-next` |
 | A day and a night theme following the macOS appearance, so sunrise and sunset stay macOS's schedule. Either may name a shipped theme, one of its wallpapers, or a file of your own | `bin/omacosy-appearance`, `install.sh` |
 | Your own values live in `~/.config/omacosy/settings.conf`, outside the clone. `omacosy-settings` applies them after every install | `bin/omacosy-settings`, `config/settings.template.conf` |
 | `omacosy-window-corners` sets the radius macOS draws window corners with, and keeps the focus ring concentric | `bin/omacosy-window-corners` |
