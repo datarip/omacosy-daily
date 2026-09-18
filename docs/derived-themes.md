@@ -221,6 +221,28 @@ lighthouse      297 lilac        235 blue        62 degrees
 **The ring takes the picture's hue.** It is the one element that has to be
 seen rather than blend in, and it sits on a window, not on the bar.
 
+**The accent's saturation follows the picture's.** A pastel wallpaper gets a
+pastel accent and a saturated one gets a neon accent. Forcing a floor of 0.85
+put a colour on the bar that the picture does not contain: a near-white rain
+scene wore pure red, a lilac seascape wore hot magenta. Measured across the
+corpus, pastel wallpapers now average an accent saturation of 0.53 and
+saturated ones 0.77.
+
+**The accent's hue follows the picture when the picture is confident, and the
+bar otherwise — with no distance limit.** That last part is the one
+difference from the pills below. The pills sit on the bar and must belong to
+it, so a hue 179 degrees away is foreign. The accent is one chip and one line
+of text, and it is the bar's chance to name the picture: a red sun over a
+teal sky should give a red accent even though the bar is teal. Share alone
+separates the cases — a beige desktop whose only other colour is a dog scores
+49% and keeps a beige accent.
+
+**The accent escapes its bands in the LADDER's direction**, bright on a dark
+bar and dark on a light one, rather than toward whichever side is nearer.
+Taking the nearer side sent that red accent on its teal bar down to
+near-black, because raising its saturation had lowered its luminance past the
+midpoint.
+
 **The pills normally take the bar's hue, and the picture overrules it only
 when confident and nearby.** A 34-point strip can lie about a picture: on
 moon-over-a-mountain it catches the purple edge of a sky whose body is blue,
@@ -246,7 +268,7 @@ Dark ladder — light text on a dark bar:
 pill   = hue,  saturation × 0.85,       max(value + 0.11, 0.20)
 muted  = hue,  0.22,                    0.48
 label  = hue,  0.18,                    0.92
-accent = picture hue,  max(0.45, loud sat × 1.15),   0.92
+accent = accent hue,  min(0.95, max(0.35, accent sat x 2.4)),  0.92
 ```
 
 Light ladder — dark text on a light bar:
@@ -255,7 +277,7 @@ Light ladder — dark text on a light bar:
 pill   = base hue,  base sat × 0.75,     value × 0.80
 muted  = base hue,  min(base sat, 0.30), value × 0.42
 label  = base hue,  min(base sat, 0.38), value × 0.16
-accent = picture hue,  max(0.85, loud sat),  0.92
+accent = accent hue,  min(0.92, max(0.35, accent sat x 2.4)),  0.92
 ```
 
 With no loud colour the saturations become 0 and the result is a neutral
@@ -364,10 +386,10 @@ produce exactly:
 
 | wallpaper | bar | pill | muted | label | accent | ring |
 | --- | --- | --- | --- | --- | --- | --- |
-| `catppuccin/1-totoro.webp` | `1d1d33` | `44314f` | `8a7c92` | `dbc0eb` | `c481eb` | `c884f0` | dark |
-| `gruvbox/1-the-backwater.jpg` | `464c35` | `68604e` | `a59f93` | `ece0c5` | `ebc778` | `f0ca76` | dark |
-| `osaka-jade/1-glowing-city.webp` | `003c30` | `0d5842` | `7f958f` | `c0ebde` | `00eba5` | `0cf0ac` | dark |
-| `tokyo-night/0-winding-road.webp` | `7540ac` | `925dc8` | `bcb6c2` | `faf7fd` | `f189b2` | `f05290` | dark |
+| `catppuccin/1-totoro.webp` | `1d1d33` | `44314f` | `8a7c92` | `dbc0eb` | `ab38ee` | `c884f0` | dark |
+| `gruvbox/1-the-backwater.jpg` | `464c35` | `68604e` | `a59f93` | `ece0c5` | `eba50c` | `f0ca76` | dark |
+| `osaka-jade/1-glowing-city.webp` | `003c30` | `0d5842` | `7f958f` | `c0ebde` | `0ceba8` | `0cf0ac` | dark |
+| `tokyo-night/0-winding-road.webp` | `7540ac` | `925dc8` | `bcb6c2` | `faf7fd` | `c594f6` | `f05290` | dark |
 
 Reproducing a hand judgement is not the goal; producing a coherent scheme
 is. Still, reading the whole image rather than the top strip moved three

@@ -268,7 +268,7 @@ func towardLum(_ c: RGB, _ wanted: Double) -> RGB {
 // Push a colour out of two forbidden luminance bands at once, the bar's and
 // the pill's. Calling separate() twice cannot do it: the second call happily
 // lands back inside the first band.
-func clearOf(_ c: RGB, bar: RGB, pill: RGB) -> RGB {
+func clearOf(_ c: RGB, bar: RGB, pill: RGB, preferUp: Bool) -> RGB {
     let lb = q8(bar).lum, lp = q8(pill).lum
     let lo = min(lb - 0.28, lp - 0.20)
     let hi = max(lb + 0.28, lp + 0.20)
@@ -276,7 +276,11 @@ func clearOf(_ c: RGB, bar: RGB, pill: RGB) -> RGB {
     if lc <= lo || lc >= hi { return c }
     let downOK = lo >= 0.0, upOK = hi <= 1.0
     let goUp: Bool
-    if upOK && downOK { goUp = (hi - lc) <= (lc - lo) }
+    // The ladder already decided which way this palette runs: bright on a
+    // dark bar, dark on a light one. Taking the merely NEARER side instead
+    // sent a red accent on a teal bar down to near-black, because raising
+    // its saturation had lowered its luminance past the midpoint.
+    if upOK && downOK { goUp = preferUp }
     else if upOK { goUp = true }
     else if downOK { goUp = false }
     else { goUp = (1.0 - lc) >= lc }
@@ -323,6 +327,20 @@ func derive(_ base: RGB, picture: (hue: Double, sat: Double, share: Double)?) ->
         let gap = min(abs(p.hue - baseH), 360 - abs(p.hue - baseH))
         if gap <= 90 { pillH = p.hue; pillS = max(baseS, p.sat * 0.7) }
     }
+
+    // The accent follows the picture when the picture is CONFIDENT, and the
+    // bar otherwise. Note the missing condition: unlike the pills, there is
+    // no distance limit. The pills have to sit on the bar and belong to it,
+    // so a hue 179 degrees away is foreign. The accent is one small chip and
+    // one line of text, and it is the bar's chance to name the picture, so a
+    // red sun over a teal sky should give a red accent even though the bar
+    // is teal.
+    //
+    // Share alone separates the two cases that matter: a beige desktop whose
+    // only other colour is a dog scores 49% and keeps a beige accent, and
+    // that red sun scores high and keeps its red.
+    var accentH = baseH, accentS = baseS
+    if let p = picture, p.share >= 0.65 { accentH = p.hue; accentS = max(baseS, p.sat) }
     // Luminance, NOT V. A saturated purple at V=0.62 has luminance 0.27 and
     // needs LIGHT text; choosing on V called it a light bar and painted
     // near-black text on it.
@@ -343,14 +361,20 @@ func derive(_ base: RGB, picture: (hue: Double, sat: Double, share: Double)?) ->
         // is brown and a cool one is near-black. The hues were right the
         // whole time — a red umbrella came out as dark brown — and one
         // multiplier was crushing them.
+        // Pastel picture, pastel accent. Saturated picture, neon accent. The
+        // old floors — 0.85 here and 0.45 on the dark ladder — forced a
+        // pastel wallpaper to wear a colour it does not contain: a
+        // near-white rain scene got pure red, a lilac seascape got hot
+        // magenta. The saturation now FOLLOWS the picture, with a floor only
+        // low enough to keep an accent from reading as grey.
         accent = low ? fromHSV(0, 0, 0.06)
-                     : fromHSV(H + accentHueShift, max(0.85, S), 0.92)
+                     : fromHSV(accentH, min(0.92, max(0.35, accentS * 2.4)), 0.92)
     } else {
         pill   = fromHSV(pillH, pillS * 0.85, max(V + 0.11, 0.20))
         muted  = fromHSV(pillH, min(pillS, 0.22), 0.48)
         label  = fromHSV(pillH, min(pillS, 0.18), 0.92)
         accent = low ? fromHSV(0, 0, 0.99)
-                     : fromHSV(H + accentHueShift, max(0.45, S * 1.15), 0.92)
+                     : fromHSV(accentH, min(0.95, max(0.35, accentS * 2.4)), 0.92)
     }
 
     // The floors are the gaps the four stock themes already hold. Order
@@ -360,7 +384,7 @@ func derive(_ base: RGB, picture: (hue: Double, sat: Double, share: Double)?) ->
     label  = separate(label,  from: pill, need: 0.50)
     // The accent is drawn ON pills — it fills the focused workspace chip and
     // it is the app name's text colour — so clearing the BAR is not enough.
-    accent = clearOf(accent, bar: base, pill: pill)
+    accent = clearOf(accent, bar: base, pill: pill, preferUp: !light)
     muted  = towardLum(muted, (q8(pill).lum + q8(label).lum) / 2)
 
     // THE RING IS NOT THE ACCENT.
