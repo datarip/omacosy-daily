@@ -153,23 +153,29 @@ func baseColour(of url: URL) -> RGB? {
     return RGB(r: menuBarLike(mean.0), g: menuBarLike(mean.1), b: menuBarLike(mean.2))
 }
 
-// MARK: - the loud colour
+// MARK: - the picture's colour
 
-// The colour the eye goes to, which is NOT the colour covering the most
-// area. A page of purple line art on blue-grey paper is 87% paper, so an
-// average says blue; only the loudest pixels get a vote here, and the paper
-// never qualifies.
+// The hue the picture READS as, and how much of the picture agrees.
 //
-// Returns nil when nothing qualifies — a greyscale photograph — and the
-// caller then has no hue and must not invent one. Inventing one is what
-// painted a black-and-white city yellow and a black-and-white portrait pink.
-func loudColour(of url: URL) -> (hue: Double, sat: Double)? {
+// Weighted by saturation x value CUBED. The cube is the whole trick and it
+// was fitted, not chosen: the moon-over-a-mountain picture is 61% dark
+// purple by area and 7% bright blue glow, and the eye calls it blue. Linear
+// and squared weighting both answer purple; cubed answers blue. On the
+// lighthouse, whose hues are spread so thinly that no 10-degree bucket holds
+// more than 11%, cubed is also the first that answers pink instead of a
+// narrow blue band.
+//
+// Hues go into 36 buckets smoothed over +/-20 degrees, so a hue spread
+// across several buckets is not beaten by a narrow one. `share` is how much
+// of the total weight the winning window holds — the caller uses it to
+// decide how far to trust this.
+//
+// nil means the picture has no colour at all: a greyscale photograph.
+func pictureColour(of url: URL) -> (hue: Double, sat: Double, share: Double)? {
     guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
           let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
     let bm = NSBitmapImageRep(cgImage: cg)
     guard bm.pixelsWide > 0, bm.pixelsHigh > 0 else { return nil }
-    // A grid, not every pixel: 200x200 samples answer the same question on a
-    // 6016x3384 image and cost a fraction of the walk.
     let sx = max(1, bm.pixelsWide / 200), sy = max(1, bm.pixelsHigh / 200)
 
     var samples: [(h: Double, s: Double, v: Double)] = []
@@ -184,41 +190,42 @@ func loudColour(of url: URL) -> (hue: Double, sat: Double)? {
     }
     guard samples.count > 20 else { return nil }
 
-    // The cut is the 90th percentile of saturation TIMES value. Saturation
-    // alone picked a small dark ultra-saturated region over a large bright
-    // one — measured on a neon car photograph, a blue at s0.90 v0.31 beat the
-    // magenta filling the frame. The eye weighs both, so the score does too.
-    //
-    // The floor matters as much as the percentile: a greyscale image has a
-    // 90th percentile as well, and it is sensor noise.
+    // IS there any colour at all? This test is kept exactly as it was, because
+    // it is the one that stopped a black-and-white city being painted yellow
+    // and a black-and-white portrait pink. A greyscale image has a 90th
+    // percentile of saturation too, and it is sensor noise, so the floor
+    // matters as much as the percentile.
     let scores = samples.map { $0.s * $0.v }.sorted()
     let cut = max(0.12, scores[Int(0.90 * Double(scores.count - 1))])
-    let loud = samples.filter { $0.s * $0.v >= cut && $0.s >= 0.18 }
-    guard loud.count > 5 else { return nil }
+    guard samples.filter({ $0.s * $0.v >= cut && $0.s >= 0.18 }).count > 5 else { return nil }
 
+    // WHICH colour, then, over everything that carries any chroma at all.
     var bucket = [Double](repeating: 0, count: 36)
     var bs = [Double](repeating: 0, count: 36)
-    for t in loud {
+    for t in samples where t.s >= 0.10 {
+        let w = t.s * t.v * t.v * t.v
         let i = min(35, Int(t.h / 10))
-        let w = t.s * t.v
         bucket[i] += w
         bs[i] += t.s * w
     }
-    guard let best = bucket.indices.max(by: { bucket[$0] < bucket[$1] }), bucket[best] > 0
+
+    var smooth = [Double](repeating: 0, count: 36)
+    for i in 0..<36 { for d in -2...2 { smooth[i] += bucket[(i + d + 36) % 36] } }
+    guard let best = smooth.indices.max(by: { smooth[$0] < smooth[$1] }), smooth[best] > 0
     else { return nil }
 
-    // Merge the two neighbours with a circular mean, so a hue sitting on a
-    // bucket edge is not split in half and beaten by a lesser one.
     var wsum = 0.0, hx = 0.0, hy = 0.0, ss = 0.0
-    for d in -1...1 {
+    for d in -2...2 {
         let i = (best + d + 36) % 36
         let w = bucket[i]; guard w > 0 else { continue }
         let ang = (Double(i) * 10 + 5) * .pi / 180
         hx += cos(ang) * w; hy += sin(ang) * w; ss += bs[i]; wsum += w
     }
+    guard wsum > 0 else { return nil }
     var h = atan2(hy, hx) * 180 / .pi
     if h < 0 { h += 360 }
-    return (h, min(1.0, ss / wsum))
+    let totalWeight = bucket.reduce(0, +)
+    return (h, min(1.0, ss / wsum), totalWeight > 0 ? smooth[best] / totalWeight : 0)
 }
 
 // MARK: - the palette
@@ -283,7 +290,7 @@ func clearOf(_ c: RGB, bar: RGB, pill: RGB) -> RGB {
     return target
 }
 
-func derive(_ base: RGB, loud: (hue: Double, sat: Double)?) -> Palette {
+func derive(_ base: RGB, picture: (hue: Double, sat: Double, share: Double)?) -> Palette {
     // Two hues, for two jobs.
     //
     // The BAR, the pills, the muted text and the labels all keep the BASE
@@ -296,9 +303,26 @@ func derive(_ base: RGB, loud: (hue: Double, sat: Double)?) -> Palette {
     // picture. It is the one element that has to be SEEN rather than blend
     // in, and it sits on a window, not on the bar.
     let (baseH, baseS, V) = toHSV(base)
-    let H = loud?.hue ?? 0
-    let S = loud?.sat ?? 0
-    let low = loud == nil
+    let H = picture?.hue ?? 0
+    let S = picture?.sat ?? 0
+    let low = picture == nil
+
+    // Which hue the PILLS wear. Normally the bar's, because the bar is the
+    // wallpaper showing through and they sit on it. But the bar is a 34-point
+    // strip across the top, and a strip can lie about the picture: on
+    // moon-over-a-mountain it catches the purple edge of a sky whose body is
+    // blue, and the mauve pills that produced read as foreign.
+    //
+    // So the picture overrules the strip only when it is BOTH confident and
+    // nearby: at least 65% of the weight behind one hue, and within 90
+    // degrees of the strip. The beige picture with a small blue jacket fails
+    // both tests (49%, 170 degrees) and keeps its beige pills, which is the
+    // case this guard exists to protect.
+    var pillH = baseH, pillS = baseS
+    if let p = picture, p.share >= 0.65 {
+        let gap = min(abs(p.hue - baseH), 360 - abs(p.hue - baseH))
+        if gap <= 90 { pillH = p.hue; pillS = max(baseS, p.sat * 0.7) }
+    }
     // Luminance, NOT V. A saturated purple at V=0.62 has luminance 0.27 and
     // needs LIGHT text; choosing on V called it a light bar and painted
     // near-black text on it.
@@ -306,9 +330,9 @@ func derive(_ base: RGB, loud: (hue: Double, sat: Double)?) -> Palette {
 
     var pill: RGB, muted: RGB, label: RGB, accent: RGB
     if light {
-        pill   = fromHSV(baseH, baseS * 0.75, V * 0.80)
-        muted  = fromHSV(baseH, min(baseS, 0.30), V * 0.42)
-        label  = fromHSV(baseH, min(baseS, 0.38), V * 0.16)
+        pill   = fromHSV(pillH, pillS * 0.75, V * 0.80)
+        muted  = fromHSV(pillH, min(pillS, 0.30), V * 0.42)
+        label  = fromHSV(pillH, min(pillS, 0.38), V * 0.16)
         // No loud colour means no hue, so the accent goes to the opposite
         // end of the ladder instead — the most visible thing available, and
         // honest about the picture having no colour.
@@ -322,9 +346,9 @@ func derive(_ base: RGB, loud: (hue: Double, sat: Double)?) -> Palette {
         accent = low ? fromHSV(0, 0, 0.06)
                      : fromHSV(H + accentHueShift, max(0.85, S), 0.92)
     } else {
-        pill   = fromHSV(baseH, baseS * 0.85, max(V + 0.11, 0.20))
-        muted  = fromHSV(baseH, min(baseS, 0.22), 0.48)
-        label  = fromHSV(baseH, min(baseS, 0.18), 0.92)
+        pill   = fromHSV(pillH, pillS * 0.85, max(V + 0.11, 0.20))
+        muted  = fromHSV(pillH, min(pillS, 0.22), 0.48)
+        label  = fromHSV(pillH, min(pillS, 0.18), 0.92)
         accent = low ? fromHSV(0, 0, 0.99)
                      : fromHSV(H + accentHueShift, max(0.45, S * 1.15), 0.92)
     }
@@ -404,7 +428,7 @@ if args[1] == "--print" {
         guard let base = baseColour(of: url) else {
             print("FAIL  \(url.lastPathComponent)"); continue
         }
-        let p = derive(base, loud: loudColour(of: url))
+        let p = derive(base, picture: pictureColour(of: url))
         print("\(p.bar.hex) \(p.pill.hex) \(p.muted.hex) \(p.label.hex) \(p.accent.hex) "
             + "\(p.isLight ? "light" : "dark")\(p.isLowChroma ? "+lowchroma" : "") "
             + url.lastPathComponent)
@@ -423,7 +447,7 @@ guard let base = baseColour(of: image) else {
     exit(1)
 }
 do {
-    try write(derive(base, loud: loudColour(of: image)), to: URL(fileURLWithPath: args[2]), from: image)
+    try write(derive(base, picture: pictureColour(of: image)), to: URL(fileURLWithPath: args[2]), from: image)
 } catch {
     FileHandle.standardError.write(
         "omacosy-derive: \(error.localizedDescription)\n".data(using: .utf8)!)
