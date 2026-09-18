@@ -751,6 +751,23 @@ and paints a still frame. Measured, and confirmed in use: 38 frames at
 40 ms, and not one desktop pixel moved over 1.7 s. They are accepted because a still frame is
 a usable wallpaper and the colours come out fine.
 
+**The theme cache grows without bound.** It is the only structure here that
+does: everything else holds one entry per current wallpaper. Deleting a
+wallpaper orphans its derived theme, because the hash maps a path to a theme
+and nothing maps back (5.2). About 8 KB each, so a hundred deletions is
+800 KB.
+
+Three ways to handle it were weighed, and the first was chosen:
+
+| option | cost | why |
+| --- | --- | --- |
+| **leave it, `rebuild` is the cleanup** | none | the bound is slow enough that a documented command covers it |
+| prune on `rebuild` only | none | already the behaviour, it just was not deliberate |
+| prune opportunistically, say every hundredth lookup | small | adds a background side effect to a command whose job is to be fast and predictable, for very little |
+
+Revisit it if anyone reports a cache worth noticing. Until then `rebuild`
+clears orphans and 5.2 says how to find them.
+
 **The four shipped themes are untouched.** They keep their hand-picked
 files and their exact behaviour, including restarting at their first
 wallpaper on a theme change. The custom theme differs there on purpose: it
