@@ -284,11 +284,18 @@ func clearOf(_ c: RGB, bar: RGB, pill: RGB) -> RGB {
 }
 
 func derive(_ base: RGB, loud: (hue: Double, sat: Double)?) -> Palette {
-    let (_, _, V) = toHSV(base)
-    // The BAR keeps the base colour untouched: it has to match the real macOS
-    // menu bar, and only the strip the bar covers can say what that is.
-    // Everything that sits ON the bar takes the loud hue instead, because the
-    // top strip is a thin slice of sky and says nothing about the picture.
+    // Two hues, for two jobs.
+    //
+    // The BAR, the pills, the muted text and the labels all keep the BASE
+    // hue. The bar is the wallpaper showing through, so anything sitting on
+    // it in the same hue family belongs there. Giving them the loud hue
+    // instead made a beige picture wear blue pills and a pink one wear blue
+    // pills, and both read as foreign objects pasted onto the desktop.
+    //
+    // The RING takes the loud hue — the colour the eye goes to in the whole
+    // picture. It is the one element that has to be SEEN rather than blend
+    // in, and it sits on a window, not on the bar.
+    let (baseH, baseS, V) = toHSV(base)
     let H = loud?.hue ?? 0
     let S = loud?.sat ?? 0
     let low = loud == nil
@@ -299,9 +306,9 @@ func derive(_ base: RGB, loud: (hue: Double, sat: Double)?) -> Palette {
 
     var pill: RGB, muted: RGB, label: RGB, accent: RGB
     if light {
-        pill   = fromHSV(H, low ? 0 : S * 0.55, V * 0.80)
-        muted  = fromHSV(H, low ? 0 : 0.30, V * 0.42)
-        label  = fromHSV(H, low ? 0 : 0.38, V * 0.16)
+        pill   = fromHSV(baseH, baseS * 0.75, V * 0.80)
+        muted  = fromHSV(baseH, min(baseS, 0.30), V * 0.42)
+        label  = fromHSV(baseH, min(baseS, 0.38), V * 0.16)
         // No loud colour means no hue, so the accent goes to the opposite
         // end of the ladder instead — the most visible thing available, and
         // honest about the picture having no colour.
@@ -315,9 +322,9 @@ func derive(_ base: RGB, loud: (hue: Double, sat: Double)?) -> Palette {
         accent = low ? fromHSV(0, 0, 0.06)
                      : fromHSV(H + accentHueShift, max(0.85, S), 0.92)
     } else {
-        pill   = fromHSV(H, low ? 0 : S * 0.85, max(V + 0.11, 0.20))
-        muted  = fromHSV(H, low ? 0 : 0.22, 0.48)
-        label  = fromHSV(H, low ? 0 : 0.18, 0.92)
+        pill   = fromHSV(baseH, baseS * 0.85, max(V + 0.11, 0.20))
+        muted  = fromHSV(baseH, min(baseS, 0.22), 0.48)
+        label  = fromHSV(baseH, min(baseS, 0.18), 0.92)
         accent = low ? fromHSV(0, 0, 0.99)
                      : fromHSV(H + accentHueShift, max(0.45, S * 1.15), 0.92)
     }

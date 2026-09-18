@@ -195,9 +195,24 @@ yellow and a black-and-white portrait pink.
 
 Cost: one grid pass over an already-decoded image, about 40,000 samples.
 
-### 4.3 The other four colours
+### 4.3 The other four colours — two hues, for two jobs
 
-The bar keeps the base colour. Everything sitting on it takes the loud hue.
+**The pills, the muted text and the labels keep the BASE hue**, the same
+one as the bar. The bar is the wallpaper showing through, so anything on
+it in that hue family belongs there. Giving them the loud hue instead made
+a beige picture wear blue pills and a pink one wear blue pills, and both
+read as foreign objects pasted onto the desktop:
+
+```
+                bar hue          pill hue      apart
+cat with ball   25  beige        195 blue       170 degrees
+lighthouse      297 lilac        235 blue        62 degrees
+```
+
+**The ring takes the LOUD hue.** It is the one element that has to be seen
+rather than blend in, and it sits on a window, not on the bar. It is also
+the only place the picture's own colour needs to appear.
+
 From there: a ladder.
 
 ```
@@ -215,16 +230,16 @@ Dark ladder — light text on a dark bar:
 pill   = hue,  saturation × 0.85,       max(value + 0.11, 0.20)
 muted  = hue,  0.22,                    0.48
 label  = hue,  0.18,                    0.92
-accent = hue,  max(0.45, sat × 1.15),   0.92
+accent = LOUD hue,  max(0.45, loud sat × 1.15),   0.92
 ```
 
 Light ladder — dark text on a light bar:
 
 ```
-pill   = hue,  saturation × 0.55,   value × 0.80
-muted  = hue,  0.30,                value × 0.42
-label  = hue,  0.38,                value × 0.16
-accent = hue,  max(0.85, sat),      0.92
+pill   = base hue,  base sat × 0.75,     value × 0.80
+muted  = base hue,  min(base sat, 0.30), value × 0.42
+label  = base hue,  min(base sat, 0.38), value × 0.16
+accent = LOUD hue,  max(0.85, loud sat),  0.92
 ```
 
 With no loud colour the saturations become 0 and the result is a neutral
@@ -293,10 +308,10 @@ produce exactly:
 
 | wallpaper | bar | pill | muted | label | accent |
 | --- | --- | --- | --- | --- | --- |
-| `catppuccin/1-totoro.webp` | `1d1d33` | `463e4f` | `8d8398` | `d5c0eb` | `b481eb` |
-| `gruvbox/1-the-backwater.jpg` | `464c35` | `6e5b3d` | `a29b8f` | `ebdbc2` | `ebad4d` |
-| `osaka-jade/1-glowing-city.webp` | `003c30` | `0e5841` | `7f958e` | `c0ebdd` | `00eba2` |
-| `tokyo-night/0-winding-road.webp` | `7540ac` | `c86884` | `534146` | `090808` | `f4a1ba` |
+| `catppuccin/1-totoro.webp` | `1d1d33` | `31334f` | `7c7d92` | `c0c2eb` | `b481eb` | dark |
+| `gruvbox/1-the-backwater.jpg` | `464c35` | `60684e` | `a2a796` | `deebc0` | `ebad4d` | dark |
+| `osaka-jade/1-glowing-city.webp` | `003c30` | `0d584a` | `7f9591` | `c0ebe2` | `00eba2` | dark |
+| `tokyo-night/0-winding-road.webp` | `7540ac` | `925dc8` | `bcb6c2` | `faf7fd` | `f28caa` | dark |
 
 Reproducing a hand judgement is not the goal; producing a coherent scheme
 is. Still, reading the whole image rather than the top strip moved three
