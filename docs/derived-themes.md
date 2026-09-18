@@ -163,7 +163,7 @@ A Python prototype of this code did skip it, via Pillow's
 `convert("RGB")`, and produced a systematically darker base for every
 image.
 
-### 4.2 The loud colour
+### 4.2 The picture's colour
 
 The base colour is the right input for the **bar**, because the bar sits over
 that strip. It is the wrong input for everything else. A thin band across the
@@ -179,19 +179,27 @@ Measured on real failures:
 | moon over a tent | purple sky edge | the blue centre |
 
 So a second pass reads the **whole** image on a 200x200 grid and finds the
-colour the eye goes to. That is not the colour covering the most area: the
+hue the picture reads as. That is not the colour covering the most area: the
 line-art page is 87% paper, and an average of it says blue.
 
-Only the loudest tenth gets a vote. The score is **saturation x value**, and
-both halves are needed — saturation alone let a small dark ultra-saturated
-region beat a large bright one, measured on a neon car photograph where a blue
-at s0.90 v0.31 beat the magenta filling the frame. Hues go into 36 buckets,
-weighted by that score, and the winner is merged with its two neighbours by a
-circular mean so a hue sitting on a bucket edge is not split and beaten.
+The weight is **saturation x value cubed**. The cube was fitted, not chosen.
+Moon-over-a-mountain is 61% dark purple by area and 7% bright blue glow, and
+the eye calls it blue; linear and squared weighting both answer purple, and
+cubed answers blue. On the lighthouse, whose hues are so spread that no
+10-degree bucket holds more than 11%, cubed is also the first that answers
+pink rather than one narrow blue band.
 
-**When nothing qualifies, there is no hue and none is invented.** That is the
-greyscale case, and inventing one is what painted a black-and-white city
-yellow and a black-and-white portrait pink.
+Hues go into 36 buckets smoothed over +/-20 degrees, so a hue spread across
+several buckets is not beaten by a narrow one, and the winner is merged with
+its neighbours by a circular mean. The function also returns a **share**: how
+much of the total weight that winning window holds.
+
+**Whether there is any colour at all is a separate test, and it is the older
+one.** A greyscale image has a 90th percentile of saturation too, and it is
+sensor noise, so the gate is: the top tenth by saturation x value, with a
+floor of 0.12, must hold more than five samples. Inventing a hue when it does
+not is what painted a black-and-white city yellow and a black-and-white
+portrait pink.
 
 Cost: one grid pass over an already-decoded image, about 40,000 samples.
 
@@ -209,9 +217,16 @@ cat with ball   25  beige        195 blue       170 degrees
 lighthouse      297 lilac        235 blue        62 degrees
 ```
 
-**The ring takes the LOUD hue.** It is the one element that has to be seen
-rather than blend in, and it sits on a window, not on the bar. It is also
-the only place the picture's own colour needs to appear.
+**The ring takes the picture's hue.** It is the one element that has to be
+seen rather than blend in, and it sits on a window, not on the bar.
+
+**The pills normally take the bar's hue, and the picture overrules it only
+when confident and nearby.** A 34-point strip can lie about a picture: on
+moon-over-a-mountain it catches the purple edge of a sky whose body is blue,
+and the mauve pills that produced read as foreign. So the picture wins when
+its share is at least 65% **and** it is within 90 degrees of the strip. The
+beige picture with a small blue jacket fails both tests, 49% and 170 degrees,
+and keeps its beige pills. That guard is the reason the rule is safe.
 
 From there: a ladder.
 
@@ -230,7 +245,7 @@ Dark ladder — light text on a dark bar:
 pill   = hue,  saturation × 0.85,       max(value + 0.11, 0.20)
 muted  = hue,  0.22,                    0.48
 label  = hue,  0.18,                    0.92
-accent = LOUD hue,  max(0.45, loud sat × 1.15),   0.92
+accent = picture hue,  max(0.45, loud sat × 1.15),   0.92
 ```
 
 Light ladder — dark text on a light bar:
@@ -239,7 +254,7 @@ Light ladder — dark text on a light bar:
 pill   = base hue,  base sat × 0.75,     value × 0.80
 muted  = base hue,  min(base sat, 0.30), value × 0.42
 label  = base hue,  min(base sat, 0.38), value × 0.16
-accent = LOUD hue,  max(0.85, loud sat),  0.92
+accent = picture hue,  max(0.85, loud sat),  0.92
 ```
 
 With no loud colour the saturations become 0 and the result is a neutral
@@ -308,10 +323,10 @@ produce exactly:
 
 | wallpaper | bar | pill | muted | label | accent |
 | --- | --- | --- | --- | --- | --- |
-| `catppuccin/1-totoro.webp` | `1d1d33` | `31334f` | `7c7d92` | `c0c2eb` | `b481eb` | dark |
-| `gruvbox/1-the-backwater.jpg` | `464c35` | `60684e` | `a2a796` | `deebc0` | `ebad4d` | dark |
-| `osaka-jade/1-glowing-city.webp` | `003c30` | `0d584a` | `7f9591` | `c0ebe2` | `00eba2` | dark |
-| `tokyo-night/0-winding-road.webp` | `7540ac` | `925dc8` | `bcb6c2` | `faf7fd` | `f28caa` | dark |
+| `catppuccin/1-totoro.webp` | `1d1d33` | `44314f` | `8a7c92` | `dbc0eb` | `c481eb` | dark |
+| `gruvbox/1-the-backwater.jpg` | `464c35` | `68604e` | `a59f93` | `ece0c5` | `ebc778` | dark |
+| `osaka-jade/1-glowing-city.webp` | `003c30` | `0d5842` | `7f958f` | `c0ebde` | `00eba5` | dark |
+| `tokyo-night/0-winding-road.webp` | `7540ac` | `925dc8` | `bcb6c2` | `faf7fd` | `f189b2` | dark |
 
 Reproducing a hand judgement is not the goal; producing a coherent scheme
 is. Still, reading the whole image rather than the top strip moved three
