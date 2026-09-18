@@ -153,6 +153,74 @@ func baseColour(of url: URL) -> RGB? {
     return RGB(r: menuBarLike(mean.0), g: menuBarLike(mean.1), b: menuBarLike(mean.2))
 }
 
+// MARK: - the loud colour
+
+// The colour the eye goes to, which is NOT the colour covering the most
+// area. A page of purple line art on blue-grey paper is 87% paper, so an
+// average says blue; only the loudest pixels get a vote here, and the paper
+// never qualifies.
+//
+// Returns nil when nothing qualifies — a greyscale photograph — and the
+// caller then has no hue and must not invent one. Inventing one is what
+// painted a black-and-white city yellow and a black-and-white portrait pink.
+func loudColour(of url: URL) -> (hue: Double, sat: Double)? {
+    guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+          let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+    let bm = NSBitmapImageRep(cgImage: cg)
+    guard bm.pixelsWide > 0, bm.pixelsHigh > 0 else { return nil }
+    // A grid, not every pixel: 200x200 samples answer the same question on a
+    // 6016x3384 image and cost a fraction of the walk.
+    let sx = max(1, bm.pixelsWide / 200), sy = max(1, bm.pixelsHigh / 200)
+
+    var samples: [(h: Double, s: Double, v: Double)] = []
+    samples.reserveCapacity(40000)
+    for x in stride(from: 0, to: bm.pixelsWide, by: sx) {
+        for y in stride(from: 0, to: bm.pixelsHigh, by: sy) {
+            guard let c = bm.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+            let t = toHSV(RGB(r: Double(c.redComponent), g: Double(c.greenComponent),
+                              b: Double(c.blueComponent)))
+            if t.v >= 0.10 { samples.append((t.h, t.s, t.v)) }
+        }
+    }
+    guard samples.count > 20 else { return nil }
+
+    // The cut is the 90th percentile of saturation TIMES value. Saturation
+    // alone picked a small dark ultra-saturated region over a large bright
+    // one — measured on a neon car photograph, a blue at s0.90 v0.31 beat the
+    // magenta filling the frame. The eye weighs both, so the score does too.
+    //
+    // The floor matters as much as the percentile: a greyscale image has a
+    // 90th percentile as well, and it is sensor noise.
+    let scores = samples.map { $0.s * $0.v }.sorted()
+    let cut = max(0.12, scores[Int(0.90 * Double(scores.count - 1))])
+    let loud = samples.filter { $0.s * $0.v >= cut && $0.s >= 0.18 }
+    guard loud.count > 5 else { return nil }
+
+    var bucket = [Double](repeating: 0, count: 36)
+    var bs = [Double](repeating: 0, count: 36)
+    for t in loud {
+        let i = min(35, Int(t.h / 10))
+        let w = t.s * t.v
+        bucket[i] += w
+        bs[i] += t.s * w
+    }
+    guard let best = bucket.indices.max(by: { bucket[$0] < bucket[$1] }), bucket[best] > 0
+    else { return nil }
+
+    // Merge the two neighbours with a circular mean, so a hue sitting on a
+    // bucket edge is not split in half and beaten by a lesser one.
+    var wsum = 0.0, hx = 0.0, hy = 0.0, ss = 0.0
+    for d in -1...1 {
+        let i = (best + d + 36) % 36
+        let w = bucket[i]; guard w > 0 else { continue }
+        let ang = (Double(i) * 10 + 5) * .pi / 180
+        hx += cos(ang) * w; hy += sin(ang) * w; ss += bs[i]; wsum += w
+    }
+    var h = atan2(hy, hx) * 180 / .pi
+    if h < 0 { h += 360 }
+    return (h, min(1.0, ss / wsum))
+}
+
 // MARK: - the palette
 
 struct Palette {
@@ -161,7 +229,6 @@ struct Palette {
     var hue: Double, sat: Double, val: Double
 }
 
-let chromaFloor = 0.12          // below this the base hue is noise
 let accentHueShift = 0.0        // 3 of 4 stock themes shift negative; 0 is the centre
 
 // Push c away from ref until their luminance differs by `need`. Blending
@@ -191,9 +258,15 @@ func towardLum(_ c: RGB, _ wanted: Double) -> RGB {
     return best
 }
 
-func derive(_ base: RGB) -> Palette {
-    let (H, S, V) = toHSV(base)
-    let low = S < chromaFloor
+func derive(_ base: RGB, loud: (hue: Double, sat: Double)?) -> Palette {
+    let (_, _, V) = toHSV(base)
+    // The BAR keeps the base colour untouched: it has to match the real macOS
+    // menu bar, and only the strip the bar covers can say what that is.
+    // Everything that sits ON the bar takes the loud hue instead, because the
+    // top strip is a thin slice of sky and says nothing about the picture.
+    let H = loud?.hue ?? 0
+    let S = loud?.sat ?? 0
+    let low = loud == nil
     // Luminance, NOT V. A saturated purple at V=0.62 has luminance 0.27 and
     // needs LIGHT text; choosing on V called it a light bar and painted
     // near-black text on it.
@@ -204,12 +277,17 @@ func derive(_ base: RGB) -> Palette {
         pill   = fromHSV(H, low ? 0 : S * 0.55, V * 0.80)
         muted  = fromHSV(H, low ? 0 : 0.30, V * 0.42)
         label  = fromHSV(H, low ? 0 : 0.38, V * 0.16)
-        accent = fromHSV(H + accentHueShift, low ? 0.60 : max(0.70, S), V * 0.38)
+        // No loud colour means no hue, so the accent goes to the opposite
+        // end of the ladder instead — the most visible thing available, and
+        // honest about the picture having no colour.
+        accent = low ? fromHSV(0, 0, 0.06)
+                     : fromHSV(H + accentHueShift, max(0.70, S), V * 0.38)
     } else {
         pill   = fromHSV(H, low ? 0 : S * 0.85, max(V + 0.11, 0.20))
         muted  = fromHSV(H, low ? 0 : 0.22, 0.48)
         label  = fromHSV(H, low ? 0 : 0.18, 0.92)
-        accent = fromHSV(H + accentHueShift, low ? 0.55 : max(0.45, S * 1.15), 0.92)
+        accent = low ? fromHSV(0, 0, 0.99)
+                     : fromHSV(H + accentHueShift, max(0.45, S * 1.15), 0.92)
     }
 
     // The floors are the gaps the four stock themes already hold. Order
@@ -285,7 +363,7 @@ if args[1] == "--print" {
         guard let base = baseColour(of: url) else {
             print("FAIL  \(url.lastPathComponent)"); continue
         }
-        let p = derive(base)
+        let p = derive(base, loud: loudColour(of: url))
         print("\(p.bar.hex) \(p.pill.hex) \(p.muted.hex) \(p.label.hex) \(p.accent.hex) "
             + "\(p.isLight ? "light" : "dark")\(p.isLowChroma ? "+lowchroma" : "") "
             + url.lastPathComponent)
@@ -304,7 +382,7 @@ guard let base = baseColour(of: image) else {
     exit(1)
 }
 do {
-    try write(derive(base), to: URL(fileURLWithPath: args[2]), from: image)
+    try write(derive(base, loud: loudColour(of: image)), to: URL(fileURLWithPath: args[2]), from: image)
 } catch {
     FileHandle.standardError.write(
         "omacosy-derive: \(error.localizedDescription)\n".data(using: .utf8)!)

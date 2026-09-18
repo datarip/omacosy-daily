@@ -163,12 +163,45 @@ A Python prototype of this code did skip it, via Pillow's
 `convert("RGB")`, and produced a systematically darker base for every
 image.
 
-### 4.2 The other four colours
+### 4.2 The loud colour
 
-From that base: hue, saturation and value, then a ladder.
+The base colour is the right input for the **bar**, because the bar sits over
+that strip. It is the wrong input for everything else. A thin band across the
+top of a picture is usually sky, and it says nothing about the picture.
+
+Measured on real failures:
+
+| wallpaper | top strip | what you see |
+| --- | --- | --- |
+| Battersea power station | 179° near-grey | orange brick and sunset |
+| purple line art on grey paper | 218° blue | purple |
+| red sun over a teal sky | 186° teal | the red sun |
+| moon over a tent | purple sky edge | the blue centre |
+
+So a second pass reads the **whole** image on a 200x200 grid and finds the
+colour the eye goes to. That is not the colour covering the most area: the
+line-art page is 87% paper, and an average of it says blue.
+
+Only the loudest tenth gets a vote. The score is **saturation x value**, and
+both halves are needed — saturation alone let a small dark ultra-saturated
+region beat a large bright one, measured on a neon car photograph where a blue
+at s0.90 v0.31 beat the magenta filling the frame. Hues go into 36 buckets,
+weighted by that score, and the winner is merged with its two neighbours by a
+circular mean so a hue sitting on a bucket edge is not split and beaten.
+
+**When nothing qualifies, there is no hue and none is invented.** That is the
+greyscale case, and inventing one is what painted a black-and-white city
+yellow and a black-and-white portrait pink.
+
+Cost: one grid pass over an already-decoded image, about 40,000 samples.
+
+### 4.3 The other four colours
+
+The bar keeps the base colour. Everything sitting on it takes the loud hue.
+From there: a ladder.
 
 ```
-low   = saturation < 0.12       hue below this is noise
+low   = no loud colour found    a greyscale picture
 light = luminance   > 0.45      which way the ladder runs
 ```
 
@@ -194,14 +227,17 @@ label  = hue,  0.38,                value × 0.16
 accent = hue,  max(0.70, sat),      value × 0.38
 ```
 
-Below the chroma floor the saturations become 0 and the result is a
-neutral grey scheme with one fixed-saturation accent.
+With no loud colour the saturations become 0 and the result is a neutral
+grey scheme. **The accent then goes to the opposite end of the ladder** —
+near-white on a dark bar, near-black on a light one. That is the most
+visible thing available and it is honest about the picture having no
+colour.
 
 The accent keeps the base hue with **no shift**. Three of the four shipped
 themes shift their accent negative from their wallpaper's hue and one
 shifts positive, so zero is the centre.
 
-### 4.3 Contrast is checked, not assumed
+### 4.4 Contrast is checked, not assumed
 
 Ladder values alone are not enough. Every colour is then checked against
 the surface it sits on and corrected until it passes.
@@ -238,23 +274,34 @@ Measured over 66 images — the 19 shipped wallpapers and 47 personal ones —
 all five hold with zero failures, tightest 0.0851 against a floor of
 0.085. Two full runs produce byte-identical output.
 
-### 4.4 The fixture
+### 4.5 The fixture
 
 Running the derivation on the first wallpaper of each shipped theme must
 produce exactly:
 
 | wallpaper | bar | pill | muted | label | accent |
 | --- | --- | --- | --- | --- | --- |
-| `catppuccin/1-totoro.webp` | `1d1d33` | `31334f` | `7c7d92` | `c0c2eb` | `7378eb` |
-| `gruvbox/1-the-backwater.jpg` | `464c35` | `60684e` | `a2a796` | `deebc0` | `cbeb81` |
-| `osaka-jade/1-glowing-city.webp` | `003c30` | `0d584a` | `7f9591` | `c0ebe2` | `00ebbc` |
-| `tokyo-night/0-winding-road.webp` | `7540ac` | `925dc8` | `bcb6c2` | `faf7fd` | `bd89f2` |
+| `catppuccin/1-totoro.webp` | `1d1d33` | `463e4f` | `8d8398` | `d5c0eb` | `b481eb` |
+| `gruvbox/1-the-backwater.jpg` | `464c35` | `6e5b3d` | `a29b8f` | `ebdbc2` | `ebad4d` |
+| `osaka-jade/1-glowing-city.webp` | `003c30` | `0e5841` | `7f958e` | `c0ebdd` | `00eba2` |
+| `tokyo-night/0-winding-road.webp` | `7540ac` | `c86884` | `534146` | `090808` | `f07fa0` |
 
-These are not the shipped themes' own colours and are not meant to be.
-Catppuccin comes closest, within 11° of hue on average. Gruvbox is
-furthest: its wallpaper is olive and its theme is orange on neutral grey,
-and no rule derives one from the other. Reproducing a hand judgement is
-not the goal; producing a coherent scheme is.
+Reproducing a hand judgement is not the goal; producing a coherent scheme
+is. Still, reading the whole image rather than the top strip moved three
+of the four a long way toward the colour a designer chose:
+
+```
+              hand-picked   top strip    loud colour
+catppuccin      cba6f7        30°     ->      1°
+gruvbox         fe8019        51°     ->      9°
+osaka-jade      509475        15°     ->      9°
+tokyo-night     7aa2f7        49°     ->    122°
+```
+
+Gruvbox is the striking one: its accent is orange, its top strip is olive,
+and the orange only appears once the whole picture is read. Tokyo-night
+goes the other way — its wallpaper has a large magenta sky, so pink is a
+fair reading of the picture and blue was the designer's taste.
 
 ---
 
@@ -477,21 +524,22 @@ copy of the rules.
 
 ## 10. What it will not do
 
-**It does not reproduce a hand-picked theme.** See the fixture in 4.4.
+**It does not reproduce a hand-picked theme.** See the fixture in 4.5.
 Gruvbox's wallpaper is olive and gruvbox is orange.
 
-**A low-chroma image gives a grey scheme.** Below saturation 0.12 the base
-hue is noise — a small shift in the average swings it a long way — so the
-result is deliberately neutral with one fixed accent. Roughly 6% of a
-vivid wallpaper folder, and about 30% of a large mixed one.
+**A greyscale image gives a grey scheme.** When no pixel is loud enough to
+vote, there is no hue to use, so the palette is neutral and the accent is
+near-white on a dark bar or near-black on a light one. That is the rule for
+black-and-white photographs, and it replaces an earlier version that
+invented a vivid accent from a noise hue.
 
 **A fully saturated bright wallpaper gives a flat scheme.** Everything
 stays legible because the contrast floors hold, but a base at saturation
 1.00 and value 1.00 leaves little room for the ladder to breathe.
 
 **Animated GIFs do not animate.** macOS accepts one as a desktop picture
-and paints a still frame. Measured: 38 frames at 40 ms, and not one
-desktop pixel moved over 1.7 s. They are accepted because a still frame is
+and paints a still frame. Measured, and confirmed in use: 38 frames at
+40 ms, and not one desktop pixel moved over 1.7 s. They are accepted because a still frame is
 a usable wallpaper and the colours come out fine.
 
 **The four shipped themes are untouched.** They keep their hand-picked
