@@ -249,6 +249,7 @@ the surface it sits on and corrected until it passes.
 | muted vs pill | 0.18 | the shipped gap is 0.19 to 0.24 |
 | muted vs label | 0.18 | same |
 | ring vs bar | 0.28 | so the ring reads against the bar |
+| ring vs pill | 0.20 | the accent is drawn ON pills, see below |
 
 Two failures during development shaped how this is done.
 
@@ -263,6 +264,17 @@ the pill and the label. Separating it from one then the other made the
 second undo the first whenever the gap was too small to hold a colour
 between them. `muted` is now **placed at the midpoint** of pill and label,
 which clears both by construction.
+
+**The accent has to clear two surfaces, not one.** It fills the focused
+workspace chip and it is the app name's text colour, so clearing the bar
+says nothing about whether it can be read on a pill. Measured before this
+floor existed, 33 of 65 wallpapers put the accent within 0.25 of its own
+pill, the worst at 0.048 — an invisible ring and unreadable text.
+
+Two `separate()` calls in a row cannot fix it, because the second lands
+back inside the first band. `clearOf()` solves both at once: it finds the
+luminance nearest the accent's own that sits outside **both** forbidden
+bands and blends to it.
 
 **The checks compare 8-bit values.** Satisfied in floating point and then
 rounded to hex, three of the five floors fell back under by about 0.002.
@@ -284,7 +296,7 @@ produce exactly:
 | `catppuccin/1-totoro.webp` | `1d1d33` | `463e4f` | `8d8398` | `d5c0eb` | `b481eb` |
 | `gruvbox/1-the-backwater.jpg` | `464c35` | `6e5b3d` | `a29b8f` | `ebdbc2` | `ebad4d` |
 | `osaka-jade/1-glowing-city.webp` | `003c30` | `0e5841` | `7f958e` | `c0ebdd` | `00eba2` |
-| `tokyo-night/0-winding-road.webp` | `7540ac` | `c86884` | `534146` | `090808` | `f07fa0` |
+| `tokyo-night/0-winding-road.webp` | `7540ac` | `c86884` | `534146` | `090808` | `f4a1ba` |
 
 Reproducing a hand judgement is not the goal; producing a coherent scheme
 is. Still, reading the whole image rather than the top strip moved three
