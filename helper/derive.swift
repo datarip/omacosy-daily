@@ -280,8 +280,15 @@ func derive(_ base: RGB, loud: (hue: Double, sat: Double)?) -> Palette {
         // No loud colour means no hue, so the accent goes to the opposite
         // end of the ladder instead — the most visible thing available, and
         // honest about the picture having no colour.
+        //
+        // The chromatic branch is VIVID and lets separate() below decide how
+        // far down it has to come. It used to be value * 0.38, which on a
+        // bright picture landed every accent at 0.28-0.38: a warm hue there
+        // is brown and a cool one is near-black. The hues were right the
+        // whole time — a red umbrella came out as dark brown — and one
+        // multiplier was crushing them.
         accent = low ? fromHSV(0, 0, 0.06)
-                     : fromHSV(H + accentHueShift, max(0.70, S), V * 0.38)
+                     : fromHSV(H + accentHueShift, max(0.85, S), 0.92)
     } else {
         pill   = fromHSV(H, low ? 0 : S * 0.85, max(V + 0.11, 0.20))
         muted  = fromHSV(H, low ? 0 : 0.22, 0.48)
