@@ -337,6 +337,22 @@ if [ ! -x "$HOME/.local/bin/omacosy-helper" ] || [ "$REPO_DIR/helper/main.swift"
   swiftc -O -F /System/Library/PrivateFrameworks -framework DisplayServices -o "$HOME/.local/bin/omacosy-helper" "$REPO_DIR/helper/main.swift"
 fi
 
+# The custom theme's wallpaper directory. Creating it is the whole setup:
+# drop an image in and Super+Shift+T reaches a fifth theme whose colours
+# come from that image. It is left EMPTY, so a user who ignores it sees no
+# change at all. mkdir -p on an existing directory is a no-op, and nothing
+# here writes into it or changes its ownership.
+mkdir -p "$HOME/Pictures/wallpapers"
+
+# theme colours computed from one wallpaper, for the custom theme. Its own
+# binary rather than a subcommand: every binary here compiles from a single
+# source, so nothing in main.swift can call seedStrip() in bar.swift, and a
+# fault in this file must not be able to stop the menu bar from building.
+if [ ! -x "$HOME/.local/bin/omacosy-derive" ] || [ "$REPO_DIR/helper/derive.swift" -nt "$HOME/.local/bin/omacosy-derive" ]; then
+  log "Building omacosy-derive"
+  swiftc -O -o "$HOME/.local/bin/omacosy-derive" "$REPO_DIR/helper/derive.swift"
+fi
+
 # workspace overview overlay (4-finger swipe up)
 if [ ! -x "$HOME/.local/bin/omacosy-overview" ] || [ "$REPO_DIR/helper/overview.swift" -nt "$HOME/.local/bin/omacosy-overview" ]; then
   log "Building omacosy-overview"
@@ -512,6 +528,31 @@ PLIST
 launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.solo.plist" 2>/dev/null || true
 launchctl load "$HOME/Library/LaunchAgents/com.omacosy.solo.plist"
 
+# Light/dark follower for the day= and night= keys. A poll rather than a
+# daemon: this has to do nothing on almost every machine, and a script
+# that exits in milliseconds once a minute costs less than a resident
+# process holding a notification observer. It exits immediately unless
+# follow_appearance=on, so an install that never configures it runs one
+# `defaults read` a minute and stops.
+#
+# StartInterval, not KeepAlive: it is a one-shot that must NOT be
+# restarted when it exits, which every run does.
+cat > "$HOME/Library/LaunchAgents/com.omacosy.appearance.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.omacosy.appearance</string>
+  <key>ProgramArguments</key><array><string>$HOME/.local/bin/omacosy-appearance</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>60</integer>
+  <key>StandardErrorPath</key><string>/tmp/omacosy-appearance.err</string>
+</dict>
+</plist>
+PLIST
+launchctl unload "$HOME/Library/LaunchAgents/com.omacosy.appearance.plist" 2>/dev/null || true
+launchctl load "$HOME/Library/LaunchAgents/com.omacosy.appearance.plist"
+
 # exits 0 on purpose under AeroSpace, so KeepAlive=true would respawn it
 # forever. Restart-on-failure only, same contract as the solo agent.
 cat > "$HOME/Library/LaunchAgents/com.omacosy.recall.plist" <<PLIST
@@ -554,6 +595,8 @@ launchctl load "$HOME/Library/LaunchAgents/com.omacosy.bar.plist"
 link "$REPO_DIR/bin/theme-set"  "$HOME/.local/bin/theme-set"
 link "$REPO_DIR/bin/theme-next" "$HOME/.local/bin/theme-next"
 link "$REPO_DIR/bin/theme-bg-next" "$HOME/.local/bin/theme-bg-next"
+link "$REPO_DIR/bin/omacosy-custom-theme" "$HOME/.local/bin/omacosy-custom-theme"
+link "$REPO_DIR/bin/omacosy-appearance" "$HOME/.local/bin/omacosy-appearance"
 link "$REPO_DIR/bin/omacosy-toggle" "$HOME/.local/bin/omacosy-toggle"
 link "$REPO_DIR/bin/omacosy-ws" "$HOME/.local/bin/omacosy-ws"
 link "$REPO_DIR/bin/omacosy-focus-guard" "$HOME/.local/bin/omacosy-focus-guard"

@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# omacosy-appearance — follow the macOS light/dark appearance, and put the
+# theme named by day= or night= in ~/.config/omacosy/themes.conf on screen
+# when it flips.
+#
+#   omacosy-appearance            act if the appearance changed since last run
+#   omacosy-appearance --force    act whatever the cached value says
+#   omacosy-appearance --status   say what it would do, change nothing
+#
+# Run once a minute by com.omacosy.appearance. It is a no-op unless
+# follow_appearance=on, and it does nothing at all on a machine with no
+# themes.conf, which is every machine that never asked for this.
+#
+# WHY the appearance and not a clock. macOS already has the schedule:
+# AppleInterfaceStyleSwitchesAutomatically flips Light and Dark at sunrise
+# and sunset from the system's own location. Reading it means there is one
+# schedule on the machine instead of two, it follows the seasons with no
+# maintenance, and a user who prefers fixed times can set them in System
+# Settings and this follows those instead.
+#
+# Night Shift was the obvious candidate and is the wrong one: it is colour
+# temperature, its schedule lives undocumented in
+# com.apple.CoreBrightness.plist keyed by UID, and that file does not
+# exist until Night Shift is enabled.
+set -uo pipefail
+
+CONF="$HOME/.config/omacosy/themes.conf"
+STATE="$HOME/.local/state/omacosy/appearance"
+CUSTOM="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/omacosy-custom-theme"
+
+conf_get() {
+  [ -f "$CONF" ] || return 0
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CONF" | tail -1
+}
+
+# `defaults read` EXITS NON-ZERO in Light mode, because the key is absent
+# rather than set to "Light". That is the documented shape of this setting
+# and it is why the fallback below is not an error path.
+appearance() {
+  if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null)" = "Dark" ]; then
+    echo dark
+  else
+    echo light
+  fi
+}
+
+MODE="${1:-}"
+NOW="$(appearance)"
+WANT="$(conf_get "$([ "$NOW" = dark ] && echo night || echo day)")"
+
+if [ "$MODE" = "--status" ]; then
+  # conf_get exits 0 with no output for an absent key, so `|| echo` never
+  # fires; the default has to come from the expansion instead.
+  f="$(conf_get follow_appearance)"; d="$(conf_get day)"; n="$(conf_get night)"
+  echo "appearance        : $NOW"
+  echo "follow_appearance : ${f:-off}"
+  echo "day               : ${d:-(unset)}"
+  echo "night             : ${n:-(unset)}"
+  echo "last seen         : $([ -f "$STATE" ] && cat "$STATE" || echo '(never)')"
+  if [ -n "$WANT" ]; then
+    echo "would apply       : $WANT  ->  $("$CUSTOM" resolve "$WANT" 2>&1)"
+  else
+    echo "would apply       : nothing, $NOW has no value set"
+  fi
+  exit 0
+fi
+
+[ "$(conf_get follow_appearance)" = on ] || exit 0
+
+# Only on a CHANGE. Without this the agent would re-apply every minute and
+# stamp on a theme chosen by hand thirty seconds ago.
+if [ "$MODE" != "--force" ] && [ -f "$STATE" ] && [ "$(cat "$STATE")" = "$NOW" ]; then
+  exit 0
+fi
+mkdir -p "$(dirname "$STATE")"
+printf '%s\n' "$NOW" > "$STATE"
+
+# A missing value for this half is not a failure: setting only `night` and
+# leaving days alone is a reasonable thing to want.
+[ -n "$WANT" ] || exit 0
+"$CUSTOM" apply "$WANT" >/dev/null 2>&1 || true

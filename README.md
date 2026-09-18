@@ -538,6 +538,45 @@ omarchy name and format, and the ring uses the theme accent, omarchy's
 own convention), and `backgrounds/` (wallpapers from omarchy's
 MIT-licensed theme packs). Copy a directory to add one.
 
+### Your own wallpapers, with colors to match
+
+Four themes means four color schemes, and they were chosen to suit their
+own wallpapers. A picture of your own gets whichever scheme you were on,
+which is how you end up with osaka-jade's dark green pills on a red bar.
+
+Put images in `~/Pictures/wallpapers` and `Super+Shift+T` reaches a fifth
+theme, `custom`, after the four. Inside it **every wallpaper is its own
+theme**: `Super+Shift+B` moves to the next picture and recomputes the bar
+color, the pill color, the icon color and the focus ring from it.
+
+```sh
+mkdir -p ~/Pictures/wallpapers      # install.sh already made it
+cp ~/Downloads/walls/*.jpg ~/Pictures/wallpapers/
+omacosy-custom-theme status
+```
+
+That is the whole setup. No config file, no flag. An empty or missing
+directory hides the feature: the cycle stays four themes and nothing is
+printed.
+
+The colors come from the same measurement the bar already uses to match
+the real macOS menu bar, extended into a full palette using the lightness
+ladder all four shipped themes share. Every color is then checked against
+the surface it sits on and corrected until it passes — verified across 66
+wallpapers with no failures.
+
+Optionally, a day and a night theme that follow the macOS appearance, so
+sunrise and sunset are macOS's schedule rather than a second one:
+
+```sh
+omacosy-custom-theme day   gruvbox
+omacosy-custom-theme night osaka-jade/1-glowing-city.webp
+omacosy-custom-theme follow on
+```
+
+Either may name a shipped theme, one of its wallpapers, or a file of your
+own. Full manual: **[docs/derived-themes.md](docs/derived-themes.md)**.
+
 ## Tiling: dwindle
 
 ![Three terminals in a dwindle layout — README, git log and btop — accent border ring on the focused one](docs/screenshots/tiling.jpg)

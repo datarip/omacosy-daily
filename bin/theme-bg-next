@@ -12,7 +12,28 @@ set -euo pipefail
 CURRENT_THEME="$HOME/.config/omarchy/current/theme"
 STATE_DIR="$HOME/.local/state/omacosy"
 LINK="$STATE_DIR/background"
+CUSTOM_INDEX="$STATE_DIR/custom-index"
 mkdir -p "$STATE_DIR"
+
+# resolve through the ~/.local/bin symlink to the real repo
+REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+CUSTOM="$REPO_DIR/bin/omacosy-custom-theme"
+
+on_custom() { [ -x "$CUSTOM" ] && [ "$("$CUSTOM" current 2>/dev/null || true)" = custom ]; }
+
+# On the custom theme a wallpaper IS a theme, so the colours have to be
+# recomputed and the daemons told. They watch ~/.config/omarchy/current
+# with kqueue, which fires when an entry in that directory changes — so
+# the `ln -sfn` at the end is the notification, and it has to come last.
+# Each wallpaper's generated directory is named after a hash of its path,
+# which is what makes the relink a real change rather than a no-op.
+recolour_for() {
+  on_custom || return 0
+  local dir
+  dir="$("$CUSTOM" theme "$1")" || return 0
+  printf '%s\n' "$1" > "$CUSTOM_INDEX"
+  ln -sfn "$dir" "$CURRENT_THEME"
+}
 
 set_bg() {
   ln -nsf "$1" "$LINK"
@@ -31,18 +52,27 @@ APPLESCRIPT
 
 if [ $# -gt 0 ]; then
   [ -f "$1" ] || { echo "no such image: $1" >&2; exit 1; }
-  set_bg "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+  ABS="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+  set_bg "$ABS"
+  recolour_for "$ABS"
   exit 0
 fi
 
 # the sorted background list of the CURRENT theme (numbered filenames
 # define the order, same convention as omarchy's packs)
+# On the custom theme the list is the user's whole wallpaper directory,
+# not $CURRENT_THEME/backgrounds: a generated theme holds exactly the one
+# wallpaper it was computed from, so cycling inside it would go nowhere.
 BACKGROUNDS=()
-while IFS= read -r f; do BACKGROUNDS+=("$f"); done < <(
-  find -L "$CURRENT_THEME/backgrounds" -maxdepth 1 -type f \
-    \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.heic' \) \
-    2>/dev/null | sort
-)
+if on_custom; then
+  while IFS= read -r f; do BACKGROUNDS+=("$f"); done < <("$CUSTOM" list)
+else
+  while IFS= read -r f; do BACKGROUNDS+=("$f"); done < <(
+    find -L "$CURRENT_THEME/backgrounds" -maxdepth 1 -type f \
+      \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.heic' \) \
+      2>/dev/null | sort
+  )
+fi
 [ "${#BACKGROUNDS[@]}" -gt 0 ] || { echo "theme has no backgrounds" >&2; exit 1; }
 
 # -ef, not =. The link and this list name the same file two different
@@ -62,3 +92,4 @@ for i in "${!BACKGROUNDS[@]}"; do
   fi
 done
 set_bg "$NEXT"
+recolour_for "$NEXT"

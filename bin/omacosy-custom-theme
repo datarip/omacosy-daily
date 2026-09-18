@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+# omacosy-custom-theme — the "custom" theme: a directory of your own
+# wallpapers, where every wallpaper carries its own computed colours.
+#
+#   omacosy-custom-theme                 status (default)
+#   omacosy-custom-theme status
+#   omacosy-custom-theme dir             print the wallpaper directory, or exit 1
+#   omacosy-custom-theme current         print the LOGICAL name of the current theme
+#   omacosy-custom-theme list            print its images, sorted, or exit 1
+#   omacosy-custom-theme theme <image>   print the derived theme dir, building it if needed
+#   omacosy-custom-theme path <dir>      point the custom theme somewhere else
+#   omacosy-custom-theme day <spec>      what to show in the light appearance
+#   omacosy-custom-theme night <spec>    what to show in the dark appearance
+#   omacosy-custom-theme resolve <spec>  say what a spec would do, without doing it
+#   omacosy-custom-theme apply <spec>    put a spec on screen now
+#   omacosy-custom-theme follow on|off   follow the macOS appearance
+#   omacosy-custom-theme rebuild         regenerate every derived theme
+#
+# `dir`, `list`, `current` and `theme` are the machine-readable half: theme-next,
+# theme-set and theme-bg-next call them so the rules below live in ONE
+# place. Everything else is for a person.
+#
+# The whole feature is enabled by the directory existing with images in
+# it. There is no flag and the config file is optional — a user who never
+# creates ~/Pictures/wallpapers must not be able to tell this is installed.
+set -euo pipefail
+
+CONF="$HOME/.config/omacosy/themes.conf"
+DEFAULT_DIR="$HOME/Pictures/wallpapers"
+DERIVED="$HOME/.local/state/omacosy/derived"
+DERIVE_BIN="$HOME/.local/bin/omacosy-derive"
+CUSTOM_INDEX="$HOME/.local/state/omacosy/custom-index"
+# resolve through the ~/.local/bin symlink to the real repo
+REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+THEMES_DIR="$REPO_DIR/themes"
+THEME_SET="$REPO_DIR/bin/theme-set"
+THEME_BG_NEXT="$REPO_DIR/bin/theme-bg-next"
+
+# The stock themes take upstream's list. The custom theme adds gif.
+# Measured 2026-09-18: macOS accepts an animated gif as the desktop
+# picture and paints a STILL frame — 38 frames at 40ms, no pixel of the
+# desktop moved over 1.7s. A still frame is a usable wallpaper, and
+# CGImageSource reads frame 0, so the colours come out fine.
+EXTS=(-iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.heic' -o -iname '*.gif')
+
+# ---------------------------------------------------------------- config
+
+# key=value, same format as bar.conf next to it. Absent file, absent key
+# and empty value all mean the same thing: fall back to the default.
+conf_get() {
+  [ -f "$CONF" ] || return 0
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CONF" | tail -1
+}
+
+conf_set() {
+  mkdir -p "$(dirname "$CONF")"
+  [ -f "$CONF" ] || printf '# omacosy custom theme — all keys optional\n' > "$CONF"
+  if grep -q "^[[:space:]]*$1[[:space:]]*=" "$CONF"; then
+    # a literal & or / in a path would be taken as sed syntax, so the
+    # replacement is built with awk instead
+    awk -v k="$1" -v v="$2" '
+      $0 ~ "^[[:space:]]*"k"[[:space:]]*=" { print k"="v; next } { print }
+    ' "$CONF" > "$CONF.tmp" && mv "$CONF.tmp" "$CONF"
+  else
+    printf '%s=%s\n' "$1" "$2" >> "$CONF"
+  fi
+}
+
+# ~ and $HOME are written by hand in this file all the time; expand them
+# rather than handing a literal tilde to test -d.
+expand() {
+  local p="$1"
+  p="${p/#\~/$HOME}"
+  p="${p//\$HOME/$HOME}"
+  printf '%s' "$p"
+}
+
+wallpaper_dir() {
+  local c; c="$(conf_get custom_wallpapers)"
+  if [ -n "$c" ]; then expand "$c"; else printf '%s' "$DEFAULT_DIR"; fi
+}
+
+# Every image in the directory, sorted. Numbered filenames define the
+# order, the same convention the shipped packs use.
+images() {
+  local d="$1"
+  [ -d "$d" ] || return 0
+  find -L "$d" -maxdepth 1 -type f \( "${EXTS[@]}" \) 2>/dev/null | sort
+}
+
+# ------------------------------------------------------------- commands
+
+cmd_dir() {
+  local d; d="$(wallpaper_dir)"
+  # Absent and empty are the SAME case: the custom theme does not exist.
+  # Silent, because the normal state of a machine that never opted in is
+  # to have no such directory, and that is not a problem to report.
+  [ -d "$d" ] || return 1
+  [ -n "$(images "$d" | head -1)" ] || return 1
+  printf '%s\n' "$d"
+}
+
+cmd_list() {
+  local d; d="$(cmd_dir)" || return 1
+  images "$d"
+}
+
+# The derived theme for one image, built on first use and kept. Keyed by
+# the SHA-1 of the resolved path, so the directory NAME changes with the
+# wallpaper: that is what makes `ln -sfn` on ~/.config/omarchy/current a
+# real change, which is the reload notification the bar and the borders
+# daemon watch for with kqueue.
+cmd_theme() {
+  local img="$1"
+  [ -f "$img" ] || { echo "omacosy-custom-theme: no such image: $img" >&2; return 1; }
+  img="$(cd "$(dirname "$img")" && pwd)/$(basename "$img")"
+  local key; key="$(printf '%s' "$img" | shasum -a 1 | cut -c1-16)"
+  local out="$DERIVED/$key"
+  if [ ! -f "$out/sketchybar.sh" ] || [ ! -f "$out/borders.sh" ] || [ "$img" -nt "$out/sketchybar.sh" ]; then
+    [ -x "$DERIVE_BIN" ] || { echo "omacosy-custom-theme: $DERIVE_BIN missing — run install.sh" >&2; return 1; }
+    "$DERIVE_BIN" "$img" "$out" || return 1
+  fi
+  # backgrounds/ holds ONE symlink, to this wallpaper only. theme-bg-next
+  # lists $CURRENT_THEME/backgrounds when it cycles, and a derived theme
+  # that listed the whole folder would need rebuilding whenever the folder
+  # changed. One link keeps each derived directory disposable.
+  mkdir -p "$out/backgrounds"
+  find "$out/backgrounds" -maxdepth 1 ! -path "$out/backgrounds" -delete 2>/dev/null || true
+  ln -sfn "$img" "$out/backgrounds/$(basename "$img")"
+  printf '%s\n' "$out"
+}
+
+# Which theme is showing, by LOGICAL name. A derived theme's directory is
+# named after a hash, so basename() alone would answer with that hash.
+# Read from the symlink rather than from a state file: theme-set would
+# have to write that file on the stock path, and anything that repoints
+# the symlink without going through theme-set would leave it stale.
+cmd_current() {
+  local t
+  t="$(readlink "$HOME/.config/omarchy/current/theme" 2>/dev/null)" || return 1
+  [ -n "$t" ] || return 1
+  case "$t" in
+    "$DERIVED"/*) printf 'custom\n' ;;
+    *)            printf '%s\n' "$(basename "$t")" ;;
+  esac
+}
+
+cmd_path() {
+  local d; d="$(expand "${1:-}")"
+  [ -n "$d" ] || { echo "omacosy-custom-theme: path needs a directory" >&2; return 1; }
+  [ -d "$d" ] || { echo "omacosy-custom-theme: not a directory: $d" >&2; return 1; }
+  local n; n="$(images "$d" | wc -l | tr -d ' ')"
+  [ "$n" -gt 0 ] || { echo "omacosy-custom-theme: no images in $d" >&2
+                      echo "  looked for: jpg jpeg png webp heic gif" >&2; return 1; }
+  conf_set custom_wallpapers "$1"
+  echo "custom wallpapers: $d ($n images)"
+}
+
+# What a day= or night= value may say. One rule per form, decided by the
+# shape of the string, so a stock theme and a wallpaper of your own can
+# live in the same field:
+#
+#   gruvbox                      a stock theme, its first wallpaper
+#   gruvbox/2-flower-basket.webp a stock theme, that exact wallpaper
+#   a_beach.jpg                  a file in the custom wallpaper directory
+#   /Volumes/Photos/dawn.jpg     any absolute path
+#
+# Prints two words: the theme to set, and the wallpaper to set inside it
+# (or "-" for the theme's own first image). Exit 1 and a reason if the
+# value names nothing that exists.
+resolve_spec() {
+  local spec="$1" d
+  [ -n "$spec" ] || { echo "empty" >&2; return 1; }
+
+  # an absolute path is a wallpaper, and which theme it belongs to depends
+  # on where it lives
+  if [ "${spec#/}" != "$spec" ]; then
+    [ -f "$spec" ] || { echo "no such file: $spec" >&2; return 1; }
+    case "$spec" in
+      "$THEMES_DIR"/*) printf '%s %s\n' "$(basename "$(dirname "$(dirname "$spec")")")" "$spec" ;;
+      *)               printf 'custom %s\n' "$spec" ;;
+    esac
+    return 0
+  fi
+
+  # a bare stock theme name
+  if [ -d "$THEMES_DIR/$spec" ]; then printf '%s -\n' "$spec"; return 0; fi
+
+  # <stock theme>/<wallpaper>
+  case "$spec" in
+    */*)
+      local t="${spec%%/*}" f="${spec#*/}"
+      if [ -d "$THEMES_DIR/$t" ]; then
+        local p="$THEMES_DIR/$t/backgrounds/$f"
+        [ -f "$p" ] || { echo "no such wallpaper in $t: $f" >&2; return 1; }
+        printf '%s %s\n' "$t" "$p"; return 0
+      fi
+      ;;
+  esac
+
+  # a filename in the custom wallpaper directory
+  d="$(wallpaper_dir)"
+  [ -f "$d/$spec" ] || { echo "not a stock theme, and no such file in $d: $spec" >&2; return 1; }
+  printf 'custom %s\n' "$d/$spec"
+}
+
+# Show what a value would do, without doing it.
+cmd_resolve() {
+  local r; r="$(resolve_spec "${1:-}")" || return 1
+  set -- $r
+  if [ "$2" = "-" ]; then echo "theme $1 (its first wallpaper)"; else echo "theme $1, wallpaper $2"; fi
+}
+
+# Put a day=/night= value on screen. This is what the appearance agent
+# calls, and it is the only place that knows how to reach any theme.
+cmd_apply() {
+  local r; r="$(resolve_spec "${1:-}")" || return 1
+  set -- $r
+  local theme="$1" wall="$2"
+  if [ "$theme" = custom ]; then
+    # theme-set custom reads custom-index, so pointing it at the wanted
+    # wallpaper first is what makes it land there rather than on the
+    # remembered one.
+    mkdir -p "$(dirname "$CUSTOM_INDEX")"
+    printf '%s\n' "$wall" > "$CUSTOM_INDEX"
+    "$THEME_SET" custom >/dev/null || return 1
+  else
+    "$THEME_SET" "$theme" >/dev/null || return 1
+    [ "$wall" = "-" ] || "$THEME_BG_NEXT" "$wall" >/dev/null || return 1
+  fi
+  echo "$theme${wall:+ }${wall#-}"
+}
+
+cmd_day_night() {
+  local key="$1" arg="${2:-}"
+  [ -n "$arg" ] || { echo "omacosy-custom-theme: $key needs a theme or a wallpaper" >&2; return 1; }
+  local r; r="$(resolve_spec "$arg")" || return 1
+  conf_set "$key" "$arg"
+  echo "$key: $arg  ->  $(cmd_resolve "$arg")"
+}
+
+cmd_follow() {
+  case "${1:-}" in
+    on|off) conf_set follow_appearance "$1"; echo "follow_appearance: $1" ;;
+    *) echo "omacosy-custom-theme: follow takes on or off" >&2; return 1 ;;
+  esac
+}
+
+cmd_rebuild() {
+  local d n=0; d="$(cmd_dir)" || { echo "omacosy-custom-theme: nothing to rebuild" >&2; return 1; }
+  rm -rf "$DERIVED"
+  while IFS= read -r f; do cmd_theme "$f" >/dev/null && n=$((n+1)); done < <(images "$d")
+  echo "rebuilt $n themes from $d"
+}
+
+cmd_status() {
+  local d n; d="$(wallpaper_dir)"
+  echo "wallpaper directory : $d"
+  if [ -n "$(conf_get custom_wallpapers)" ]; then
+    echo "  set by            : $CONF"
+  else
+    echo "  set by            : default (no $CONF, or no custom_wallpapers key)"
+  fi
+  if [ ! -d "$d" ]; then
+    echo "  state             : MISSING — the custom theme is not in the cycle"
+  else
+    n="$(images "$d" | wc -l | tr -d ' ')"
+    if [ "$n" -eq 0 ]; then
+      echo "  state             : empty — the custom theme is not in the cycle"
+    else
+      echo "  images            : $n"
+      echo "  state             : active — Super+Shift+T reaches it last"
+    fi
+  fi
+  local follow day night cached
+  follow="$(conf_get follow_appearance)"; follow="${follow:-off}"
+  day="$(conf_get day)";                  day="${day:-(unset)}"
+  night="$(conf_get night)";              night="${night:-(unset)}"
+  if [ -d "$DERIVED" ]; then
+    cached="$(find "$DERIVED" -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' ')"
+  else
+    cached=0
+  fi
+  echo "follow_appearance   : $follow"
+  echo "day                 : $day"
+  echo "night               : $night"
+  echo "derived themes      : $cached cached in $DERIVED"
+  [ -x "$DERIVE_BIN" ] || echo "  WARNING           : $DERIVE_BIN missing — run install.sh"
+}
+
+case "${1:-status}" in
+  dir)      cmd_dir ;;
+  current)  cmd_current ;;
+  list)     cmd_list ;;
+  theme)    shift; cmd_theme "${1:-}" ;;
+  path)     shift; cmd_path "${1:-}" ;;
+  day)      shift; cmd_day_night day "${1:-}" ;;
+  night)    shift; cmd_day_night night "${1:-}" ;;
+  resolve)  shift; cmd_resolve "${1:-}" ;;
+  apply)    shift; cmd_apply "${1:-}" ;;
+  follow)   shift; cmd_follow "${1:-}" ;;
+  rebuild)  cmd_rebuild ;;
+  status)   cmd_status ;;
+  *) sed -n '2,14p' "$0" >&2; exit 2 ;;
+esac
