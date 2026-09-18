@@ -81,7 +81,7 @@ So a computed theme has five numbers to produce:
 
 | colour | where you see it |
 | --- | --- |
-| `BAR_BG_SOLID` | the menu bar background |
+| `BAR_BG_SOLID` | the focused workspace number, the popups and the cheat sheet, **computed separately**, see 4.7 |
 | `ITEM_BG` | the pill behind each item |
 | `MUTED` | unfocused workspace numbers, the clock |
 | `LABEL_COLOR` | text and icons |
@@ -341,21 +341,29 @@ Rounding costs up to 0.5/255 per channel, and luminance is a weighted sum,
 so two colours can drift 0.004 apart. The floors are a promise about the
 hex written to the file.
 
-Measured over 66 images — the 19 shipped wallpapers and 47 personal ones —
-all five hold with zero failures, tightest 0.0851 against a floor of
-0.085. Two full runs produce byte-identical output.
+These floors give the ladder its shape. They do not decide whether text is
+legible: the focused workspace number passed all of them at 2.5:1. Section
+4.7 adds WCAG contrast checks after them, and those win. Measured over 66
+images, four floors now give way to them: label vs pill on 9 wallpapers
+and pill vs bar on 8, where the pill moved to sit on the real wallpaper
+behind it, and muted vs label and accent vs bar on 5 and 2, where no
+surface suits light text and a dark accent together. Muted vs pill,
+accent vs pill and ring vs bar hold on all 66. Two full runs produce
+byte-identical output.
 
 ### 4.5 The fixture
 
 Running the derivation on the first wallpaper of each shipped theme must
 produce exactly:
 
-| wallpaper | bar | pill | muted | label | accent | ring |
-| --- | --- | --- | --- | --- | --- | --- |
-| `catppuccin/1-totoro.webp` | `1d1d33` | `44314f` | `8a7c92` | `dbc0eb` | `ab38ee` | `c171f0` | dark |
-| `gruvbox/1-the-backwater.jpg` | `464c35` | `68604e` | `a59f93` | `ece0c5` | `eba50c` | `f0ca76` | dark |
-| `osaka-jade/1-glowing-city.webp` | `003c30` | `0d5842` | `7f958f` | `c0ebde` | `0ceba8` | `0cf0ac` | dark |
-| `tokyo-night/0-winding-road.webp` | `7540ac` | `925dc8` | `bcb6c2` | `faf7fd` | `f58ab5` | `f03a82` | dark |
+| wallpaper | bar | pill | muted | label | accent | ring | surface | ladder |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `catppuccin/1-totoro.webp` | `1d1d33` | `333444` | `7c7d92` | `c0c2eb` | `a7b0fd` | `909afe` | `141423` | dark |
+| `gruvbox/1-the-backwater.jpg` | `464c35` | `2c2b16` | `8a8a73` | `ebeac0` | `d4b53b` | `c2ab44` | `0f0e01` | dark |
+| `osaka-jade/1-glowing-city.webp` | `003c30` | `1e382f` | `768d88` | `c5e9e1` | `56b394` | `43ae8d` | `021b13` | dark |
+| `tokyo-night/0-winding-road.webp` | `7540ac` | `3a2859` | `817990` | `d0c0eb` | `bba8fd` | `aa8eff` | `180c2a` | dark |
+
+`omacosy-derive --print <image>...` prints these columns in this order.
 
 Reproducing a hand judgement is not the goal; producing a coherent scheme
 is. Still, reading the whole image rather than the top strip moved three
@@ -413,6 +421,108 @@ umbrellas   eb3523 -> db8279   dusty rose
 clouds      ae301a -> e7ada3   soft salmon
 tiger       7a122c -> e7728f   bright pink
 spider      755f12 -> e5d69e   light golden
+```
+
+**A saturated yellow ring glares.** Around a window, amber and yellow at
+full saturation are the loudest thing on the screen: a circuit board gave
+`d89603`. For a ring hue from 35 to 70 degrees, the saturation drops to
+0.65 and the hue and value stay. The accent on the bar does not change.
+
+### 4.7 Legible by rule, and the dark ladder
+
+The checks in 4.4 compare luminance. These compare what a person reads:
+WCAG contrast ratios, on the 8-bit values written to the file. They run
+after 4.4, in this order.
+
+**The dark ladder takes the picture's shadow.** On a mid-tone bar, the
+ladder lifted the pill until the label had nowhere to go but black. A
+magenta sunset got salmon pills with black text. On the dark ladder the
+pill now goes below the bar, at most luminance 0.20, in the hue of the
+picture's dark tones: the pixels between value 0.12 and 0.50, darker ones
+weighted more. A pink sky has purple shadows, so its pills are plum. A bar
+too dark to have a pill under it keeps the pill's lightness and only
+changes hue.
+
+**The accent follows the shadow when it is the same family.** If the dark
+tone is within 45 degrees of the bar's hue, the accent and the ring move
+one step further in the same direction, up to 30 degrees: from pink, past
+plum, to purple. A dark tone of another family, like palm leaves under a
+blue sky, is a different object, and the accent keeps naming the picture.
+The move is done in OKLCH. Lightened in HSV, the plum at 300 degrees
+reads as orchid pink.
+
+**No neon green.** The accent's saturation is up to 2.4 times the
+picture's. Blue looks fine at that level and yellow-green looks
+fluorescent. From 70 to 150 degrees the factor is 1.5 at most.
+
+**Jade.** A deep green scene came out bright aqua and mint, where the stock
+osaka-jade theme is a subdued jade, `509475`. The rule acts when the bar
+is dark (value under 0.30) and green to teal (140 to 185 degrees), and the
+accent is green to aqua (140 to 180 degrees). The accent and the ring then
+drop to about a third of their chroma in OKLCH, their hue moves halfway to
+jade (160), and the text loses most of its mint. Cyan accents, from 185
+degrees, belong to bright teal scenes and do not change.
+
+The pill in such a scene is made the way the stock theme makes it. The
+stock pill, `23372b`, has the same lightness as its wallpaper: 1.0:1, so no
+contrast floor could ever choose it. It stands out by colour. The derived
+pill takes the wallpaper's lightness (the median of the strip slices
+below), the hue of the picture's shadow moved halfway to jade, and 0.3
+times the picture's chroma, kept between 0.02 and 0.05. On osaka-jade's own
+wallpaper that gives `1e382f`.
+
+**Grey scenes keep a quiet accent.** On a near-grey photograph with a cool
+cast, the 2.4x boost turned a faint blue-grey into sky blue `38c7ff`.
+Twenty dark wallpapers wore accents 3 to 20 times more colourful than
+anything in them. HSV saturation cannot see this, so the picture's
+colourfulness is measured as the 90th percentile of OKLCH chroma over its
+pixels. Under 0.07, the accent's chroma is at most 2.5 times the picture's,
+never under 0.05, and the ring's 0.02 more. Hue and lightness stay.
+
+**The pill is seen on the real wallpaper.** The base colour is one average
+across the bar. On a street with a bright sky in the middle, that average
+was lighter than the dark slate under the pills, and a pill that passed
+against it was invisible. The pill is now judged against the wallpaper
+itself, in 8 slices across the bar, and it must pass against 6 of them, so
+one bright window or dark corner does not decide. A dark pill is preferred,
+because a light pill on a dark desktop glows. In order, the lightness
+nearest the ladder's own pill wins:
+
+```
+1. darker than the wallpaper, 1.7:1     never near black: relative
+2. darker than the wallpaper, 1.5:1     luminance under 0.012 reads as a hole
+3. any lightness, 1.3:1                 a lighter pill takes the DARKEST value
+                                        that passes, so it stays close to the
+                                        bar on a very dark desktop
+```
+
+The light ladder keeps one check, 1.7:1 against the base.
+
+**Text on a pill.** The label reaches 4.5:1 on the pill, the accent 3:1 on
+the pill and on the surface.
+
+**The surface is searched.** `BAR_BG_SOLID` is not the bar strip, which is
+the wallpaper showing through. The bar uses it in three places: the colour
+of the focused workspace number, and the background of the popups and the
+cheat sheet (Super+K). In the cheat sheet the keys are the label, the
+descriptions are `MUTED` and the headings are the accent. `MUTED` was
+designed as dim text on a pill and never checked there, and 48 of 64
+wallpapers put the descriptions under 4.5:1.
+
+So the surface's lightness is searched, in the pill's hue with little
+chroma, for keys 7:1, descriptions 4.5:1 and accent 3:1. Of the values
+that pass, the one nearest the theme's own look wins: the bar colour on
+the light ladder, a step under the pill on the dark one. On 5 wallpapers
+the text is light and the accent is dark, and no surface suits both. The
+text colours then move instead: the descriptions reach 4.5:1, the keys
+4.5:1 in place of 7:1, and the two become almost the same colour. On a
+dark pill the surface is darker still, so on the slate wallpapers the
+popups and the cheat sheet are almost black.
+
+```
+                          before        after
+focused number, quattro   2.5:1         8.7:1
+cheat sheet, village      1.5:1        10.4:1   descriptions
 ```
 
 ## 5. How a computed theme reaches the screen
