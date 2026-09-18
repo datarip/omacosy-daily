@@ -258,6 +258,31 @@ func towardLum(_ c: RGB, _ wanted: Double) -> RGB {
     return best
 }
 
+// Push a colour out of two forbidden luminance bands at once, the bar's and
+// the pill's. Calling separate() twice cannot do it: the second call happily
+// lands back inside the first band.
+func clearOf(_ c: RGB, bar: RGB, pill: RGB) -> RGB {
+    let lb = q8(bar).lum, lp = q8(pill).lum
+    let lo = min(lb - 0.28, lp - 0.20)
+    let hi = max(lb + 0.28, lp + 0.20)
+    let lc = q8(c).lum
+    if lc <= lo || lc >= hi { return c }
+    let downOK = lo >= 0.0, upOK = hi <= 1.0
+    let goUp: Bool
+    if upOK && downOK { goUp = (hi - lc) <= (lc - lo) }
+    else if upOK { goUp = true }
+    else if downOK { goUp = false }
+    else { goUp = (1.0 - lc) >= lc }
+    let target = goUp ? white : black
+    let wanted = goUp ? hi : lo
+    for step in 1...50 {
+        let cand = blend(c, toward: target, 0.02 * Double(step))
+        let l = q8(cand).lum
+        if goUp ? (l >= wanted) : (l <= wanted) { return cand }
+    }
+    return target
+}
+
 func derive(_ base: RGB, loud: (hue: Double, sat: Double)?) -> Palette {
     let (_, _, V) = toHSV(base)
     // The BAR keeps the base colour untouched: it has to match the real macOS
@@ -302,7 +327,9 @@ func derive(_ base: RGB, loud: (hue: Double, sat: Double)?) -> Palette {
     // gap to sit in the middle of.
     pill   = separate(pill,   from: base, need: 0.085)
     label  = separate(label,  from: pill, need: 0.50)
-    accent = separate(accent, from: base, need: 0.28)
+    // The accent is drawn ON pills — it fills the focused workspace chip and
+    // it is the app name's text colour — so clearing the BAR is not enough.
+    accent = clearOf(accent, bar: base, pill: pill)
     muted  = towardLum(muted, (q8(pill).lum + q8(label).lum) / 2)
 
     return Palette(bar: base, pill: pill, muted: muted, label: label, accent: accent,
