@@ -224,7 +224,7 @@ Light ladder — dark text on a light bar:
 pill   = hue,  saturation × 0.55,   value × 0.80
 muted  = hue,  0.30,                value × 0.42
 label  = hue,  0.38,                value × 0.16
-accent = hue,  max(0.70, sat),      value × 0.38
+accent = hue,  max(0.85, sat),      0.92
 ```
 
 With no loud colour the saturations become 0 and the result is a neutral
