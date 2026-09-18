@@ -24,6 +24,7 @@ not overwrite them:
 | `~/.config/omacosy/settings.conf` | app choices, workspace rules, float rules, ring radius, window corners |
 | `~/.config/omacosy/bar.conf` | bar auto-hide, where the top edge splits, the slide time |
 | `~/.config/omacosy/solo-fullscreen` | its presence turns the one-window fullscreen on |
+| `~/.config/omacosy/themes.conf` | the custom theme's wallpaper directory, and the day/night choices. Optional — absent means `~/Pictures/wallpapers` and no day/night |
 | `~/.zshrc.local` | your shell config |
 
 `omacosy-settings` reads `settings.conf` and writes your values back into
