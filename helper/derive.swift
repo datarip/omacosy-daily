@@ -339,8 +339,13 @@ func derive(_ base: RGB, picture: (hue: Double, sat: Double, share: Double)?) ->
     // Share alone separates the two cases that matter: a beige desktop whose
     // only other colour is a dog scores 49% and keeps a beige accent, and
     // that red sun scores high and keeps its red.
+    // 0.50, not 0.65. Five wallpapers were reported whose bar and ring
+    // disagreed, and their shares cluster tightly: 49, 51, 55, 61, 63. Only
+    // the beige room with a dog falls under half, and that is the one whose
+    // BAR colour the eye trusts. The rest are dark skies whose hue is barely
+    // a colour at all, and there the picture is right.
     var accentH = baseH, accentS = baseS
-    if let p = picture, p.share >= 0.65 { accentH = p.hue; accentS = max(baseS, p.sat) }
+    if let p = picture, p.share >= 0.50 { accentH = p.hue; accentS = max(baseS, p.sat) }
     // Luminance, NOT V. A saturated purple at V=0.62 has luminance 0.27 and
     // needs LIGHT text; choosing on V called it a light bar and painted
     // near-black text on it.
@@ -400,10 +405,17 @@ func derive(_ base: RGB, picture: (hue: Double, sat: Double, share: Double)?) ->
     // the bar. So it keeps the picture's own saturation — a pastel picture
     // gets a pastel ring rather than a forced 0.85 — and it stays bright.
     // Its only job is to be seen against the desktop behind it.
+    // The ring wears the SAME hue as the accent. It used to take the
+    // picture's hue unconditionally, and whenever the accent fell back to the
+    // bar the two disagreed: an earth-brown bar with a blue ring, a blue bar
+    // with a yellow ring. A desktop cannot name two different colours at
+    // once. Only the treatment differs — the ring keeps more of the picture's
+    // saturation and stays brighter, because it is a stroke on a window
+    // rather than text on a pill.
     var ring = accent
     if !low {
-        let ringS = min(0.95, max(0.45, S * 1.20))
-        ring = fromHSV(H + accentHueShift, ringS, light ? 0.86 : 0.94)
+        let ringS = min(0.95, max(0.45, accentS * 1.20))
+        ring = fromHSV(accentH, ringS, light ? 0.86 : 0.94)
         // Visible against the wallpaper, whose colour near the bar is the
         // base. Two differences from the accent's rule, and both were asked
         // for by eye:
