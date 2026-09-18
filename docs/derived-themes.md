@@ -85,7 +85,8 @@ So a computed theme has five numbers to produce:
 | `ITEM_BG` | the pill behind each item |
 | `MUTED` | unfocused workspace numbers, the clock |
 | `LABEL_COLOR` | text and icons |
-| `ACCENT` | the focused workspace, and the focus ring |
+| `ACCENT` | the focused workspace chip, and the app name's text |
+| `ACTIVE_COLOR` | the focus ring, **computed separately**, see 4.6 |
 
 `RED`, `GREEN` and `YELLOW` are also declared. They carry meaning — a low
 battery has to read as red — so they are fixed and the wallpaper gets no
@@ -278,8 +279,9 @@ the surface it sits on and corrected until it passes.
 | label vs pill | 0.50 | the shipped gap is 0.56 to 0.64 |
 | muted vs pill | 0.18 | the shipped gap is 0.19 to 0.24 |
 | muted vs label | 0.18 | same |
-| ring vs bar | 0.28 | so the ring reads against the bar |
-| ring vs pill | 0.20 | the accent is drawn ON pills, see below |
+| accent vs bar | 0.28 | so the accent reads against the bar |
+| accent vs pill | 0.20 | the accent is drawn ON pills, see below |
+| ring vs bar | 0.10 | a stroke on a window edge, see 4.6 |
 
 Two failures during development shaped how this is done.
 
@@ -316,17 +318,56 @@ Measured over 66 images — the 19 shipped wallpapers and 47 personal ones —
 all five hold with zero failures, tightest 0.0851 against a floor of
 0.085. Two full runs produce byte-identical output.
 
+### 4.6 The ring is not the accent
+
+All four shipped themes write the same value into `sketchybar.sh`'s `ACCENT`
+and `borders.sh`'s `ACTIVE_COLOR`. A computed theme does not, because they
+are different surfaces with different jobs.
+
+**The accent sits on the bar and on a pill.** It has to clear both, and those
+two bands are what crush it dark: a pale bar leaves nowhere to go but down,
+and down on a warm hue is brown. Measured on four reported wallpapers, the
+accent's saturation was pinned at exactly 0.85 by a floor while the pictures
+themselves were pastel:
+
+| wallpaper | picture sat | accent sat | result |
+| --- | --- | --- | --- |
+| umbrellas | 0.20 | 0.85 | aggressive pure red |
+| spider | 0.17 | 0.85 | dark brown |
+| tiger | 0.68 | 0.85 | dark maroon at value 0.48 |
+
+**The ring is drawn around a window, on the wallpaper.** It never touches the
+bar. So it keeps the picture's own saturation, which lets a pastel picture
+have a pastel ring, and it resolves **brighter, never darker** — darkening a
+warm hue is exactly how the browns happened.
+
+```
+ring = picture hue,  min(0.95, max(0.45, picture sat x 1.20)),  0.86 light / 0.94 dark
+       then lifted until it clears the bar by 0.10
+```
+
+Only the lift direction is special. Past a bar luminance of 0.75 there is no
+room above, and climbing anyway washes the hue out toward white, so those
+fall back to going down.
+
+```
+umbrellas   eb3523 -> db8279   dusty rose
+clouds      ae301a -> e7ada3   soft salmon
+tiger       7a122c -> e7728f   bright pink
+spider      755f12 -> e5d69e   light golden
+```
+
 ### 4.5 The fixture
 
 Running the derivation on the first wallpaper of each shipped theme must
 produce exactly:
 
-| wallpaper | bar | pill | muted | label | accent |
-| --- | --- | --- | --- | --- | --- |
-| `catppuccin/1-totoro.webp` | `1d1d33` | `44314f` | `8a7c92` | `dbc0eb` | `c481eb` | dark |
-| `gruvbox/1-the-backwater.jpg` | `464c35` | `68604e` | `a59f93` | `ece0c5` | `ebc778` | dark |
-| `osaka-jade/1-glowing-city.webp` | `003c30` | `0d5842` | `7f958f` | `c0ebde` | `00eba5` | dark |
-| `tokyo-night/0-winding-road.webp` | `7540ac` | `925dc8` | `bcb6c2` | `faf7fd` | `f189b2` | dark |
+| wallpaper | bar | pill | muted | label | accent | ring |
+| --- | --- | --- | --- | --- | --- | --- |
+| `catppuccin/1-totoro.webp` | `1d1d33` | `44314f` | `8a7c92` | `dbc0eb` | `c481eb` | `c884f0` | dark |
+| `gruvbox/1-the-backwater.jpg` | `464c35` | `68604e` | `a59f93` | `ece0c5` | `ebc778` | `f0ca76` | dark |
+| `osaka-jade/1-glowing-city.webp` | `003c30` | `0d5842` | `7f958f` | `c0ebde` | `00eba5` | `0cf0ac` | dark |
+| `tokyo-night/0-winding-road.webp` | `7540ac` | `925dc8` | `bcb6c2` | `faf7fd` | `f189b2` | `f05290` | dark |
 
 Reproducing a hand judgement is not the goal; producing a coherent scheme
 is. Still, reading the whole image rather than the top strip moved three
