@@ -9,8 +9,10 @@
 #   omacosy-custom-theme list            print its images, sorted, or exit 1
 #   omacosy-custom-theme theme <image>   print the derived theme dir, building it if needed
 #   omacosy-custom-theme path <dir>      point the custom theme somewhere else
-#   omacosy-custom-theme day <image>     wallpaper for the light appearance
-#   omacosy-custom-theme night <image>   wallpaper for the dark appearance
+#   omacosy-custom-theme day <spec>      what to show in the light appearance
+#   omacosy-custom-theme night <spec>    what to show in the dark appearance
+#   omacosy-custom-theme resolve <spec>  say what a spec would do, without doing it
+#   omacosy-custom-theme apply <spec>    put a spec on screen now
 #   omacosy-custom-theme follow on|off   follow the macOS appearance
 #   omacosy-custom-theme rebuild         regenerate every derived theme
 #
@@ -27,6 +29,12 @@ CONF="$HOME/.config/omacosy/themes.conf"
 DEFAULT_DIR="$HOME/Pictures/wallpapers"
 DERIVED="$HOME/.local/state/omacosy/derived"
 DERIVE_BIN="$HOME/.local/bin/omacosy-derive"
+CUSTOM_INDEX="$HOME/.local/state/omacosy/custom-index"
+# resolve through the ~/.local/bin symlink to the real repo
+REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+THEMES_DIR="$REPO_DIR/themes"
+THEME_SET="$REPO_DIR/bin/theme-set"
+THEME_BG_NEXT="$REPO_DIR/bin/theme-bg-next"
 
 # The stock themes take upstream's list. The custom theme adds gif.
 # Measured 2026-09-18: macOS accepts an animated gif as the desktop
@@ -148,14 +156,87 @@ cmd_path() {
   echo "custom wallpapers: $d ($n images)"
 }
 
+# What a day= or night= value may say. One rule per form, decided by the
+# shape of the string, so a stock theme and a wallpaper of your own can
+# live in the same field:
+#
+#   gruvbox                      a stock theme, its first wallpaper
+#   gruvbox/2-flower-basket.webp a stock theme, that exact wallpaper
+#   a_beach.jpg                  a file in the custom wallpaper directory
+#   /Volumes/Photos/dawn.jpg     any absolute path
+#
+# Prints two words: the theme to set, and the wallpaper to set inside it
+# (or "-" for the theme's own first image). Exit 1 and a reason if the
+# value names nothing that exists.
+resolve_spec() {
+  local spec="$1" d
+  [ -n "$spec" ] || { echo "empty" >&2; return 1; }
+
+  # an absolute path is a wallpaper, and which theme it belongs to depends
+  # on where it lives
+  if [ "${spec#/}" != "$spec" ]; then
+    [ -f "$spec" ] || { echo "no such file: $spec" >&2; return 1; }
+    case "$spec" in
+      "$THEMES_DIR"/*) printf '%s %s\n' "$(basename "$(dirname "$(dirname "$spec")")")" "$spec" ;;
+      *)               printf 'custom %s\n' "$spec" ;;
+    esac
+    return 0
+  fi
+
+  # a bare stock theme name
+  if [ -d "$THEMES_DIR/$spec" ]; then printf '%s -\n' "$spec"; return 0; fi
+
+  # <stock theme>/<wallpaper>
+  case "$spec" in
+    */*)
+      local t="${spec%%/*}" f="${spec#*/}"
+      if [ -d "$THEMES_DIR/$t" ]; then
+        local p="$THEMES_DIR/$t/backgrounds/$f"
+        [ -f "$p" ] || { echo "no such wallpaper in $t: $f" >&2; return 1; }
+        printf '%s %s\n' "$t" "$p"; return 0
+      fi
+      ;;
+  esac
+
+  # a filename in the custom wallpaper directory
+  d="$(wallpaper_dir)"
+  [ -f "$d/$spec" ] || { echo "not a stock theme, and no such file in $d: $spec" >&2; return 1; }
+  printf 'custom %s\n' "$d/$spec"
+}
+
+# Show what a value would do, without doing it.
+cmd_resolve() {
+  local r; r="$(resolve_spec "${1:-}")" || return 1
+  set -- $r
+  if [ "$2" = "-" ]; then echo "theme $1 (its first wallpaper)"; else echo "theme $1, wallpaper $2"; fi
+}
+
+# Put a day=/night= value on screen. This is what the appearance agent
+# calls, and it is the only place that knows how to reach any theme.
+cmd_apply() {
+  local r; r="$(resolve_spec "${1:-}")" || return 1
+  set -- $r
+  local theme="$1" wall="$2"
+  if [ "$theme" = custom ]; then
+    # theme-set custom reads custom-index, so pointing it at the wanted
+    # wallpaper first is what makes it land there rather than on the
+    # remembered one.
+    mkdir -p "$(dirname "$CUSTOM_INDEX")"
+    printf '%s\n' "$wall" > "$CUSTOM_INDEX"
+    "$THEME_SET" custom >/dev/null || return 1
+  else
+    "$THEME_SET" "$theme" >/dev/null || return 1
+    [ "$wall" = "-" ] || "$THEME_BG_NEXT" "$wall" >/dev/null || return 1
+  fi
+  echo "$theme${wall:+ }${wall#-}"
+}
+
 cmd_day_night() {
   local key="$1" arg="${2:-}"
-  [ -n "$arg" ] || { echo "omacosy-custom-theme: $key needs an image" >&2; return 1; }
-  local d f; d="$(wallpaper_dir)"
-  case "$arg" in /*) f="$arg" ;; *) f="$d/$arg" ;; esac
-  [ -f "$f" ] || { echo "omacosy-custom-theme: no such image: $f" >&2; return 1; }
+  [ -n "$arg" ] || { echo "omacosy-custom-theme: $key needs a theme or a wallpaper" >&2; return 1; }
+  local r; r="$(resolve_spec "$arg")" || return 1
   conf_set "$key" "$arg"
-  echo "$key: $f"
+  echo "$key: $arg  ->  $(cmd_resolve "$arg")"
 }
 
 cmd_follow() {
@@ -193,16 +274,16 @@ cmd_status() {
   fi
   local follow day night cached
   follow="$(conf_get follow_appearance)"; follow="${follow:-off}"
-  day="$(conf_get day_wallpaper)";        day="${day:-(unset)}"
-  night="$(conf_get night_wallpaper)";    night="${night:-(unset)}"
+  day="$(conf_get day)";                  day="${day:-(unset)}"
+  night="$(conf_get night)";              night="${night:-(unset)}"
   if [ -d "$DERIVED" ]; then
     cached="$(find "$DERIVED" -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' ')"
   else
     cached=0
   fi
   echo "follow_appearance   : $follow"
-  echo "day_wallpaper       : $day"
-  echo "night_wallpaper     : $night"
+  echo "day                 : $day"
+  echo "night               : $night"
   echo "derived themes      : $cached cached in $DERIVED"
   [ -x "$DERIVE_BIN" ] || echo "  WARNING           : $DERIVE_BIN missing — run install.sh"
 }
@@ -213,8 +294,10 @@ case "${1:-status}" in
   list)     cmd_list ;;
   theme)    shift; cmd_theme "${1:-}" ;;
   path)     shift; cmd_path "${1:-}" ;;
-  day)      shift; cmd_day_night day_wallpaper "${1:-}" ;;
-  night)    shift; cmd_day_night night_wallpaper "${1:-}" ;;
+  day)      shift; cmd_day_night day "${1:-}" ;;
+  night)    shift; cmd_day_night night "${1:-}" ;;
+  resolve)  shift; cmd_resolve "${1:-}" ;;
+  apply)    shift; cmd_apply "${1:-}" ;;
   follow)   shift; cmd_follow "${1:-}" ;;
   rebuild)  cmd_rebuild ;;
   status)   cmd_status ;;
