@@ -256,10 +256,15 @@ cmd_rebuild() {
 cmd_status() {
   local d n; d="$(wallpaper_dir)"
   echo "wallpaper directory : $d"
+  # Three states, not two: the file can exist and simply not set this key.
+  # Saying "no themes.conf, or no custom_wallpapers key" read as a
+  # contradiction next to a day= value printed from that same file.
   if [ -n "$(conf_get custom_wallpapers)" ]; then
-    echo "  set by            : $CONF"
+    echo "  set by            : custom_wallpapers in $CONF"
+  elif [ -f "$CONF" ]; then
+    echo "  set by            : default ($CONF exists but sets no custom_wallpapers)"
   else
-    echo "  set by            : default (no $CONF, or no custom_wallpapers key)"
+    echo "  set by            : default (no $CONF)"
   fi
   if [ ! -d "$d" ]; then
     echo "  state             : MISSING — the custom theme is not in the cycle"
