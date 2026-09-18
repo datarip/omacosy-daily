@@ -201,6 +201,32 @@ func pictureChroma(of url: URL) -> Double? {
     return cs[Int(Double(cs.count - 1) * 0.9)]
 }
 
+// The picture's WARM light: pixels at OKLCH hue 40-120 (red-orange to
+// yellow-green) with chroma 0.03 or more, circular mean weighted by chroma.
+// A cool jade scene lit by a few lamps is where the stock osaka-jade theme
+// puts its khaki text; this finds the lamps. nil under 0.1% of the picture.
+func warmToneColour(of url: URL) -> (hue: Double, share: Double)? {
+    guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+          let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+    let bm = NSBitmapImageRep(cgImage: cg)
+    guard bm.pixelsWide > 0, bm.pixelsHigh > 0 else { return nil }
+    var hx = 0.0, hy = 0.0, n = 0.0, all = 0.0
+    for x in stride(from: 0, to: bm.pixelsWide, by: max(1, bm.pixelsWide / 200)) {
+        for y in stride(from: 0, to: bm.pixelsHigh, by: max(1, bm.pixelsHigh / 200)) {
+            guard let c = bm.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+            let o = toOKLCH(RGB(r: Double(c.redComponent), g: Double(c.greenComponent), b: Double(c.blueComponent)))
+            all += 1
+            guard o.h >= 40, o.h <= 120, o.C >= 0.03 else { continue }
+            let a = o.h * .pi / 180
+            hx += cos(a) * o.C; hy += sin(a) * o.C; n += 1
+        }
+    }
+    guard all > 0, n / all >= 0.001 else { return nil }
+    var h = atan2(hy, hx) * 180 / .pi
+    if h < 0 { h += 360 }
+    return (h, n / all)
+}
+
 // MARK: - the picture's colour
 
 // The hue the picture READS as, and how much of the picture agrees.
@@ -456,7 +482,8 @@ func clearOf(_ c: RGB, bar: RGB, pill: RGB, preferUp: Bool) -> RGB {
 }
 
 func derive(_ base: RGB, picture: (hue: Double, sat: Double, share: Double)?,
-            darkTone: (hue: Double, sat: Double)?, strip: [RGB], chroma: Double?) -> Palette {
+            darkTone: (hue: Double, sat: Double)?, strip: [RGB], chroma: Double?,
+            warm: (hue: Double, share: Double)?) -> Palette {
     // Two hues, for two jobs.
     //
     // The BAR, the pills, the muted text and the labels all keep the BASE
@@ -654,8 +681,11 @@ func derive(_ base: RGB, picture: (hue: Double, sat: Double, share: Double)?,
         let h = ha + (160 - ha) * 0.5
         accent = oklchFit(0.70, 0.10, h) ?? accent
         shiftedRing = oklchFit(0.68, 0.11, h) ?? shiftedRing
+        // Colour temperature: warm text on a cool scene, the stock theme's
+        // khaki on jade, in the hue of the picture's own warm light. A jade
+        // scene with no warm light keeps its cool text.
         let lo = toOKLCH(label)
-        label = oklchFit(lo.L, 0.04, lo.h) ?? label
+        label = oklchFit(lo.L, 0.04, warm?.hue ?? lo.h) ?? label
         let mo = toOKLCH(muted)
         muted = oklchFit(mo.L, min(mo.C, 0.04), mo.h) ?? muted
         // The pill as the stock theme makes it: the SAME lightness as the
@@ -672,6 +702,17 @@ func derive(_ base: RGB, picture: (hue: Double, sat: Double, share: Double)?,
     // The accent is drawn ON pills — it fills the focused workspace chip and
     // it is the app name's text colour — so clearing the BAR is not enough.
     accent = clearOf(accent, bar: base, pill: pill, preferUp: !light)
+    // TINTED TEXT, as the stock themes tint it. Their label sits at OKLCH
+    // lightness 0.81-0.89 with chroma 0.04-0.06; ours reached 0.91 and read as
+    // white in the cheat sheet. On the dark ladder the label goes to 0.85 with
+    // chroma 0.055, in its own hue, never more than 0.6x the accent's chroma
+    // so a grey scene keeps near-neutral text. The contrast checks below still
+    // decide.
+    if !light {
+        let lo = toOKLCH(label)
+        let c = min(0.055, 0.6 * toOKLCH(accent).C)
+        label = oklchFit(0.85, max(c, lo.C), lo.h) ?? label
+    }
     muted  = towardLum(muted, (q8(pill).lum + q8(label).lum) / 2)
     // TEXT IS CHECKED AS TEXT. The luminance floors above keep the ladder's
     // shape, and they passed while the focused workspace number sat at 2.5:1.
@@ -866,7 +907,8 @@ if args[1] == "--print" {
             print("FAIL  \(url.lastPathComponent)"); continue
         }
         let p = derive(base, picture: pictureColour(of: url), darkTone: darkToneColour(of: url),
-                       strip: stripSlices(of: url), chroma: pictureChroma(of: url))
+                       strip: stripSlices(of: url), chroma: pictureChroma(of: url),
+                       warm: warmToneColour(of: url))
         print("\(p.bar.hex) \(p.pill.hex) \(p.muted.hex) \(p.label.hex) \(p.accent.hex) \(p.ring.hex) \(p.surface.hex) "
             + "\(p.isLight ? "light" : "dark")\(p.isLowChroma ? "+lowchroma" : "") "
             + url.lastPathComponent)
@@ -886,7 +928,8 @@ guard let base = baseColour(of: image) else {
 }
 do {
     try write(derive(base, picture: pictureColour(of: image), darkTone: darkToneColour(of: image),
-                     strip: stripSlices(of: image), chroma: pictureChroma(of: image)),
+                     strip: stripSlices(of: image), chroma: pictureChroma(of: image),
+                     warm: warmToneColour(of: image)),
               to: URL(fileURLWithPath: args[2]), from: image)
 } catch {
     FileHandle.standardError.write(

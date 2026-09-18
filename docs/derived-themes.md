@@ -358,10 +358,10 @@ produce exactly:
 
 | wallpaper | bar | pill | muted | label | accent | ring | surface | ladder |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `catppuccin/1-totoro.webp` | `1d1d33` | `333444` | `7c7d92` | `c0c2eb` | `a7b0fd` | `909afe` | `141423` | dark |
-| `gruvbox/1-the-backwater.jpg` | `464c35` | `2c2b16` | `8a8a73` | `ebeac0` | `d4b53b` | `c2ab44` | `0f0e01` | dark |
-| `osaka-jade/1-glowing-city.webp` | `003c30` | `1e382f` | `768d88` | `c5e9e1` | `56b394` | `43ae8d` | `021b13` | dark |
-| `tokyo-night/0-winding-road.webp` | `7540ac` | `3a2859` | `817990` | `d0c0eb` | `bba8fd` | `aa8eff` | `180c2a` | dark |
+| `catppuccin/1-totoro.webp` | `1d1d33` | `333444` | `7f8095` | `c8caf3` | `a7b0fd` | `909afe` | `161725` | dark |
+| `gruvbox/1-the-backwater.jpg` | `464c35` | `2c2b16` | `7d7d63` | `d1d1a7` | `d4b53b` | `c2ab44` | `0f0e01` | dark |
+| `osaka-jade/1-glowing-city.webp` | `003c30` | `1e382f` | `6c857f` | `dbcda5` | `56b394` | `43ae8d` | `021b13` | dark |
+| `tokyo-night/0-winding-road.webp` | `7540ac` | `3a2859` | `847c92` | `d5c5ef` | `bba8fd` | `aa8eff` | `1c1130` | dark |
 
 `omacosy-derive --print <image>...` prints these columns in this order.
 
@@ -470,6 +470,21 @@ pill takes the wallpaper's lightness (the median of the strip slices
 below), the hue of the picture's shadow moved halfway to jade, and 0.3
 times the picture's chroma, kept between 0.02 and 0.05. On osaka-jade's own
 wallpaper that gives `1e382f`.
+
+**The text is tinted, as the stock themes tint it.** Their label sits at
+OKLCH lightness 0.81 to 0.89 with chroma 0.04 to 0.06. The derived label
+reached 0.91 and read as white in the cheat sheet. On the dark ladder it now
+sits at 0.85 with chroma 0.055 in its own hue, never above 0.6 times the
+accent's chroma, so a grey scene keeps near-neutral text.
+
+**A jade scene gets warm text.** osaka-jade sets khaki text (hue 111)
+against a jade accent (163): a colour temperature contrast, warm on cool.
+The derived theme takes the warm hue from the picture: the pixels at OKLCH
+hue 40 to 120 with some chroma, averaged. If they cover at least 0.1% of
+the picture, the text takes their hue. osaka-jade's own wallpaper has a
+little yellow light at 91 degrees and gets cream `dbcda5`. A jade scene
+with no warm light keeps cool text, and blue, violet and warm scenes keep
+their own temperature, as catppuccin, tokyo-night and gruvbox do.
 
 **Grey scenes keep a quiet accent.** On a near-grey photograph with a cool
 cast, the 2.4x boost turned a faint blue-grey into sky blue `38c7ff`.
