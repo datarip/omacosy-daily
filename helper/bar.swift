@@ -449,8 +449,12 @@ func stripCachePath(_ surface: BarSurface) -> String {
 // strip and 0.4285 0.2459 0.6543 with the workspace empty, and three runs
 // minutes apart agreed to four decimals. So one capture per wallpaper is not
 // an approximation, it is the answer, and it is worth keeping.
-func wallpaperKey() -> String {
-    URL(fileURLWithPath: wallpaperLink).resolvingSymlinksInPath().path
+// Per SCREEN, not global. The strip cache is already one file per display,
+// and keying it by the one global link meant two displays with different
+// wallpapers shared a key and fought over the same entry.
+func wallpaperKey(for screen: NSScreen) -> String {
+    (wallpaperURL(for: screen) ?? URL(fileURLWithPath: wallpaperLink))
+        .resolvingSymlinksInPath().path
 }
 
 // A capture is kept forever and never re-taken, so a value written by an
@@ -507,11 +511,31 @@ func saveStrip(_ surface: BarSurface, _ colour: NSColor, for wallpaper: String) 
 // described by it, and on that setup the seed is the approximation it
 // already says it is. A right-half hover still replaces it with the
 // real thing.
+// How long after the link moves to keep trusting it over the screen.
+// The 337ms above is the measurement; 2s is the margin.
+let wallpaperSettle: TimeInterval = 2.0
+
+// attributesOfItem does NOT traverse the final symlink, so this is the
+// link's own mtime — exactly what `ln -nsf` updates.
+func wallpaperLinkIsFresh() -> Bool {
+    guard let a = try? FileManager.default.attributesOfItem(atPath: wallpaperLink),
+          let m = a[.modificationDate] as? Date else { return false }
+    return Date().timeIntervalSince(m) < wallpaperSettle
+}
+
 func wallpaperURL(for screen: NSScreen) -> URL? {
-    if FileManager.default.fileExists(atPath: wallpaperLink) {
+    // Inside the settle window the link is still the better answer, for the
+    // reason measured above: macOS has not caught up yet.
+    if wallpaperLinkIsFresh(), FileManager.default.fileExists(atPath: wallpaperLink) {
         return URL(fileURLWithPath: wallpaperLink)
     }
-    return NSWorkspace.shared.desktopImageURL(for: screen)
+    // Outside it, ASK THE SCREEN. The link names one image for EVERY screen,
+    // so taking it unconditionally meant a display showing its own wallpaper
+    // seeded its bar from the other display's picture — and the `screen`
+    // argument here was never used at all.
+    if let own = NSWorkspace.shared.desktopImageURL(for: screen) { return own }
+    return FileManager.default.fileExists(atPath: wallpaperLink)
+        ? URL(fileURLWithPath: wallpaperLink) : nil
 }
 
 // A seed costs a whole image decode. The wallpapers shipped here are
@@ -712,22 +736,25 @@ func captureOwnStrip(_ surface: BarSurface) {
     // paints from at login, before any hover — but the first hover for that
     // wallpaper in this session captures anyway and corrects it. A theme
     // change is long over by the time a hover happens in ordinary use.
-    let cachedStrip = loadStrips(surface)[wallpaperKey()]
-    if cachedStrip != nil, stripVerified.contains(wallpaperKey()) { return }
+    let key = wallpaperKey(for: surface.screen)
+    let cachedStrip = loadStrips(surface)[key]
+    if cachedStrip != nil, stripVerified.contains(key) { return }
     // The link changes the instant theme-bg-next runs, but macOS applies the
     // picture about 340ms later and the native bar re-tints after that. Until
     // the desktop agrees with the link, a capture is of the OLD wallpaper's
     // tint and would be filed under the new one, permanently, because a
     // wallpaper already cached is never captured again.
-    guard NSWorkspace.shared.desktopImageURL(for: surface.screen)?
-            .resolvingSymlinksInPath().path == wallpaperKey() else { return }
+    // Settled, rather than "the desktop agrees with the global link". The
+    // old test could never pass on a display carrying its own wallpaper, so
+    // that display was never captured and lived on its seed for good.
+    guard !wallpaperLinkIsFresh() else { return }
     stripCaptureInFlight = true
     // The wallpaper this capture belongs to, read BEFORE the screenshot. A
     // capture takes a subprocess and a decode, and a wallpaper change can land
     // in the middle of it. Filing the result under the new wallpaper would
     // poison the cache with the colour of the old one, and that is worse than
     // having no capture at all.
-    let capturedFor = wallpaperKey()
+    let capturedFor = key
     let frame = surface.screen.frame
     let origin = CGPoint(x: frame.minX, y: 0)      // screencapture uses top-left
     // The NATIVE bar's height, not this one's. They are not the same number:
@@ -798,7 +825,7 @@ func captureOwnStrip(_ surface: BarSurface) {
         let ordered = zip(lum, columns).sorted { $0.0 < $1.0 }.map { $0.1 }
         let flat = [ordered[ordered.count / 2]]
         DispatchQueue.main.async {
-            guard capturedFor == wallpaperKey() else { return }  // it moved under us
+            guard capturedFor == wallpaperKey(for: surface.screen) else { return }  // it moved under us
             guard let c = flat.first else { return }
             // Verified for this session whether or not anything changed. A
             // capture that was REJECTED never reaches here, so an unreadable
@@ -3561,7 +3588,7 @@ final class BarSurface {
         // The capture remembered for the wallpaper showing now. Keyed, so a
         // restart after a theme change no longer paints the previous
         // wallpaper's colour, which the old single-slot cache did.
-        backdropStrip = loadStrips(self)[wallpaperKey()].map { [$0] } ?? []
+        backdropStrip = loadStrips(self)[wallpaperKey(for: screen)].map { [$0] } ?? []
         if backdropStrip.isEmpty { backdropStrip = seedStripFromWallpaper(self) }
         window.orderFrontRegardless()
         // A sliding surface starts hidden, and a slide has to start from
