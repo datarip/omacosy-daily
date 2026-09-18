@@ -345,6 +345,37 @@ Measured over 66 images — the 19 shipped wallpapers and 47 personal ones —
 all five hold with zero failures, tightest 0.0851 against a floor of
 0.085. Two full runs produce byte-identical output.
 
+### 4.5 The fixture
+
+Running the derivation on the first wallpaper of each shipped theme must
+produce exactly:
+
+| wallpaper | bar | pill | muted | label | accent | ring |
+| --- | --- | --- | --- | --- | --- | --- |
+| `catppuccin/1-totoro.webp` | `1d1d33` | `44314f` | `8a7c92` | `dbc0eb` | `ab38ee` | `c171f0` | dark |
+| `gruvbox/1-the-backwater.jpg` | `464c35` | `68604e` | `a59f93` | `ece0c5` | `eba50c` | `f0ca76` | dark |
+| `osaka-jade/1-glowing-city.webp` | `003c30` | `0d5842` | `7f958f` | `c0ebde` | `0ceba8` | `0cf0ac` | dark |
+| `tokyo-night/0-winding-road.webp` | `7540ac` | `925dc8` | `bcb6c2` | `faf7fd` | `f58ab5` | `f03a82` | dark |
+
+Reproducing a hand judgement is not the goal; producing a coherent scheme
+is. Still, reading the whole image rather than the top strip moved three
+of the four a long way toward the colour a designer chose:
+
+```
+              hand-picked   top strip    loud colour
+catppuccin      cba6f7        30°     ->      1°
+gruvbox         fe8019        51°     ->      9°
+osaka-jade      509475        15°     ->      9°
+tokyo-night     7aa2f7        49°     ->    122°
+```
+
+Gruvbox is the striking one: its accent is orange, its top strip is olive,
+and the orange only appears once the whole picture is read. Tokyo-night
+goes the other way — its wallpaper has a large magenta sky, so pink is a
+fair reading of the picture and blue was the designer's taste.
+
+---
+
 ### 4.6 The ring is not the accent
 
 All four shipped themes write the same value into `sketchybar.sh`'s `ACCENT`
@@ -384,37 +415,6 @@ tiger       7a122c -> e7728f   bright pink
 spider      755f12 -> e5d69e   light golden
 ```
 
-### 4.5 The fixture
-
-Running the derivation on the first wallpaper of each shipped theme must
-produce exactly:
-
-| wallpaper | bar | pill | muted | label | accent | ring |
-| --- | --- | --- | --- | --- | --- | --- |
-| `catppuccin/1-totoro.webp` | `1d1d33` | `44314f` | `8a7c92` | `dbc0eb` | `ab38ee` | `c171f0` | dark |
-| `gruvbox/1-the-backwater.jpg` | `464c35` | `68604e` | `a59f93` | `ece0c5` | `eba50c` | `f0ca76` | dark |
-| `osaka-jade/1-glowing-city.webp` | `003c30` | `0d5842` | `7f958f` | `c0ebde` | `0ceba8` | `0cf0ac` | dark |
-| `tokyo-night/0-winding-road.webp` | `7540ac` | `925dc8` | `bcb6c2` | `faf7fd` | `f58ab5` | `f03a82` | dark |
-
-Reproducing a hand judgement is not the goal; producing a coherent scheme
-is. Still, reading the whole image rather than the top strip moved three
-of the four a long way toward the colour a designer chose:
-
-```
-              hand-picked   top strip    loud colour
-catppuccin      cba6f7        30°     ->      1°
-gruvbox         fe8019        51°     ->      9°
-osaka-jade      509475        15°     ->      9°
-tokyo-night     7aa2f7        49°     ->    122°
-```
-
-Gruvbox is the striking one: its accent is orange, its top strip is olive,
-and the orange only appears once the whole picture is read. Tokyo-night
-goes the other way — its wallpaper has a large magenta sky, so pink is a
-fair reading of the picture and blue was the designer's taste.
-
----
-
 ## 5. How a computed theme reaches the screen
 
 omacosy's bar and its focus-ring daemon watch `~/.config/omarchy/current`
@@ -445,6 +445,105 @@ rebuild` discards and regenerates them all.
 
 Nothing is written into your wallpaper directory, and nothing is written
 into the repo.
+
+### 5.1 The cache
+
+A theme is computed **once per wallpaper, ever** — not on each wallpaper
+change. `Super+Shift+B` in steady state writes a symlink and does no colour
+work at all.
+
+```sh
+~/.local/state/omacosy/derived/        48 themes, 384 KB in total
+```
+
+Two text files and one symlink per wallpaper. The key is the SHA-1 of the
+image's **absolute path**, so two copies of the same picture in different
+folders get their own entries, and moving a folder invalidates its themes.
+
+One staleness check exists:
+
+```sh
+[ "$img" -nt "$out/sketchybar.sh" ]
+```
+
+Edit an image in place and its theme is recomputed the next time you land on
+it. Replacing a file at the same path with a different picture is usually
+caught the same way, by the timestamp.
+
+The derivation is **pure**: the same image always yields the same hex.
+Verified by deriving the whole corpus twice and diffing — byte identical. So
+a cached theme and a freshly computed one can never disagree.
+
+### 5.2 Adding and removing wallpapers
+
+**Adding needs no command.** The wallpaper list is a `find` run at the moment
+you press the key, so a new image is in the cycle immediately. Its theme is
+computed the first time you reach it, once, then cached.
+
+**Removing needs no command either.** The image leaves the cycle at once. If
+it was the one showing, `custom-index` now names a missing file, `theme-set`
+notices with `[ -f "$IMG" ]` and falls back to the first image.
+
+**Emptying the directory** removes `custom` from the cycle entirely and you
+are back to the four shipped themes, silently.
+
+One thing removal does NOT do: **it leaves the derived theme behind.** A
+derived directory is named after a hash of its wallpaper's path, and nothing
+links it back the other way, so deleting the image orphans its theme. At
+about 8 KB each this is harmless in normal use, and `rebuild` clears them —
+it builds a fresh tree and swaps, so orphans do not survive it. Nothing
+prunes them automatically.
+
+Spot them by their dangling `backgrounds/` symlink — the entry is still
+there, only its target is gone, so the test has to be `-type l ! -e`:
+
+```sh
+find ~/.local/state/omacosy/derived -mindepth 3 -maxdepth 3 \
+  -path '*/backgrounds/*' -type l ! -exec test -e {} \; -print \
+  | sed 's|/backgrounds/.*||'
+```
+
+Delete the directories it names, or just run `rebuild`.
+
+### 5.3 Reload, and the one case that needs help
+
+The bar and the borders daemon each watch `~/.config/omarchy/current` with
+kqueue. **Re-creating the `theme` symlink inside it IS the reload signal.**
+There is no reload command, no polling and no restart.
+
+That works because each derived directory is named after its wallpaper's
+hash: change wallpaper, the symlink target changes, the daemons wake.
+
+**A rebuild is the one case where that fails.** It regenerates every theme
+under the same names, so the symlink would not change and nothing would fire
+— the files on disk would be new and the desktop would keep the old colours.
+`rebuild` therefore re-creates the symlink explicitly once the files are in
+place. The bar log is the proof it worked:
+
+```
+09:39:23  theme 26.20 ms
+09:39:23  theme  7.97 ms
+```
+
+No `theme` line after a rebuild means the daemons did not reload.
+
+### 5.4 Maintenance commands
+
+```sh
+omacosy-custom-theme rebuild     # recompute every theme, clear orphans, reload
+omacosy-custom-theme status      # directory, image count, cached theme count
+rm -rf ~/.local/state/omacosy/derived   # nuke the cache; rebuilt on next use
+```
+
+`rebuild` is the one to reach for after changing the derivation itself, or to
+reclaim orphans. It is safe at any time: it builds into a scratch directory
+and swaps, so `current/theme` is never left dangling.
+
+To force a reload without recomputing anything:
+
+```sh
+ln -sfn "$(readlink ~/.config/omarchy/current/theme)" ~/.config/omarchy/current/theme
+```
 
 ---
 
