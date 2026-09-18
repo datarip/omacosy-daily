@@ -439,18 +439,20 @@ func omniwmSnapshot(screenName: String)
 
 // --- theme ---------------------------------------------------------------
 
+// ACCENT, the colour the bar marks the active workspace with, so the
+// overview names the same workspace in the same colour
 func themeAccent() -> NSColor {
     let f = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".config/omarchy/current/theme/borders.sh")
+        .appendingPathComponent(".config/omarchy/current/theme/sketchybar.sh")
     guard let text = try? String(contentsOf: f, encoding: .utf8) else {
         return NSColor(calibratedRed: 0.31, green: 0.58, blue: 0.46, alpha: 1)
     }
     for line in text.split(separator: "\n") {
-        guard let r = line.range(of: "ACTIVE_COLOR=0x") else { continue }
+        guard let r = line.range(of: "ACCENT=0x") else { continue }
         let hex = String(line[r.upperBound...]).prefix(8)
         guard hex.count == 8, let v = UInt32(hex, radix: 16) else { continue }
         return NSColor(
-            calibratedRed: CGFloat((v >> 16) & 0xff) / 255,
+            srgbRed: CGFloat((v >> 16) & 0xff) / 255,
             green: CGFloat((v >> 8) & 0xff) / 255,
             blue: CGFloat(v & 0xff) / 255,
             alpha: 1)
@@ -528,7 +530,8 @@ func refreshThumbs(_ ids: [UInt32]) {
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
-let accent = themeAccent()
+// re-read on every show: the daemon outlives any number of theme changes
+var accent = themeAccent()
 
 // A NON-ACTIVATING panel (the Spotlight/Raycast recipe): it becomes
 // key — keyboard + clicks work instantly — WITHOUT activating our
@@ -1226,6 +1229,7 @@ func buildOverlay(_ snap: (order: [String], wins: [String: [Win]], focused: Stri
 func showOverlay() {
     guard !overlayVisible else { return }
     overlayVisible = true
+    accent = themeAccent()
     // the backdrop orders front IMMEDIATELY — everything data-driven
     // (aerospace query, icons, thumbnails) fills in asynchronously, so
     // the swipe response is the window server's latency, nothing else
