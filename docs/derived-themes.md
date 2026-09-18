@@ -661,6 +661,13 @@ the original behaviour and is unchanged.
 omacosy-custom-theme rebuild
 ```
 
+`rebuild` builds into a scratch directory, swaps it in, and then re-creates
+the `current/theme` symlink so the bar and the borders daemon reload. That
+last step is not optional: a derived directory is named after a hash of its
+wallpaper's path, so a rebuild recreates it under the same name, the symlink
+never changes, kqueue never fires, and the desktop keeps showing the palette
+the daemons already had while the files on disk are new.
+
 The generated directories are a cache keyed by path. Editing an image in
 place is detected by its timestamp; replacing the file at the same path
 with a different image is not, until a rebuild.
