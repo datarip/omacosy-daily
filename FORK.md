@@ -28,6 +28,7 @@ requests are where they can become everyone's. See
 | OmniWM | tiled windows keep a margin from the screen edges | `config/omniwm/` |
 | OmniWM | one engine owns the four-finger swipe | `bin/omacosy-wm-switch`, `config/omniwm/` |
 | OmniWM | a config swap reaches the daemon that reads it | `bin/omacosy-wm-switch` |
+| Overview | the overview follows a theme or wallpaper change, open or closed, and shows the desktop's wallpaper | `helper/overview.swift` |
 | Gestures | the OmniWM swipe config no longer points at another user's home | `config/gesture/` |
 | Gestures | the trackpad arms at once when OmniWM is the manager | `helper/gesture/` |
 
@@ -44,7 +45,7 @@ requests are where they can become everyone's. See
 | Change | Where |
 | --- | --- |
 | A fifth theme, `custom`, where **every wallpaper is its own theme**: drop images in `~/Pictures/wallpapers` and `Super+Shift+B` recomputes the bar, pill, icon and ring colours from each picture. The hue comes from the whole image weighted by saturation x value cubed, a pastel wallpaper gets a pastel theme and a saturated one gets neon, the bar and the ring always name the same colour, and seven contrast floors hold across 65 wallpapers. An empty directory hides it entirely, and the four shipped themes are untouched. [docs/derived-themes.md](docs/derived-themes.md) | `helper/derive.swift`, `bin/omacosy-custom-theme`, `bin/theme-set`, `bin/theme-next`, `bin/theme-bg-next` |
-| The workspace overview marks the active workspace in the bar's accent, and a hovered one in the same accent at 55%. It reads the theme each time it opens, so a theme or wallpaper change reaches it | `helper/overview.swift` |
+| The workspace overview marks the active workspace in the bar's accent, and a hovered one in the same accent at 55% | `helper/overview.swift` |
 | A day and a night theme following the macOS appearance, so sunrise and sunset stay macOS's schedule. Either may name a shipped theme, one of its wallpapers, or a file of your own | `bin/omacosy-appearance`, `install.sh` |
 | Your own values live in `~/.config/omacosy/settings.conf`, outside the clone. `omacosy-settings` applies them after every install | `bin/omacosy-settings`, `config/settings.template.conf` |
 | `omacosy-window-corners` sets the radius macOS draws window corners with, and keeps the focus ring concentric | `bin/omacosy-window-corners` |
