@@ -701,6 +701,32 @@ until the appearance actually flips.
 Setting only one of the two keys is fine. A missing value for the other
 half means that half does nothing.
 
+The agent is created and loaded by `install.sh`. It remembers the last
+appearance it saw in `~/.local/state/omacosy/appearance`, which is how it
+tells a change from a repeat.
+
+Measured on an M1 Air: **30 ms per run**, whether following is on or off —
+about 43 seconds of CPU a day, spread over 1440 wake-ups, from a script
+that exits rather than a process that stays resident.
+
+Turning it off:
+
+```sh
+omacosy-custom-theme follow off      # the intended switch: the agent still
+                                     # runs and exits immediately
+launchctl unload ~/Library/LaunchAgents/com.omacosy.appearance.plist
+                                     # heavier: stops it running at all,
+                                     # until the next install.sh
+```
+
+Checking it:
+
+```sh
+omacosy-appearance --status    # appearance, config, last seen, what it would apply
+omacosy-appearance --force     # act now, whatever the cached value says
+launchctl list | grep omacosy.appearance
+```
+
 ---
 
 ## 9. Command reference
