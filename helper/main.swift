@@ -8,6 +8,8 @@
 //                           (0 = no notch); install.sh sizes the top gap
 //                           from it
 //   wallpaper <path>        set the desktop picture on every screen
+//   wallpaper resync        put the recorded picture back on any screen
+//                           that shows an older omacosy picture
 //   audio list              output devices: "*<TAB>name" (current) / "-<TAB>name"
 //   audio set <name>        make <name> the default output device
 //   bt power                print bluetooth power state (0/1)
@@ -62,6 +64,44 @@ func builtinDisplayID() -> CGDirectDisplayID {
 func fail(_ msg: String) -> Never {
     FileHandle.standardError.write((msg + "\n").data(using: .utf8)!)
     exit(1)
+}
+
+// --- wallpaper ---------------------------------------------------------
+
+// The folders omacosy takes its pictures from. `wallpaper resync` replaces
+// a screen's picture only when it comes from one of these, so a picture
+// chosen by hand in System Settings is never overwritten.
+func ownedWallpaperRoots() -> [String] {
+    let home = NSHomeDirectory()
+    // The stock themes, found by the rule theme-set itself uses: it lives
+    // in <repo>/bin and they live in <repo>/themes.
+    let repo = URL(fileURLWithPath: home + "/.local/bin/theme-set")
+        .resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent()
+    var roots = [repo.appendingPathComponent("themes").path]
+    // The custom theme: its wallpaper folder, and the derived themes whose
+    // backgrounds/ link into it. omacosy-custom-theme owns the folder rule.
+    roots.append(home + "/.local/state/omacosy/derived")
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: home + "/.local/bin/omacosy-custom-theme")
+    p.arguments = ["dir"]
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = FileHandle.nullDevice
+    if (try? p.run()) != nil {
+        let out = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let dir = String(data: out, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if p.terminationStatus == 0, !dir.isEmpty { roots.append(dir) }
+    }
+    // Each root as written AND resolved, so a folder reached through a
+    // symlink matches either spelling of a picture's path.
+    return Array(Set(roots + roots.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }))
+}
+
+func isOwnedWallpaper(_ url: URL, _ roots: [String]) -> Bool {
+    let paths = [url.path, url.resolvingSymlinksInPath().path]
+    return paths.contains { p in roots.contains { p.hasPrefix($0 + "/") } }
 }
 
 // --- CoreAudio ---------------------------------------------------------
@@ -203,7 +243,9 @@ case "safe-top":
     print(Int(panel?.safeAreaInsets.top ?? 0))
 
 case "wallpaper":
-    guard args.count > 2 else { fail("usage: wallpaper <path> | wallpaper get") }
+    guard args.count > 2 else {
+        fail("usage: wallpaper <path> | wallpaper get | wallpaper resync")
+    }
     // `get` prints each screen's current wallpaper path in arrangement
     // order — install.sh records these so uninstall.sh can put the
     // pre-omacosy picture back instead of leaving the theme wallpaper
@@ -213,6 +255,41 @@ case "wallpaper":
             print(NSWorkspace.shared.desktopImageURL(for: screen)?.path ?? "")
         }
         break
+    }
+    // `resync` puts the recorded picture back on every screen that shows
+    // an older omacosy picture.
+    //
+    // Setting it below only reaches screens CONNECTED AT THE TIME, and
+    // macOS remembers the desktop picture per display. So a display that
+    // was unplugged during a theme change keeps its old picture and brings
+    // it back on reconnect: one screen showing the previous theme, with no
+    // error anywhere.
+    //
+    // theme-set and theme-bg-next both record their choice in the state
+    // link, so the answer is already on disk and no argument is needed.
+    if args[2] == "resync" {
+        let link = NSHomeDirectory() + "/.local/state/omacosy/background"
+        let url = URL(fileURLWithPath: link).resolvingSymlinksInPath()
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            fail("wallpaper resync: nothing recorded at \(link)")
+        }
+        var roots: [String]? = nil  // costs a subprocess, so only when a screen differs
+        var failures = 0, changed = 0, kept = 0
+        for screen in NSScreen.screens {
+            // Skip a screen that already has it. Re-setting the picture
+            // macOS is already showing costs a visible redraw.
+            guard let now = NSWorkspace.shared.desktopImageURL(for: screen),
+                  now.resolvingSymlinksInPath().path != url.path else { continue }
+            if roots == nil { roots = ownedWallpaperRoots() }
+            guard isOwnedWallpaper(now, roots!) else { kept += 1; continue }
+            do {
+                try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [:])
+                changed += 1
+            } catch { failures += 1 }
+        }
+        print("wallpaper resync: \(changed) of \(NSScreen.screens.count) screen(s) reset to \(url.path)"
+              + (kept > 0 ? ", \(kept) kept (not an omacosy picture)" : ""))
+        exit(failures == 0 ? 0 : 1)
     }
     let url = URL(fileURLWithPath: args[2])
     var failures = 0

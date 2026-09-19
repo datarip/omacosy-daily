@@ -4476,6 +4476,64 @@ NSWorkspace.shared.notificationCenter.addObserver(
     tlog(String(format: "frontapp %@ %.2f ms", name, ms))
 }
 
+// A display that was unplugged during a theme change, or plugged in while
+// the machine was off, shows the theme before it: macOS keeps the desktop
+// picture per display, and a theme change only reaches the screens
+// attached at the time. The helper puts the recorded picture back.
+//
+// Twice: once now, and once after macOS has finished adopting the
+// display, because a picture set too early does not stick. The second
+// run is free when the first one worked — resync skips a screen that
+// already has the right picture.
+func resyncWallpaper() {
+    for delay in [0.0, 4.0] {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) {
+            let out = shell("\(NSHomeDirectory())/.local/bin/omacosy-helper", ["wallpaper", "resync"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !out.isEmpty else { return }
+            DispatchQueue.main.async {
+                tlog(out)
+                if !out.hasPrefix("wallpaper resync: 0 of") { reseedStrips() }
+            }
+        }
+    }
+}
+
+// Its own count, apart from monitorCount below: that one moves only after
+// the grace, and this one must be able to move before it.
+var resyncedCount = NSScreen.screens.count
+func resyncIfGained() {
+    let now = NSScreen.screens.count
+    if now > resyncedCount { resyncWallpaper() }
+    resyncedCount = now
+}
+
+// A new screen's strip is seeded from the picture it shows when its
+// surface is built. A resync that lands after that leaves the strip on
+// the old picture's colour, so seed it again from the picture shown now.
+func reseedStrips() {
+    let jobs = surfaces.compactMap { s -> (BarSurface, URL, NSRect, CGDirectDisplayID)? in
+        guard let url = wallpaperURL(for: s.screen) else { return nil }
+        return (s, url, s.screen.frame, screenID(s.screen))
+    }
+    // off the main queue: an uncached seed decodes a whole image
+    DispatchQueue.global(qos: .userInitiated).async {
+        let seeded = jobs.map { job in
+            (job.0, job.1.resolvingSymlinksInPath().path,
+             seedStrip(from: job.1, frame: job.2, display: job.3))
+        }
+        DispatchQueue.main.async {
+            for (surface, key, seed) in seeded {
+                if let known = loadStrips(surface)[key] {
+                    setStrip([known], on: surface, animated: false)
+                } else if !seed.isEmpty {
+                    setStrip(seed, on: surface, animated: false)
+                }
+            }
+        }
+    }
+}
+
 // Displays come and go: re-resolve which aerospace monitor this screen is
 // now, move the window onto it, and rebuild. Screen parameters arrive
 // before the arrangement settles, so give it a beat (borders.swift learnt
@@ -4499,7 +4557,12 @@ var monitorCount = NSScreen.screens.count
 NotificationCenter.default.addObserver(
     forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
 ) { _ in
+    // At once, not after the grace below: until it runs, the new screen
+    // shows the old theme. Checked again after the grace, in case the
+    // count had not moved yet when the notification arrived.
+    resyncIfGained()
     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        resyncIfGained()
         closePopup() // its anchor may not exist any more
         rebuildSurfaces()
         applyShade() // a new display arrives at full output
@@ -4905,5 +4968,6 @@ updateWeather()
 repaint()
 primeMedia()
 startOmniWatch() // a no-op under aerospace; the WM observer handles switches
+resyncWallpaper() // a display plugged in while the machine was off missed the last theme change
 tlog("omacosy-bar up on " + surfaces.map { "\($0.screen.localizedName)=m\($0.monitorID)\($0.notched ? " (notched)" : "")" }.joined(separator: ", "))
 app.run()
