@@ -87,6 +87,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#50](https://github.com/paulsp94/omacosy/pull/50) | OPEN | fix(wallpaper): a screen connected later takes the current theme's picture |
 | [#49](https://github.com/paulsp94/omacosy/pull/49) | OPEN | fix(overview): the overview keeps an old theme's colour and wallpaper |
 | [#47](https://github.com/paulsp94/omacosy/pull/47) | OPEN | feat(bar): the icon-only pills are squares |
 | [#46](https://github.com/paulsp94/omacosy/pull/46) | OPEN | fix(aerospace): Super+F comes out identical to Super+N |
