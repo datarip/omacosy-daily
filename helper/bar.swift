@@ -643,7 +643,9 @@ func nativeMenuBarHeight() -> CGFloat {
 }
 
 func captureBehindOwnBar(_ rect: CGRect) async -> CGImage? {
-    let mine = Set(surfaces.map { CGWindowID($0.window.windowNumber) })
+    // Read on the main actor: surfaces and their NSWindows belong to it,
+    // and this function runs on a detached task.
+    let mine = await MainActor.run { Set(surfaces.map { CGWindowID($0.window.windowNumber) }) }
     if cachedFilter == nil || cachedFilterIDs != mine {
         guard let content = try? await SCShareableContent.excludingDesktopWindows(
                 false, onScreenWindowsOnly: false),
