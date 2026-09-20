@@ -87,6 +87,8 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#54](https://github.com/paulsp94/omacosy/pull/54) | OPEN | fix(overview): hold the thumbnail in a let, not a mutable var |
+| [#53](https://github.com/paulsp94/omacosy/pull/53) | OPEN | fix(install): compile the gesture code as C11, not C99 |
 | [#52](https://github.com/paulsp94/omacosy/pull/52) | OPEN | feat(files): yazi on Super+Shift+Y, under both window managers |
 | [#51](https://github.com/paulsp94/omacosy/pull/51) | OPEN | fix(borders): the ring goes with the window it marks |
 | [#50](https://github.com/paulsp94/omacosy/pull/50) | OPEN | fix(wallpaper): a screen connected later takes the current theme's picture |
