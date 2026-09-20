@@ -87,6 +87,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#52](https://github.com/paulsp94/omacosy/pull/52) | OPEN | feat(files): yazi on Super+Shift+Y, under both window managers |
 | [#51](https://github.com/paulsp94/omacosy/pull/51) | OPEN | fix(borders): the ring goes with the window it marks |
 | [#50](https://github.com/paulsp94/omacosy/pull/50) | OPEN | fix(wallpaper): a screen connected later takes the current theme's picture |
 | [#49](https://github.com/paulsp94/omacosy/pull/49) | OPEN | fix(overview): the overview keeps an old theme's colour and wallpaper |
