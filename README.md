@@ -661,6 +661,40 @@ hand wins until the next omacosy theme switch.
 **What it does not touch:** Neovim, tmux, and any program with colors of its
 own. They keep their configuration.
 
+### yazi and your editor
+
+`Super+Shift+Y` opens **yazi**, a file manager in a terminal window. It tiles
+like any other window and wears the theme's colors.
+
+Opening a file from yazi hands it to `$EDITOR`. omacosy sets no editor, so an
+unset `$EDITOR` means `vi`, and Vim opened on a **directory** shows its own
+file browser, netrw:
+
+```
+" Netrw Directory Listing                    (netrw v184)
+"   /Users/you/some-dir
+```
+
+That screen is Vim, not yazi. Leave it with `:q`. Nothing is modified unless
+you type a netrw command such as `D` (delete) or `R` (rename).
+
+To use another editor, set it in `~/.zshrc.local`, which is yours and survives
+an update:
+
+```sh
+export EDITOR="nvim"        # or: zed --wait, code --wait, hx, micro
+```
+
+Only yazi, without touching the shell, is `~/.config/yazi/yazi.toml`:
+
+```toml
+[opener]
+edit = [ { run = 'nvim "$@"', block = true } ]
+```
+
+omacosy writes `~/.config/yazi/theme.toml` when terminal theming is on, and
+never writes `yazi.toml`, so that file is yours alone.
+
 Full manual: **[docs/terminal-theming.md](docs/terminal-theming.md)**.
 
 ## Tiling: dwindle

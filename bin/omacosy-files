@@ -11,10 +11,15 @@
 # any other terminal the window opens and you type `yazi` yourself.
 set -euo pipefail
 
-SETTINGS="$HOME/.config/omacosy/settings.conf"
+# apps.conf, not settings.conf: it is the RESOLVED answer. install.sh writes
+# the repo defaults there, omacosy-settings then writes your own over them, and
+# the launch chords already read it. settings.conf is where you WRITE a choice;
+# this is where the system reads it, and it is the only one of the two that a
+# machine running upstream omacosy has at all.
+APPS="$HOME/.config/omacosy/apps.conf"
 TERMINAL=Ghostty
 # shellcheck disable=SC1090
-[ -f "$SETTINGS" ] && . "$SETTINGS"
+[ -f "$APPS" ] && . "$APPS"
 : "${TERMINAL:=Ghostty}"
 
 YAZI="$(command -v yazi 2>/dev/null || true)"
