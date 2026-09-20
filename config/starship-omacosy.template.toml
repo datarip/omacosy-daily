@@ -1,0 +1,86 @@
+# starship prompt for omacosy's terminal theming. omacosy-term-sync copies this
+# file to ~/.config/omacosy/starship.toml and appends the palette of the theme
+# on screen, so the prompt recolours with the desktop.
+#
+# Colours are named by ROLE, never by hex: every theme fills the same roles.
+# Across the bar, left to right: err, peach, ok, info, accent.
+#
+# The caps and arrows are Nerd Font glyphs (U+E0B6, U+E0B0, U+E0B4); a font
+# without them draws blanks.
+#
+# Edit ~/.config/starship.toml instead if you want a prompt of your own; this
+# file is only used while `omacosy-term-sync` is on.
+
+"$schema" = 'https://starship.rs/config-schema.json'
+add_newline = false
+palette = "omacosy"
+
+format = """
+[](err)\
+$username\
+[](fg:err bg:peach)\
+$directory\
+[](fg:peach bg:ok)\
+$git_branch$git_status\
+[](fg:ok bg:info)\
+$c$golang$nodejs$python$rust\
+[](fg:info bg:accent)\
+$time\
+[](accent)\
+$line_break$character"""
+
+[username]
+show_always = true
+style_user = "bg:err fg:bg"
+style_root = "bg:err fg:bg"
+format = '[ $user ]($style)'
+
+[directory]
+style = "bg:peach fg:bg"
+format = "[ $path ]($style)"
+truncation_length = 3
+truncation_symbol = "…/"
+
+[git_branch]
+symbol = ""
+style = "bg:ok fg:bg"
+format = '[ $symbol $branch ]($style)'
+
+[git_status]
+style = "bg:ok fg:bg"
+format = '[$all_status$ahead_behind ]($style)'
+
+[nodejs]
+symbol = ""
+style = "bg:info fg:bg"
+format = '[ $symbol ($version) ]($style)'
+
+[python]
+symbol = ""
+style = "bg:info fg:bg"
+format = '[ $symbol ($version) ]($style)'
+
+[rust]
+symbol = ""
+style = "bg:info fg:bg"
+format = '[ $symbol ($version) ]($style)'
+
+[golang]
+symbol = ""
+style = "bg:info fg:bg"
+format = '[ $symbol ($version) ]($style)'
+
+[c]
+symbol = " "
+style = "bg:info fg:bg"
+format = '[ $symbol ($version) ]($style)'
+
+[time]
+disabled = false
+time_format = "%R"
+style = "bg:accent fg:bg"
+format = '[ $time ]($style)'
+
+[character]
+success_symbol = "[❯](ok)"
+error_symbol = "[❯](err)"

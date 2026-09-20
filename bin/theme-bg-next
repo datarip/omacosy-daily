@@ -33,6 +33,8 @@ recolour_for() {
   dir="$("$CUSTOM" theme "$1")" || return 0
   printf '%s\n' "$1" > "$CUSTOM_INDEX"
   ln -sfn "$dir" "$CURRENT_THEME"
+  # a new wallpaper is a new palette, so the terminal follows it here too
+  "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/omacosy-term-sync" apply custom || true
 }
 
 set_bg() {

@@ -270,6 +270,7 @@ The commands you run:
 | `omacosy-solo-fullscreen on\|off\|status` | a workspace with one tiled window fills the display. Off by default |
 | `omacosy-window-corners [square\|round\|<radius>]` | sets the radius macOS draws window corners with. No argument shows it |
 | `omacosy-harvest-zshrc` | moves the lines installers appended to `~/.zshrc` into `~/.zshrc.local` |
+| `omacosy-term-sync on\|off\|status` | whether the terminal, the prompt and the `ls` colors follow the theme. Off by default |
 | `theme-set <name>` | switches the whole theme |
 | `theme-next` | the next theme (Super+Shift+T) |
 | `theme-bg-next [path]` | the next wallpaper of the theme, or the image you name (Super+Shift+B) |
@@ -284,6 +285,8 @@ The keys and the daemons run these. You do not need to run them:
 | `omacosy-layout` | Super+J, Super+- and Super+=, under AeroSpace: split direction and resize |
 | `omacosy-spawn`, `omacosy-spawn-cmd` | the launch chords: one new window at a time |
 | `omacosy-finder-window` | Super+Shift+F: a new Finder window on this workspace |
+| `omacosy-files` | Super+Shift+Y: yazi in a new terminal window |
+| `omacosy-term-sync apply` | `theme-set` and `theme-bg-next`, when terminal theming is on |
 | `omacosy-focus-guard` | AeroSpace, on each workspace change: it undoes a switch that an app caused by activating itself |
 | `omacosy-ws-collapse` | the bar, when a display is unplugged or plugged back in |
 | `omacosy-karabiner-omniwm` | `omacosy-wm-switch` and `omacosy-settings`: the launch chords under OmniWM |
@@ -309,6 +312,7 @@ The keys and the daemons run these. You do not need to run them:
 | Prompt | starship | `config/starship.toml` |
 | Shell | zsh | `zsh/zshrc` + your `~/.zshrc.local` |
 | CLI stack | fzf, eza, zoxide, ripgrep, bat, lazygit, btop | wired in `zsh/zshrc` |
+| Files | yazi, with fd, ripgrep, ffmpeg-full, imagemagick-full, poppler, resvg and sevenzip for its previews | run `yazi` in a terminal |
 
 Why so much of it is self-built:
 
@@ -486,6 +490,7 @@ typing or app shortcuts. Caps Lock tapped alone is Escape.
 | `Super+enter` / `Super+shift+enter` | terminal / browser |
 | `Super+space` | launcher (Raycast; the OmniWM option opens OmniWM's command palette instead) |
 | `Super+shift+f` / `+m` / `+g` | files / music / messenger (set in `settings.conf`) |
+| `Super+shift+y` | yazi, the terminal file manager, in a new window |
 | `Super+shift+t` | next theme |
 | `Super+shift+b` | next wallpaper of the current theme |
 | `Super+shift+l` | lock the screen |
@@ -583,10 +588,13 @@ in treatment — the ring keeps more of the picture's saturation and stays
 brighter, because it is a stroke on a window rather than text on a pill.
 
 Every color is then checked against the surface it sits on and corrected
-until it passes. Seven contrast floors, taken from the gaps the four
-shipped themes already hold, verified across 65 wallpapers with no
-failures. The derivation is pure: the same image always yields the same
-palette, so a cached theme and a fresh one cannot disagree.
+until it passes: first the luminance gaps the four shipped themes hold,
+then WCAG contrast ratios for anything a person reads — text on a pill at
+4.5:1, the focused workspace number and the cheat sheet's own text. Pills
+are measured against the real wallpaper behind the bar, in eight slices, so
+a bright sky in the middle cannot hide a pill sitting on dark slate. The
+derivation is pure: the same image always yields the same palette, so a
+cached theme and a fresh one cannot disagree.
 
 Optionally, a day and a night theme that follow the macOS appearance, so
 sunrise and sunset are macOS's schedule rather than a second one:
@@ -599,6 +607,61 @@ omacosy-custom-theme follow on
 
 Either may name a shipped theme, one of its wallpapers, or a file of your
 own. Full manual: **[docs/derived-themes.md](docs/derived-themes.md)**.
+
+### The terminal follows the theme
+
+Off by default, because a terminal's colors are a personal choice:
+
+```sh
+omacosy-term-sync            # status
+omacosy-term-sync on         # the terminal follows every theme switch
+omacosy-term-sync off        # stop; your own colors come back
+```
+
+With it on, `Super+Shift+T` and `Super+Shift+B` also set the terminal
+background, its 16 colors, the Starship prompt and the directory color in
+`ls`, `eza` and yazi. A **shipped** theme hands over its own `colors.toml`,
+so gruvbox gives the gruvbox terminal. A **computed** theme derives the 16
+colors from the wallpaper, and red, green, yellow, blue, magenta and cyan
+keep their hue — only their lightness and saturation follow the picture, so
+an error message still reads as red.
+
+Windows that are already open are repainted, so nothing has to be reloaded
+by hand.
+
+**What it writes**, all under `~/.config/omacosy/`:
+
+| File | Read by |
+| --- | --- |
+| `term-palette.env` | the palette of the theme on screen, `OMACOSY_BG`, `OMACOSY_P0` … `OMACOSY_P15` |
+| `ghostty-theme.conf` | Ghostty, through `config-file = ?…` in the shipped config. The `?` makes it optional |
+| `starship.toml` | Starship, generated from `config/starship-omacosy.template.toml`, whose colors are named by role |
+| `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, and `STARSHIP_CONFIG` when omacosy owns the prompt |
+| `~/.config/yazi/theme.toml` | yazi: directories, name and folder glyph, wear the theme accent. yazi reads it at startup, so an open window changes on reopen. A `theme.toml` of your own is never overwritten |
+
+Your own Ghostty config is read **after** the generated one, so a color you
+set by hand still wins. `omacosy-term-sync off` deletes the generated files,
+and the next window reads your own colors again.
+
+**Handing the terminal to another tool.** `~/.config/omacosy/term.conf`:
+
+```
+theming = on | off            off by default
+applier = <command>           empty: omacosy writes the config itself
+```
+
+When `applier` names a command, omacosy writes the palette and then runs
+`<command> <palette-file> <theme-label>`, and writes no terminal config of
+its own. That is the hand-off point for a tool that already owns your
+terminal's colors, and it keeps exactly one writer: two programs writing the
+same Ghostty file would fight, and the winner would depend on the order the
+includes are read. Whichever tool applies the colors, a theme you set by
+hand wins until the next omacosy theme switch.
+
+**What it does not touch:** Neovim, tmux, and any program with colors of its
+own. They keep their configuration.
+
+Full manual: **[docs/terminal-theming.md](docs/terminal-theming.md)**.
 
 ## Tiling: dwindle
 

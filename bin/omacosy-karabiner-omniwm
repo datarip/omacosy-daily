@@ -125,6 +125,9 @@ rules = slot_rules + [
          cmd=f"[ -x {home}/.local/bin/omacosy-finder-window ] "
              f"&& {home}/.local/bin/omacosy-finder-window "
              f"|| open -a Finder"),
+    # yazi, the terminal file manager. Its own launcher, because the window is
+    # a terminal window and the command has to run inside it.
+    rule("yazi", "y", SHIFT, cmd=f"{home}/.local/bin/omacosy-files"),
     rule("music", "m", SHIFT, cmd=serialised(f"open -a '{apps['MUSIC']}'")),
     rule("messenger", "g", SHIFT, cmd=serialised(f"open -a '{apps['MESSENGER']}'")),
     rule("next theme", "t", SHIFT, cmd=f"{home}/.local/bin/theme-next"),

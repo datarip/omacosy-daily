@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# omacosy-files — open yazi, the terminal file manager, in a new window.
+#
+# Bound to Super+Shift+Y under both window managers. Finder keeps
+# Super+Shift+F: this is the other kind of file manager, not a replacement.
+#
+# The window is a terminal window, so it tiles like every other one and wears
+# the theme's colours. Which terminal is your own choice
+# (TERMINAL in ~/.config/omacosy/settings.conf); only Ghostty can be told to
+# run a command from here, because that is the one whose CLI this knows. With
+# any other terminal the window opens and you type `yazi` yourself.
+set -euo pipefail
+
+SETTINGS="$HOME/.config/omacosy/settings.conf"
+TERMINAL=Ghostty
+# shellcheck disable=SC1090
+[ -f "$SETTINGS" ] && . "$SETTINGS"
+: "${TERMINAL:=Ghostty}"
+
+YAZI="$(command -v yazi 2>/dev/null || true)"
+[ -n "$YAZI" ] || YAZI=/opt/homebrew/bin/yazi
+if [ ! -x "$YAZI" ]; then
+  # Karabiner and AeroSpace both run this with no terminal to complain into.
+  /usr/bin/osascript -e 'display notification "yazi is not installed. Run: brew install yazi" with title "omacosy"' >/dev/null 2>&1 || true
+  exit 1
+fi
+
+SPAWN="$HOME/.local/bin/omacosy-spawn"
+GHOSTTY_BIN=/Applications/Ghostty.app/Contents/MacOS/ghostty
+[ -x "$GHOSTTY_BIN" ] || GHOSTTY_BIN="$HOME/Applications/Ghostty.app/Contents/MacOS/ghostty"
+
+if [ "$TERMINAL" = Ghostty ] && [ -x "$GHOSTTY_BIN" ]; then
+  # `-e` is Ghostty's own way to run a command in a new window. It is DETACHED
+  # on purpose: that process lives as long as the window does, and handing it
+  # to omacosy-spawn directly left the spawn lock held for the whole session,
+  # so the next terminal key waited out the 8 s timeout. Backgrounding it lets
+  # the spawn see its window, stamp the split hint and release.
+  if [ -x "$SPAWN" ]; then
+    exec "$SPAWN" --cmd /bin/sh -c "\"$GHOSTTY_BIN\" -e \"$YAZI\" >/dev/null 2>&1 &"
+  fi
+  "$GHOSTTY_BIN" -e "$YAZI" >/dev/null 2>&1 &
+  exit 0
+fi
+
+# any other terminal: open a window, the rest is yours
+if [ -x "$SPAWN" ]; then
+  exec "$SPAWN" "$TERMINAL"
+fi
+exec open -na "$TERMINAL"

@@ -63,6 +63,17 @@ if ! brew bundle --file="$REPO_DIR/Brewfile"; then
   log "WARNING: some Homebrew packages failed to install (see above)."
   log "  Continuing — re-run install.sh after resolving them."
 fi
+# The "-full" builds of ffmpeg and imagemagick keep the codecs the plain ones
+# drop, and yazi previews video and raw photos with them. Homebrew installs
+# both to the Cellar but leaves whichever was linked first in /opt/homebrew/bin,
+# so a machine with the plain build already installed silently keeps it. Linking
+# is a no-op when only one is present.
+for f in ffmpeg-full imagemagick-full; do
+  if brew list --formula 2>/dev/null | grep -qx "$f"; then
+    brew link "$f" -f --overwrite >/dev/null 2>&1 || log "WARNING: could not link $f"
+  fi
+done
+
 # record only packages that brew bundle ACTUALLY added
 comm -13 <(printf '%s\n' "$PRE_FORMULAE") <(brew list --formula 2>/dev/null | sort) \
   | while read -r f; do [ -n "$f" ] && mark "brew-formula $f"; done
@@ -353,6 +364,13 @@ if [ ! -x "$HOME/.local/bin/omacosy-derive" ] || [ "$REPO_DIR/helper/derive.swif
   swiftc -O -o "$HOME/.local/bin/omacosy-derive" "$REPO_DIR/helper/derive.swift"
 fi
 
+# terminal palette for the theme on screen. Used only while
+# `omacosy-term-sync on`; building it costs nothing otherwise.
+if [ ! -x "$HOME/.local/bin/omacosy-term-palette" ] || [ "$REPO_DIR/helper/term-palette.swift" -nt "$HOME/.local/bin/omacosy-term-palette" ]; then
+  log "Building omacosy-term-palette"
+  swiftc -O -o "$HOME/.local/bin/omacosy-term-palette" "$REPO_DIR/helper/term-palette.swift"
+fi
+
 # workspace overview overlay (4-finger swipe up)
 if [ ! -x "$HOME/.local/bin/omacosy-overview" ] || [ "$REPO_DIR/helper/overview.swift" -nt "$HOME/.local/bin/omacosy-overview" ]; then
   log "Building omacosy-overview"
@@ -594,6 +612,7 @@ link "$REPO_DIR/bin/theme-set"  "$HOME/.local/bin/theme-set"
 link "$REPO_DIR/bin/theme-next" "$HOME/.local/bin/theme-next"
 link "$REPO_DIR/bin/theme-bg-next" "$HOME/.local/bin/theme-bg-next"
 link "$REPO_DIR/bin/omacosy-custom-theme" "$HOME/.local/bin/omacosy-custom-theme"
+link "$REPO_DIR/bin/omacosy-term-sync" "$HOME/.local/bin/omacosy-term-sync"
 link "$REPO_DIR/bin/omacosy-appearance" "$HOME/.local/bin/omacosy-appearance"
 link "$REPO_DIR/bin/omacosy-toggle" "$HOME/.local/bin/omacosy-toggle"
 link "$REPO_DIR/bin/omacosy-ws" "$HOME/.local/bin/omacosy-ws"

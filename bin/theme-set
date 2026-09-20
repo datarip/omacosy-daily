@@ -129,4 +129,9 @@ PY
   fi
 fi
 
+# The terminal follows the desktop. The rules and the guards live in
+# omacosy-term-sync, because theme-bg-next has to do exactly the same thing
+# when it moves to the next wallpaper.
+"$REPO_DIR/bin/omacosy-term-sync" apply "$NAME" || true
+
 echo "theme: $NAME"

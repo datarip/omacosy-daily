@@ -19,8 +19,34 @@ compinit -C
 # everything personal lives here; keep this file distributable
 [ -f "$HOME/.zshrc.local" ] && source "$HOME/.zshrc.local"
 
+# Directory colour and the generated prompt, while omacosy-term-sync is on.
+# Sourced BEFORE starship so STARSHIP_CONFIG is already set when it starts.
+# term-env.d/ is for anything else that exports colours: a tool drops a file
+# there and its variables are refreshed on a theme switch along with ours.
+omacosy_term_env() {
+  [ -f "$HOME/.config/omacosy/term-env.sh" ] && source "$HOME/.config/omacosy/term-env.sh"
+  local f
+  for f in "$HOME"/.config/omacosy/term-env.d/*.sh(N); do source "$f"; done
+}
+omacosy_term_env
+
 # CLI stack (after .zshrc.local so frameworks there can't clobber these)
 eval "$(starship init zsh)"
+
+# A theme switch rewrites starship's palette file and sends SIGWINCH. zsh
+# redraws the line on WINCH, but with the PROMPT string it already built, so
+# the old colours would stay until the next Return. Re-running starship's own
+# precmd rebuilds the string from the new palette first.
+TRAPWINCH() {
+  # The colours a shell EXPORTS were read when it started: the directory colour
+  # for ls and eza lives in an environment variable, so a theme switch left
+  # every open shell listing directories in the old accent. Re-reading the file
+  # here is what makes them follow.
+  omacosy_term_env
+  zle || return 0
+  (( $+functions[starship_precmd] )) && starship_precmd
+  zle reset-prompt
+}
 eval "$(zoxide init zsh)"
 command -v fzf >/dev/null && source <(fzf --zsh)
 
