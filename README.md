@@ -87,6 +87,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#61](https://github.com/paulsp94/omacosy/pull/61) | OPEN | fix(toggle): on brings back the setup of this Mac's window manager |
 | [#60](https://github.com/paulsp94/omacosy/pull/60) | OPEN | fix(bar): the bar stays when no window manager answers |
 | [#59](https://github.com/paulsp94/omacosy/pull/59) | OPEN | feat(install): choose the window manager with --aerospace or --omniwm |
 | [#58](https://github.com/paulsp94/omacosy/pull/58) | OPEN | fix(wm-switch): the switch to OmniWM checks itself and does not ask |
