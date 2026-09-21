@@ -757,6 +757,9 @@ func captureOwnStrip(_ surface: BarSurface) {
     // poison the cache with the colour of the old one, and that is worse than
     // having no capture at all.
     let capturedFor = key
+    // The display's id crosses to the capture task, not the surface: a
+    // surface is main-thread state, and the id finds it again on return.
+    let monitorID = surface.monitorID
     let frame = surface.screen.frame
     let origin = CGPoint(x: frame.minX, y: 0)      // screencapture uses top-left
     // The NATIVE bar's height, not this one's. They are not the same number:
@@ -827,7 +830,8 @@ func captureOwnStrip(_ surface: BarSurface) {
         let ordered = zip(lum, columns).sorted { $0.0 < $1.0 }.map { $0.1 }
         let flat = [ordered[ordered.count / 2]]
         DispatchQueue.main.async {
-            guard capturedFor == wallpaperKey(for: surface.screen) else { return }  // it moved under us
+            guard let surface = surfaces.first(where: { $0.monitorID == monitorID }),
+                  capturedFor == wallpaperKey(for: surface.screen) else { return }  // it moved under us
             guard let c = flat.first else { return }
             // Verified for this session whether or not anything changed. A
             // capture that was REJECTED never reaches here, so an unreadable
