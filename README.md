@@ -87,14 +87,15 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
-| [#56](https://github.com/paulsp94/omacosy/pull/56) | OPEN | fix(install): a re-run keeps OmniWM when it is the window manager |
+| [#58](https://github.com/paulsp94/omacosy/pull/58) | OPEN | fix(wm-switch): the switch to OmniWM checks itself and does not ask |
+| [#56](https://github.com/paulsp94/omacosy/pull/56) | MERGED | fix(install): a re-run keeps OmniWM when it is the window manager |
 | [#55](https://github.com/paulsp94/omacosy/pull/55) | OPEN | docs(readme): say where to run uninstall.sh and what to do after it |
-| [#54](https://github.com/paulsp94/omacosy/pull/54) | OPEN | fix(overview): hold the thumbnail in a let, not a mutable var |
-| [#53](https://github.com/paulsp94/omacosy/pull/53) | OPEN | fix(install): compile the gesture code as C11, not C99 |
+| [#54](https://github.com/paulsp94/omacosy/pull/54) | MERGED | fix(overview): hold the thumbnail in a let, not a mutable var |
+| [#53](https://github.com/paulsp94/omacosy/pull/53) | MERGED | fix(install): compile the gesture code as C11, not C99 |
 | [#52](https://github.com/paulsp94/omacosy/pull/52) | OPEN | feat(files): yazi on Super+Shift+Y, under both window managers |
 | [#51](https://github.com/paulsp94/omacosy/pull/51) | OPEN | fix(borders): the ring goes with the window it marks |
-| [#50](https://github.com/paulsp94/omacosy/pull/50) | OPEN | fix(wallpaper): a screen connected later takes the current theme's picture |
-| [#49](https://github.com/paulsp94/omacosy/pull/49) | OPEN | fix(overview): the overview keeps an old theme's colour and wallpaper |
+| [#50](https://github.com/paulsp94/omacosy/pull/50) | MERGED | fix(wallpaper): a screen connected later takes the current theme's picture |
+| [#49](https://github.com/paulsp94/omacosy/pull/49) | MERGED | fix(overview): the overview keeps an old theme's colour and wallpaper |
 | [#47](https://github.com/paulsp94/omacosy/pull/47) | OPEN | feat(bar): the icon-only pills are squares |
 | [#46](https://github.com/paulsp94/omacosy/pull/46) | OPEN | fix(aerospace): Super+F comes out identical to Super+N |
 | [#45](https://github.com/paulsp94/omacosy/pull/45) | OPEN | fix(omniwm): Cmd+H leaves the workspace, and the Dock icon does not return to it |
