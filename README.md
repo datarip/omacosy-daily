@@ -87,6 +87,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#56](https://github.com/paulsp94/omacosy/pull/56) | OPEN | fix(install): a re-run keeps OmniWM when it is the window manager |
 | [#55](https://github.com/paulsp94/omacosy/pull/55) | OPEN | docs(readme): say where to run uninstall.sh and what to do after it |
 | [#54](https://github.com/paulsp94/omacosy/pull/54) | OPEN | fix(overview): hold the thumbnail in a let, not a mutable var |
 | [#53](https://github.com/paulsp94/omacosy/pull/53) | OPEN | fix(install): compile the gesture code as C11, not C99 |
