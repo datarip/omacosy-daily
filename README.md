@@ -87,6 +87,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#55](https://github.com/paulsp94/omacosy/pull/55) | OPEN | docs(readme): say where to run uninstall.sh and what to do after it |
 | [#54](https://github.com/paulsp94/omacosy/pull/54) | OPEN | fix(overview): hold the thumbnail in a let, not a mutable var |
 | [#53](https://github.com/paulsp94/omacosy/pull/53) | OPEN | fix(install): compile the gesture code as C11, not C99 |
 | [#52](https://github.com/paulsp94/omacosy/pull/52) | OPEN | feat(files): yazi on Super+Shift+Y, under both window managers |
