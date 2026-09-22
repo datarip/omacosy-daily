@@ -127,7 +127,7 @@ The fixes this build offers upstream, and their state today.
 | [#29](https://github.com/paulsp94/omacosy/pull/29) | OPEN | feat(bar): split the top edge between this bar and the native one |
 | [#28](https://github.com/paulsp94/omacosy/pull/28) | OPEN | fix(tiling): a read is a guess until it settles, and a prediction needs a live layout |
 | [#27](https://github.com/paulsp94/omacosy/pull/27) | OPEN | fix(helper): split-hint stacks slots that are wider than tall |
-| [#26](https://github.com/paulsp94/omacosy/pull/26) | OPEN | fix(aerospace): Super+Shift+F can only ever open one Finder window |
+| [#26](https://github.com/paulsp94/omacosy/pull/26) | OPEN | fix(aerospace): Super+Shift+F raises the Finder window instead of opening a new one |
 | [#25](https://github.com/paulsp94/omacosy/pull/25) | OPEN | fix(config): size the top gap from the display's safe-area inset |
 | [#24](https://github.com/paulsp94/omacosy/pull/24) | OPEN | fix(bar): take the bar height from the menu bar macOS draws |
 | [#23](https://github.com/paulsp94/omacosy/pull/23) | OPEN | fix(ffm): a full-display overlay stops hover focus everywhere |
