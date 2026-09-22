@@ -87,6 +87,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#66](https://github.com/paulsp94/omacosy/pull/66) | OPEN | fix(uninstall): restore recorded booleans |
 | [#65](https://github.com/paulsp94/omacosy/pull/65) | OPEN | docs(readme): one command to install or reinstall |
 | [#64](https://github.com/paulsp94/omacosy/pull/64) | OPEN | feat(install): test the signing certificate and clear stale permissions |
 | [#63](https://github.com/paulsp94/omacosy/pull/63) | OPEN | fix(ffm): stand down while OmniWM runs |
