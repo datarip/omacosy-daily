@@ -128,6 +128,14 @@ omacosy-window-corners             # show what is set now
 An app reads the corner radius when it opens a window. Relaunch an app to
 see the new corners.
 
+### Whether the bar hides at rest
+
+`AUTOHIDE` in `settings.conf` is `off` (the bar stays visible, the default),
+`on` (it hides at rest), or `auto` (visible on a notched display, hidden on
+the others). `omacosy-bar-autohide on|off|auto` changes it at once, with the
+top gap for windows, and writes the line in `settings.conf` for you. The
+next install applies it again, also after an uninstall.
+
 ## 5. Keep your shell config
 
 `install.sh` writes `~/.zshrc` once, as a short stub file that loads
@@ -158,7 +166,7 @@ run it once soon after the install. It backs up both files to
 | File | `install.sh` | `omacosy-settings` |
 | --- | --- | --- |
 | `~/.config/omacosy/settings.conf` | kept | reads it |
-| `~/.config/omacosy/bar.conf` | kept | reads `autohide` |
+| `~/.config/omacosy/bar.conf` | kept | reads `autohide`; `AUTOHIDE` in `settings.conf` wins |
 | `~/.config/omacosy/solo-fullscreen` | kept | — |
 | the `~/.zshrc` stub, and lines appended to it | kept | — |
 | `~/.zshrc.local` | kept | — |

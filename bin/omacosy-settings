@@ -59,7 +59,7 @@ fi
 # A key the file leaves out keeps its default. Empty means "leave it alone".
 TERMINAL="" BROWSER="" MUSIC="" MESSENGER=""
 APP_WORKSPACE_RULES="" APP_FLOAT_RULES=""
-RING_RADIUS="" WINDOW_CORNER="" SERIALIZE_APP_SPAWNS="0"
+RING_RADIUS="" WINDOW_CORNER="" SERIALIZE_APP_SPAWNS="0" AUTOHIDE=""
 # shellcheck source=/dev/null
 . "$SETTINGS"
 
@@ -184,6 +184,12 @@ if [ -x "$BIN/omacosy-bar-autohide" ]; then
       on) WANT=on ;; off) WANT=off ;;
     esac
   fi
+  # settings.conf wins: bar.conf is removed by an uninstall, this is not
+  case "$AUTOHIDE" in
+    on|off|auto) WANT=$AUTOHIDE ;;
+    "") ;;
+    *) warn "AUTOHIDE '$AUTOHIDE' is not on, off or auto; bar.conf's value kept" ;;
+  esac
   "$BIN/omacosy-bar-autohide" "$WANT" >/dev/null 2>&1 && CHANGED=1
   say "top gap left to omacosy-bar-autohide ($WANT)"
 else
