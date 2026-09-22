@@ -131,16 +131,21 @@ The fixes this build offers upstream, and their state today.
 
 ## Fresh Mac
 
+The same command installs and reinstalls. It clones the repo, or updates
+the clone that is already there, then runs the installer:
+
 ```sh
-git clone https://github.com/datarip/omacosy-daily.git ~/.local/share/omacosy &&
-cd ~/.local/share/omacosy && ./install.sh
+d=~/.local/share/omacosy
+if [ -d "$d/.git" ]; then git -C "$d" pull --ff-only; else git clone https://github.com/datarip/omacosy-daily.git "$d"; fi &&
+cd "$d" && ./install.sh
 ```
 
 Upstream omacosy already in `~/.local/share/omacosy`? Run its
 `./uninstall.sh`, delete that folder, then run the command above.
 
-Then put your own apps and values in `~/.config/omacosy/settings.conf`
-and run `omacosy-settings`. See [Your own settings](#your-own-settings).
+Put your own apps and values in `~/.config/omacosy/settings.conf`.
+`install.sh` applies them at every run; to apply a change at once, run
+`omacosy-settings`. See [Your own settings](#your-own-settings).
 
 This installs AeroSpace. For [OmniWM](#two-window-managers-omniwm-option-beta)
 instead, run `./install.sh --omniwm`: AeroSpace is then not installed.
@@ -175,8 +180,8 @@ restarts their agents, so an update is a pull plus a re-run, and this
 command wraps both. It refuses a clone with local edits, and refuses
 one whose branch has diverged, rather than deciding either for you.
 
-Then run `omacosy-settings`. The installer resets the files your
-settings go into, and `omacosy-settings` puts your values back.
+The installer resets the files your settings go into, and then runs
+`omacosy-settings`, which puts your values back.
 
 There is no background update check. The bar makes exactly one network
 call (the weather), and a daemon polling GitHub on a timer would
@@ -281,14 +286,10 @@ Your values live in one file outside the clone,
 | `RING_RADIUS`, `WINDOW_CORNER` | the focus ring radius, and the radius macOS draws window corners with |
 | `SERIALIZE_APP_SPAWNS` | one window at a time from a burst of presses on the music and messenger chords |
 
-Apply the file after every install:
-
-```sh
-./install.sh && omacosy-settings
-```
-
-`install.sh` regenerates the window-manager configs on each run, and
-`omacosy-settings` writes your values back into them. Set the apps in
+`install.sh` regenerates the window-manager configs on each run, then
+runs `omacosy-settings`, which writes your values back into them. After
+an edit, run `omacosy-settings` to apply it at once. A file that still
+equals the template is left alone, because it holds only examples. Set the apps in
 `settings.conf`, not in `config/apps.local.conf`: `omacosy-settings`
 rewrites that file. [docs/customising.md](docs/customising.md) explains
 each setting, how to find an app's bundle id, and what survives a
@@ -304,7 +305,7 @@ The commands you run:
 
 | Command | What it does |
 | --- | --- |
-| `omacosy-settings` | applies `~/.config/omacosy/settings.conf`. Run it after every install |
+| `omacosy-settings` | applies `~/.config/omacosy/settings.conf`. `install.sh` runs it; run it yourself after an edit |
 | `omacosy-update [--check]` | pulls this repo and runs `install.sh` again |
 | `omacosy-wm-switch omniwm\|aerospace` | moves this Mac from one window manager to the other |
 | `omacosy-toggle [on\|off]` | parks the whole setup without uninstalling it. No argument flips |

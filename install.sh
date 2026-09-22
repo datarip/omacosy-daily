@@ -956,6 +956,16 @@ else
   open -a Karabiner-Elements
 fi
 
+# Your settings.conf values, applied here so a reinstall or an update
+# needs no second command. A file identical to the template this install
+# seeded holds only examples, so it is left alone.
+SETTINGS_CONF="$HOME/.config/omacosy/settings.conf"
+if [ -f "$SETTINGS_CONF" ] && ! cmp -s "$SETTINGS_CONF" "$STATE_DIR/settings.conf.orig"; then
+  log "Applying your settings (omacosy-settings)"
+  "$HOME/.local/bin/omacosy-settings" | sed 's/^/    /' \
+    || log "WARNING: omacosy-settings failed; fix settings.conf, then run omacosy-settings"
+fi
+
 if [ "$WM" = omniwm ]; then
   GRANT="Grant OmniWM      System Settings -> Privacy & Security -> Accessibility"
 else
