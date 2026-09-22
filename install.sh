@@ -907,7 +907,8 @@ if [ -n "$REGRANT" ]; then
   log "  if it is open: an open window keeps showing the removed entries."
   log "  Then grant them when macOS asks (Privacy & Security):"
   log "  omacosy-gesture: Accessibility, Input Monitoring, Screen Recording"
-  log "  (for the overview); omacosy-ffm and omacosy-bar: Accessibility."
+  log "  (for the overview); omacosy-ffm and omacosy-bar: Accessibility;"
+  log "  omacosy-bar also Screen Recording if it auto-hides (it asks itself)."
   log "  An older plain omacosy-ffm entry may stay: remove it with the - button."
 fi
 
