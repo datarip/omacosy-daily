@@ -13,6 +13,21 @@ log() { printf '\033[1;33m==>\033[0m %s\n' "$*"; }
 MANIFEST="$HOME/.local/state/omacosy/manifest"
 have() { [ -f "$MANIFEST" ] && grep -qxF "$1" "$MANIFEST"; }
 
+# Copied first, before anything is removed, and named at the end: your
+# settings, the record of what omacosy installed, the karabiner.json it
+# wrote, and your own app choices in the clone.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKUP="$HOME/omacosy-backup-$(date +%Y%m%d-%H%M%S)"
+backup() { # <path> <name in the backup>
+  [ -e "$1" ] || return 0
+  mkdir -p "$BACKUP"
+  cp -R "$1" "$BACKUP/$2" 2>/dev/null || log "WARNING: could not back up $1"
+}
+backup "$HOME/.config/omacosy" config-omacosy
+backup "$HOME/.local/state/omacosy" state-omacosy
+backup "$HOME/.config/karabiner/karabiner.json" karabiner.json
+backup "$REPO_DIR/config/apps.local.conf" apps.local.conf
+
 # --- 1. Stop the stack ------------------------------------------------------
 # Quitting the window manager restores windows it was managing —
 # whichever of the two is running (the OmniWM trial branch may have
@@ -271,12 +286,28 @@ fi
 # --- 5. Homebrew packages omacosy itself installed --------------------------
 # Only packages the manifest says brew bundle ADDED on this machine —
 # anything the user had before is untouched.
+# One package at a time, with brew's errors shown: they were hidden, so a
+# cask that failed to uninstall left no trace (on one Mac, none went).
+# brew runs on this terminal, where a cask can ask for your password.
 if [ -f "$MANIFEST" ] && grep -qE '^brew-(formula|cask) ' "$MANIFEST"; then
   log "Removing Homebrew packages omacosy installed (pre-existing ones stay)"
-  grep '^brew-formula ' "$MANIFEST" | awk '{print $2}' \
-    | xargs -n1 brew uninstall 2>/dev/null || true
-  grep '^brew-cask ' "$MANIFEST" | awk '{print $2}' \
-    | xargs -n1 brew uninstall --cask 2>/dev/null || true
+  FAILED=""
+  FORMULAE="$(grep '^brew-formula ' "$MANIFEST" | awk '{print $2}')"
+  # twice: brew refuses a formula another one still needs, until that one
+  # is gone, so only the second pass shows what really stays
+  for f in $FORMULAE; do
+    brew list --formula "$f" >/dev/null 2>&1 && brew uninstall "$f" >/dev/null 2>&1
+  done
+  for f in $FORMULAE; do
+    brew list --formula "$f" >/dev/null 2>&1 || continue
+    brew uninstall "$f" || FAILED="$FAILED $f"
+  done
+  for c in $(grep '^brew-cask ' "$MANIFEST" | awk '{print $2}'); do
+    brew list --cask "$c" >/dev/null 2>&1 || continue
+    brew uninstall --cask "$c" || FAILED="$FAILED $c"
+  done
+  [ -z "$FAILED" ] \
+    || log "WARNING: could not remove:$FAILED (see the messages above)"
 fi
 # the login item would point at an app that is gone
 if [ ! -d /Applications/OmniWM.app ]; then
@@ -308,3 +339,13 @@ Done. Left in place on purpose:
     the lists clean.
   - The repo itself and your shell tools (fzf, eza, zoxide, ...) are untouched.
 EOF
+
+if [ -d "$BACKUP" ]; then
+  echo
+  log "Your settings and the record of this install are saved in:"
+  log "  $BACKUP"
+fi
+# this window's shell still runs the setup omacosy installed, and the
+# prompt it draws with (starship) may just have been removed
+echo
+log "Open a new terminal window now: this one still uses omacosy's shell setup."
