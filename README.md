@@ -87,6 +87,8 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#68](https://github.com/paulsp94/omacosy/pull/68) | OPEN | fix(uninstall): remove the apps omacosy installed, and show what fails |
+| [#67](https://github.com/paulsp94/omacosy/pull/67) | OPEN | fix(uninstall): keep a backup of your settings, and say to open a new terminal |
 | [#66](https://github.com/paulsp94/omacosy/pull/66) | OPEN | fix(uninstall): restore recorded booleans |
 | [#65](https://github.com/paulsp94/omacosy/pull/65) | OPEN | docs(readme): one command to install or reinstall |
 | [#64](https://github.com/paulsp94/omacosy/pull/64) | OPEN | feat(install): test the signing certificate and clear stale permissions |
