@@ -2,7 +2,8 @@
 # omacosy-toggle [on|off|toggle] — park the whole tiling setup without
 # uninstalling. `off`: the window manager stops managing (AeroSpace's
 # keybindings go quiet; OmniWM quits — it has no enable toggle), the
-# hover-focus, borders and trackpad-swipe daemons stop, the bar stops.
+# hover-focus, borders, trackpad-swipe, solo, Dock-recall and
+# light/dark daemons stop, the bar stops.
 # `on` restores all of it, for the window manager this Mac uses (the
 # rule install.sh uses). No args = flip.
 #
@@ -13,7 +14,8 @@ set -euo pipefail
 
 STATE="$HOME/.config/omacosy/disabled"
 UID_N="$(id -u)"
-AGENTS=(com.omacosy.ffm com.omacosy.borders com.omacosy.dwindle com.omacosy.bar com.omacosy.gesture)
+AGENTS=(com.omacosy.ffm com.omacosy.borders com.omacosy.dwindle com.omacosy.bar com.omacosy.gesture
+  com.omacosy.solo com.omacosy.recall com.omacosy.appearance)
 
 # the window manager this Mac uses, by the same rule as install.sh. The
 # login item stays while OmniWM is down or restarting, so a manager that
