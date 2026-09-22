@@ -90,13 +90,13 @@ The fixes this build offers upstream, and their state today.
 | --- | --- | --- |
 | [#69](https://github.com/paulsp94/omacosy/pull/69) | OPEN | docs(readme): name the Screen Recording entries macOS checks |
 | [#68](https://github.com/paulsp94/omacosy/pull/68) | OPEN | fix(uninstall): remove the apps omacosy installed, and show what fails |
-| [#67](https://github.com/paulsp94/omacosy/pull/67) | OPEN | fix(uninstall): keep a backup of your settings, and say to open a new terminal |
-| [#66](https://github.com/paulsp94/omacosy/pull/66) | OPEN | fix(uninstall): restore recorded booleans |
-| [#65](https://github.com/paulsp94/omacosy/pull/65) | OPEN | docs(readme): one command to install or reinstall |
+| [#67](https://github.com/paulsp94/omacosy/pull/67) | MERGED | fix(uninstall): keep a backup of your settings, and say to open a new terminal |
+| [#66](https://github.com/paulsp94/omacosy/pull/66) | MERGED | fix(uninstall): restore recorded booleans |
+| [#65](https://github.com/paulsp94/omacosy/pull/65) | MERGED | docs(readme): one command to install or reinstall |
 | [#64](https://github.com/paulsp94/omacosy/pull/64) | OPEN | feat(install): test the signing certificate and clear stale permissions |
 | [#63](https://github.com/paulsp94/omacosy/pull/63) | OPEN | fix(ffm): stand down while OmniWM runs |
 | [#62](https://github.com/paulsp94/omacosy/pull/62) | OPEN | fix(ws-collapse): restore keeps the map until the windows are back |
-| [#61](https://github.com/paulsp94/omacosy/pull/61) | OPEN | fix(toggle): on brings back the setup of this Mac's window manager |
+| [#61](https://github.com/paulsp94/omacosy/pull/61) | MERGED | fix(toggle): on brings back the setup of this Mac's window manager |
 | [#60](https://github.com/paulsp94/omacosy/pull/60) | OPEN | fix(bar): the bar stays when no window manager answers |
 | [#59](https://github.com/paulsp94/omacosy/pull/59) | OPEN | feat(install): choose the window manager with --aerospace or --omniwm |
 | [#58](https://github.com/paulsp94/omacosy/pull/58) | OPEN | fix(wm-switch): the switch to OmniWM checks itself and does not ask |
