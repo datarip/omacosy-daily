@@ -87,6 +87,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#64](https://github.com/paulsp94/omacosy/pull/64) | OPEN | feat(install): test the signing certificate and clear stale permissions |
 | [#63](https://github.com/paulsp94/omacosy/pull/63) | OPEN | fix(ffm): stand down while OmniWM runs |
 | [#62](https://github.com/paulsp94/omacosy/pull/62) | OPEN | fix(ws-collapse): restore keeps the map until the windows are back |
 | [#61](https://github.com/paulsp94/omacosy/pull/61) | OPEN | fix(toggle): on brings back the setup of this Mac's window manager |
