@@ -49,7 +49,8 @@ and each one waits for its first run on a notched MacBook:
 
 1. The bar stays visible at rest. macOS already keeps the camera strip
    out of the space windows use, so hiding the bar there gains nothing.
-   `autohide=auto` in `bar.conf` selects this.
+   The default, `autohide=off` in `bar.conf`, keeps it visible on every
+   display; `autohide=auto` also keeps it visible on a notched one.
 2. The top gap for windows subtracts the notch height, so tiled windows
    start just below the bar and not one notch lower.
 3. The media pill sits at the left edge, because the camera takes the
@@ -420,7 +421,7 @@ file when it starts.
 
 | Setting | Values | What it does |
 | --- | --- | --- |
-| `autohide` | `auto`, `on`, `off` | `auto` keeps the bar visible on a notched display, and hides it at rest on a display with no notch or on an external monitor |
+| `autohide` | `off` (default), `auto`, `on` | `off` keeps the bar visible on every display. `auto` keeps it visible on a notched display, and hides it at rest on a display with no notch or on an external monitor. `on` hides it at rest everywhere |
 | `split` | `0.0` to `1.0` | where the top edge divides, as a fraction of the display width. The left part belongs to this bar, the right part to the native menu bar |
 | `slide` | milliseconds, or `off` | how long the bar takes to slide in and out, on a display where it hides |
 
