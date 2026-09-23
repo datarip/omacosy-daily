@@ -88,6 +88,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#71](https://github.com/paulsp94/omacosy/pull/71) | OPEN | fix(ghostty): close a window without a prompt, as on Omarchy |
 | [#70](https://github.com/paulsp94/omacosy/pull/70) | OPEN | fix(spawn): a burst waits for each window to settle before the next one |
 | [#69](https://github.com/paulsp94/omacosy/pull/69) | OPEN | docs(readme): name the Screen Recording entries macOS checks |
 | [#68](https://github.com/paulsp94/omacosy/pull/68) | OPEN | fix(uninstall): remove the apps omacosy installed, and show what fails |
