@@ -251,6 +251,11 @@ done
 case "$(readlink "$HOME/.local/bin/omacosy-files" 2>/dev/null || true)" in
   *omacosy*) rm -f "$HOME/.local/bin/omacosy-files" ;;
 esac
+# the Neovim plugin omacosy-auto-theme linked; left behind, it would point at
+# nothing once the clone is gone and Neovim would fail to load it
+case "$(readlink "$HOME/.config/nvim/lua/plugins/omacosy-theme.lua" 2>/dev/null || true)" in
+  *omacosy*) rm -f "$HOME/.config/nvim/lua/plugins/omacosy-theme.lua" ;;
+esac
 
 # Put the pre-omacosy wallpaper back — theme-set overwrote every display
 # and the picture would otherwise stay as a souvenir. Restores only when

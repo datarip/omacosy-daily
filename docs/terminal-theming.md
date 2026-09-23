@@ -3,7 +3,7 @@
 Off by default. `omacosy-auto-theme on` turns on the custom theme, where every
 wallpaper in `~/Pictures/wallpapers` is a theme of its own, and makes each
 switch to one set the terminal's colors, the Starship prompt and the directory
-color in `ls`, `eza` and yazi, and btop's colors.
+color in `ls`, `eza` and yazi, btop's colors, and Neovim's colourscheme.
 
 ```sh
 omacosy-auto-theme            # status: switch, custom theme, applier, palette file
@@ -171,37 +171,54 @@ Two details that cost an afternoon, kept here so they are not learned twice:
   `~/.local/bin` is not found there, so anything looked up by name alone
   silently does nothing when the switch comes from the keyboard.
 
-## 5. What it does not touch
+## 5. Neovim
 
-Neovim, tmux, and any other program with colours of its own. `omacosy-auto-theme off`
+`omacosy-auto-theme on` links `config/nvim/omacosy-theme.lua` into
+`~/.config/nvim/lua/plugins/`, the folder a lazy.nvim config (LazyVim,
+kickstart) loads plugins from. `off` removes the link. A file of your own with
+that name is never replaced or removed. Without that folder nothing is linked,
+and the palette file below is still there to use by hand.
+
+**The palette.** On a custom theme omacosy writes
+`~/.config/omacosy/nvim/palette.lua`. It returns one table: the theme name,
+`dark`, the roles (`bg`, `fg`, `accent`, `alt`, `ok`, `warn`, `err`, `info`,
+`peach`, `muted`), the 16 colours as `ansi`, and a `base16` table. Any config
+can read it with `dofile()`.
+
+**The colourscheme.** The plugin gives `base16` to `mini.base16`, which lazy.nvim
+installs the first time. Functions wear the accent; strings, keywords and
+constants keep the six fixed hues of section 1, so red stays red in the editor
+too.
+
+| base16 | from |
+| --- | --- |
+| base00 | background |
+| base01 | background mixed 8% toward the text |
+| base02 | selection background |
+| base03 | `MUTED` (comments) |
+| base04 | `MUTED` mixed halfway to the text |
+| base05 | foreground |
+| base06, base07 | the brightest of the 16 |
+| base08, base0A, base0B, base0C, base0E | red, yellow, green, cyan, magenta |
+| base09 | `PEACH` |
+| base0D | `ACCENT` |
+| base0F | `ALT` |
+
+`terminal_color_0` to `terminal_color_15` are set too, so a `:terminal` matches
+the one outside.
+
+**Following a switch.** The plugin watches `~/.config/omacosy/nvim/`, the
+folder and not the file, because omacosy replaces the file with a rename and
+a watch on a file stops after the first rename. On a stock theme the file is
+deleted, and the plugin puts back the colourscheme your config set at startup.
+It applies its own at `VimEnter`, after your config, so that scheme is the one
+it remembers.
+
+**One plugin only.** Some terminal-theme tools ship a Neovim plugin that also
+sets the colourscheme from a palette. Two such plugins fight over it, so keep
+one of the two.
+
+## 6. What it does not touch
+
+tmux, and any other program with colours of its own. `omacosy-auto-theme off`
 deletes the generated files; the next window reads your own colours again.
-
-## 6. Not done: Neovim
-
-Undecided, written down so the options are not rediscovered. Nothing here is
-implemented; a Neovim on a machine without another tool keeps its own
-colourscheme. In increasing order of work:
-
-**Terminal colours only.** Set `terminal_color_0` to `terminal_color_15` from
-the palette, so a `:terminal` inside Neovim matches the outside one. The
-editor's colourscheme is untouched. Small, safe, and it fixes the one place
-where the mismatch is obvious.
-
-**A generated palette file, and nothing else.** Write `palette.lua` next to the
-other generated files and document it. Whoever wants it reads it from their own
-config: `dofile(vim.fn.expand("~/.config/omacosy/palette.lua"))`, then uses the
-values however they like — pick a colourscheme by name, tint a statusline, set
-the terminal colours above. No plugin, no assumption about how Neovim is set
-up, which is the point: LazyVim, kickstart and a hand-written config all load
-things differently.
-
-**A colourscheme built from the palette.** A full theme generated per wallpaper.
-This is the one to be careful with: sixteen colours plus an accent rarely make
-a good editor theme, and syntax highlighting needs more distinctions than a
-terminal does. A middle road is to pick the NEAREST existing colourscheme
-instead of generating one, the way `OMACOSY_ACCENT_ANSI` picks the nearest
-palette slot.
-
-Whatever is chosen, the refresh problem is already solved for it: a running
-Neovim would reload on the same signal the shells use, if its config asks for
-that.
