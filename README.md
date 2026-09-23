@@ -678,7 +678,7 @@ omacosy-custom-theme follow on
 Either may name a shipped theme, one of its wallpapers, or a file of your
 own. Full manual: **[docs/derived-themes.md](docs/derived-themes.md)**.
 
-### The terminal follows your wallpaper
+### Auto-theme: the terminal and its apps follow your wallpaper
 
 Off by default, because a terminal's colors are a personal choice:
 
@@ -688,21 +688,39 @@ omacosy-auto-theme on         # custom themes, and the apps follow them
 omacosy-auto-theme off        # stock themes only; your own colors come back
 ```
 
-With it on, a **custom** theme also sets the terminal background, its 16
-colors, the Starship prompt, the directory color in `ls`, `eza` and yazi, the
-colors of bat, delta, fzf, lazygit and fastfetch, btop's colors, and Neovim's
-colorscheme.
-The 16 colors are derived from the wallpaper, and red, green, yellow, blue,
-magenta and cyan keep their hue — only their lightness and saturation follow
-the picture, so an error message still reads as red.
+`on` makes the **custom** theme appear (see *Your own wallpapers* above).
+While a custom theme is on screen, the terminal and its apps take the colors
+of the same wallpaper. The 16 terminal colors are derived from the picture,
+and red, green, yellow, blue, magenta and cyan keep their hue, so an error
+message still reads as red.
 
-A **stock** theme changes none of this. When one is on screen, the generated
-files are removed and every app shows its own colors again.
+A **stock** theme changes none of this. When one is on screen, every generated
+file is removed and each app shows its own colors again.
 
-Windows that are already open are repainted, so nothing has to be reloaded
-by hand.
+| App | What follows the wallpaper | When it changes | One-time setup |
+| --- | --- | --- | --- |
+| Ghostty | background, the 16 colors, cursor, selection | at once, also in new windows | none |
+| Starship | the prompt, by role (`err`, `ok`, `accent`, …) | at once | none |
+| `ls`, `eza` | the directory color, in the accent | at once | none |
+| yazi | directories and folder icons in the accent, markers, borders | when it opens | none |
+| btop | meters from green to red, highlights in the accent, the terminal's own background | at once | none |
+| Neovim | a base16 colorscheme from the palette, the terminal's own background | at once | `on` links the plugin |
+| bat, delta | code in the 16 colors | at once | none |
+| delta | the added and removed line strips, in the palette's green and red | at once | `[include] path = ~/.config/omacosy/delta.gitconfig` in `~/.gitconfig` |
+| fzf, lazygit, fastfetch | accent, borders, selection | the next time they run | none |
+| tmux | the band behind the bar takes the terminal's background; a theme plugin keeps its pills | at once | `source-file -q ~/.config/omacosy/tmux-theme.conf` at the end of `tmux.conf` |
 
-**What it writes**, all under `~/.config/omacosy/`:
+With an `applier` (below), Ghostty, Starship and fzf are that tool's job, and
+omacosy hands it the palette instead.
+
+Ghostty makes only the terminal's own background transparent, so btop, Neovim
+and the tmux band draw on that background instead of painting a color: their
+background shows the same transparency as the shell.
+
+neovim, git-delta, tmux and fastfetch are not in the base install;
+`./install.sh --tui-tools` adds them.
+
+**What it writes**, all under `~/.config/omacosy/` unless the path says otherwise:
 
 | File | Read by |
 | --- | --- |
@@ -711,11 +729,11 @@ by hand.
 | `starship.toml` | Starship, generated from `config/starship-omacosy.template.toml`, whose colors are named by role |
 | `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, `BAT_THEME=ansi` for bat and delta, `LG_CONFIG_FILE` for lazygit, a `fastfetch` function with the colors, and, when omacosy owns the prompt, `STARSHIP_CONFIG` and fzf's colors. Your own values come back on a stock theme |
 | `lazygit-theme.yml` | lazygit's theme keys only, added after your own `config.yml` |
-| `tmux-theme.conf` | tmux: the band behind the bar takes the terminal background |
-| `delta.gitconfig` | delta's added and removed line strips, in the palette's green and red. `~/.gitconfig` needs `[include] path = ~/.config/omacosy/delta.gitconfig` |
-| `~/.config/yazi/theme.toml` | yazi: directories, name and folder glyph, wear the theme accent. yazi reads it at startup, so an open window changes on reopen. A `theme.toml` of your own is never overwritten |
-| `~/.config/btop/themes/omacosy.theme` | btop, with `color_theme = "omacosy"` in `btop.conf`. A running btop changes at once. A stock theme puts back btop's own theme |
-| `~/.config/omacosy/nvim/palette.lua` | Neovim, through `config/nvim/omacosy-theme.lua`, which `on` links into `~/.config/nvim/lua/plugins/`. It builds a base16 colorscheme with `mini.base16`, and an open Neovim changes at once. A stock theme puts back your own colorscheme |
+| `tmux-theme.conf` | tmux, for the band behind the bar |
+| `delta.gitconfig` | delta's line strips |
+| `nvim/palette.lua` | Neovim, through `config/nvim/omacosy-theme.lua` |
+| `~/.config/yazi/theme.toml` | yazi. A `theme.toml` of your own is never overwritten |
+| `~/.config/btop/themes/omacosy.theme` | btop, with `color_theme = "omacosy"` in `btop.conf`. A stock theme puts back btop's own theme |
 
 Your own Ghostty config is read **after** the generated one, so a color you
 set by hand still wins. `omacosy-auto-theme off` deletes the generated files,
@@ -729,19 +747,16 @@ applier = <command>           empty: omacosy writes the config itself
 ```
 
 When `applier` names a command, omacosy writes the palette and then runs
-`<command> <palette-file> <theme-label>`, and writes no terminal config of
-its own. On a stock theme it runs `<command> --clear <theme-label>`, so that
-tool puts back its own colors. That is the hand-off point for a tool that already owns your
-terminal's colors, and it keeps exactly one writer: two programs writing the
-same Ghostty file would fight, and the winner would depend on the order the
-includes are read. Whichever tool applies the colors, a theme you set by
-hand wins until the next omacosy theme switch.
+`<command> <palette-file> <theme-label>`, and writes no terminal config of its
+own. On a stock theme it runs `<command> --clear <theme-label>`, so that tool
+puts back its own colors. That is the hand-off point for a tool that already
+owns your terminal's colors, and it keeps exactly one writer: two programs
+writing the same Ghostty file would fight, and the winner would depend on the
+order the includes are read.
 
-**tmux** keeps its own bar; only the band behind it takes the terminal's
-background. A server that starts later needs `source-file -q
-~/.config/omacosy/tmux-theme.conf` at the end of `tmux.conf`.
+**What it does not touch:** any other program with colors of its own.
 
-**What it does not touch:** any other program with colors of its own. They keep their configuration.
+Full manual: **[docs/auto-theme.md](docs/auto-theme.md)**.
 
 ### yazi and your editor
 
@@ -778,8 +793,6 @@ edit = [ { run = 'nvim "$@"', block = true } ]
 
 omacosy writes `~/.config/yazi/theme.toml` while a custom theme is on screen, and
 never writes `yazi.toml`, so that file is yours alone.
-
-Full manual: **[docs/terminal-theming.md](docs/terminal-theming.md)**.
 
 ## Tiling: dwindle
 

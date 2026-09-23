@@ -683,7 +683,8 @@ cp ~/Downloads/some-wallpapers/*.jpg ~/Pictures/wallpapers/
 ```
 
 `install.sh` creates that directory for you, empty. Auto-theme is off on a
-new install.
+new install. The same switch makes the terminal and its apps follow the
+wallpaper: [auto-theme.md](auto-theme.md).
 
 `Super+Shift+T` now reaches a fifth theme, `custom`, after the four
 shipped ones. `Super+Shift+B` inside it moves through your images, and

@@ -1,25 +1,37 @@
-# The terminal follows your wallpaper
+# Auto-theme: the terminal and its apps follow your wallpaper
 
 Off by default. `omacosy-auto-theme on` turns on the custom theme, where every
-wallpaper in `~/Pictures/wallpapers` is a theme of its own, and makes each
-switch to one set the terminal's colors, the Starship prompt and the directory
-color in `ls`, `eza` and yazi, the colours of bat, delta, fzf, lazygit and
-fastfetch, btop's colors, and Neovim's colourscheme.
+wallpaper in `~/Pictures/wallpapers` is a theme of its own
+([derived-themes.md](derived-themes.md)). While a custom theme is on screen,
+the terminal and its apps take the colours of the same wallpaper: Ghostty, the
+Starship prompt, the directory colour in `ls` and `eza`, yazi, btop, Neovim,
+bat, delta and its line strips, fzf, lazygit, fastfetch, and the band behind
+tmux's bar.
 
 ```sh
-omacosy-auto-theme            # status: switch, custom theme, applier, palette file
+omacosy-auto-theme            # status: switch, custom theme, applier, palette file, btop, Neovim
 omacosy-auto-theme on
 omacosy-auto-theme off
 ```
 
 `theme-set` and `theme-bg-next` call `omacosy-auto-theme apply <label>` after
-they repoint `~/.config/omarchy/current/theme`. Nothing else calls it.
+they repoint `~/.config/omarchy/current/theme`. Nothing else calls it, except
+tmux, which runs `omacosy-auto-theme tmux-bar` from its own config.
 
 **A stock theme is never changed.** When one of the shipped themes is on
-screen, `apply` removes every generated file, resets the colors of open
-terminals (OSC 104, 110, 111, 112) or runs `<applier> --clear <label>`, and
-puts back the `EZA_COLORS`, `LS_COLORS` and `STARSHIP_CONFIG` a shell had
-before. Each app shows its own colors.
+screen, `apply` removes every generated file, puts back the settings it
+replaced (btop's `color_theme`, the shell variables), resets the colours of
+open terminals (OSC 104, 110, 111, 112) or runs `<applier> --clear <label>`,
+and makes Ghostty and tmux read their own config again. Each app shows its own
+colours.
+
+- [1. Where the colors come from](#1-where-the-colors-come-from)
+- [2. The palette file](#2-the-palette-file)
+- [3. Who applies it](#3-who-applies-it): yazi, btop, delta's line strips
+- [4. Windows that are already open, and the next one](#4-windows-that-are-already-open-and-the-next-one)
+- [5. Neovim](#5-neovim)
+- [6. tmux](#6-tmux)
+- [7. What it does not touch](#7-what-it-does-not-touch)
 
 ## 1. Where the colors come from
 
@@ -71,23 +83,28 @@ background, the foreground and `OMACOSY_MUTED`.
 ## 3. Who applies it
 
 `~/.config/omacosy/auto-theme.conf` (`term.conf`, the file of the old name
-`omacosy-auto-theme`, is read once and moved into it):
+`omacosy-term-sync`, is read once and moved into it):
 
 ```
 auto-theme = on | off         off by default
 applier = <command>           empty: omacosy writes the config itself
 ```
 
-**omacosy as the applier** writes three files, all under `~/.config/omacosy/`:
+**omacosy as the applier** writes these files, under `~/.config/omacosy/`
+unless the path says otherwise. The ones marked *both modes* are also written
+when another tool is the applier, because no terminal palette reaches them:
 
 | File | Read by |
 | --- | --- |
 | `ghostty-theme.conf` | Ghostty, through `config-file = ?~/.config/omacosy/ghostty-theme.conf` in the shipped config |
 | `starship.toml` | Starship, generated from `config/starship-omacosy.template.toml` plus the palette |
 | `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, `BAT_THEME=ansi` (bat and delta then draw in the 16 colours), `STARSHIP_CONFIG`, fzf's `--color` added to your own `FZF_DEFAULT_OPTS`, `LG_CONFIG_FILE` for lazygit, and a `fastfetch` function that adds the colours as options. Your own values are kept and put back on a stock theme, and a `fastfetch` function of your own is never replaced |
-| `lazygit-theme.yml` | lazygit, as the last file in `LG_CONFIG_FILE`: only the `gui.theme` keys, so your own `config.yml` keeps everything else. lazygit refuses to start when a named file is missing, so your `config.yml` is named only when it exists |
-| `~/.config/yazi/theme.toml` | yazi. Written in both modes, because yazi paints itself and no terminal palette reaches it |
-| `~/.config/btop/themes/omacosy.theme` | btop, through `color_theme = "omacosy"` in `btop.conf`. Written in both modes, for the same reason |
+| `lazygit-theme.yml` | lazygit, as the last file in `LG_CONFIG_FILE`: only the `gui.theme` keys, so your own `config.yml` keeps everything else. lazygit refuses to start when a named file is missing, so your `config.yml` is named only when it exists. *Both modes* |
+| `delta.gitconfig` | delta's line strips, through an include in `~/.gitconfig`. *Both modes* |
+| `tmux-theme.conf` | tmux, through `source-file -q` at the end of `tmux.conf`. *Both modes* |
+| `nvim/palette.lua` | Neovim, through `config/nvim/omacosy-theme.lua`. *Both modes* |
+| `~/.config/yazi/theme.toml` | yazi. *Both modes* |
+| `~/.config/btop/themes/omacosy.theme` | btop, through `color_theme = "omacosy"` in `btop.conf`. *Both modes* |
 
 The `?` makes Ghostty's include optional, so a machine that never turns this on
 reads no such file. Your own config is read after it, so a color you set by hand
