@@ -98,7 +98,7 @@ The fixes this build offers upstream, and their state today.
 | [#63](https://github.com/paulsp94/omacosy/pull/63) | OPEN | fix(ffm): stand down while OmniWM runs |
 | [#62](https://github.com/paulsp94/omacosy/pull/62) | OPEN | fix(ws-collapse): restore keeps the map until the windows are back |
 | [#61](https://github.com/paulsp94/omacosy/pull/61) | MERGED | fix(toggle): on brings back the setup of this Mac's window manager |
-| [#60](https://github.com/paulsp94/omacosy/pull/60) | OPEN | fix(bar): the bar stays when no window manager answers |
+| [#60](https://github.com/paulsp94/omacosy/pull/60) | OPEN | fix(bar): one routine follows the window manager, and the bar stays when none answers |
 | [#59](https://github.com/paulsp94/omacosy/pull/59) | OPEN | feat(install): choose the window manager with --aerospace or --omniwm |
 | [#58](https://github.com/paulsp94/omacosy/pull/58) | OPEN | fix(wm-switch): the switch to OmniWM checks itself and does not ask |
 | [#56](https://github.com/paulsp94/omacosy/pull/56) | MERGED | fix(install): a re-run keeps OmniWM when it is the window manager |
@@ -118,7 +118,7 @@ The fixes this build offers upstream, and their state today.
 | [#40](https://github.com/paulsp94/omacosy/pull/40) | MERGED | fix(install): quote the app names written to apps.conf |
 | [#39](https://github.com/paulsp94/omacosy/pull/39) | MERGED | fix(install): match Karabiner's current agent label |
 | [#37](https://github.com/paulsp94/omacosy/pull/37) | OPEN | fix(gesture): the trackpad arms at once when OmniWM is the manager |
-| [#36](https://github.com/paulsp94/omacosy/pull/36) | OPEN | fix(bar): a window-manager switch is noticed while the bar runs |
+| [#36](https://github.com/paulsp94/omacosy/pull/36) | CLOSED | fix(bar): a window-manager switch is noticed while the bar runs |
 | [#35](https://github.com/paulsp94/omacosy/pull/35) | OPEN | fix(omniwm): one engine owns the four-finger swipe |
 | [#34](https://github.com/paulsp94/omacosy/pull/34) | MERGED | fix(wm-switch): a config swap reaches the daemon that reads it |
 | [#33](https://github.com/paulsp94/omacosy/pull/33) | MERGED | fix(gesture): the OmniWM swipe config points at another user's home |
