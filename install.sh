@@ -524,7 +524,7 @@ if [ ! -x "$HOME/.local/bin/omacosy-derive" ] || [ "$REPO_DIR/helper/derive.swif
 fi
 
 # terminal palette for the theme on screen. Used only while
-# `omacosy-term-sync on`; building it costs nothing otherwise.
+# `omacosy-auto-theme on`; building it costs nothing otherwise.
 if [ ! -x "$HOME/.local/bin/omacosy-term-palette" ] || [ "$REPO_DIR/helper/term-palette.swift" -nt "$HOME/.local/bin/omacosy-term-palette" ]; then
   log "Building omacosy-term-palette"
   swiftc -O -o "$HOME/.local/bin/omacosy-term-palette" "$REPO_DIR/helper/term-palette.swift"
@@ -785,7 +785,11 @@ link "$REPO_DIR/bin/theme-set"  "$HOME/.local/bin/theme-set"
 link "$REPO_DIR/bin/theme-next" "$HOME/.local/bin/theme-next"
 link "$REPO_DIR/bin/theme-bg-next" "$HOME/.local/bin/theme-bg-next"
 link "$REPO_DIR/bin/omacosy-custom-theme" "$HOME/.local/bin/omacosy-custom-theme"
-link "$REPO_DIR/bin/omacosy-term-sync" "$HOME/.local/bin/omacosy-term-sync"
+link "$REPO_DIR/bin/omacosy-auto-theme" "$HOME/.local/bin/omacosy-auto-theme"
+# the old name of omacosy-auto-theme; its link would point at nothing
+case "$(readlink "$HOME/.local/bin/omacosy-term-sync" 2>/dev/null || true)" in
+  *omacosy*) rm -f "$HOME/.local/bin/omacosy-term-sync" ;;
+esac
 link "$REPO_DIR/bin/omacosy-appearance" "$HOME/.local/bin/omacosy-appearance"
 link "$REPO_DIR/bin/omacosy-toggle" "$HOME/.local/bin/omacosy-toggle"
 link "$REPO_DIR/bin/omacosy-ws" "$HOME/.local/bin/omacosy-ws"

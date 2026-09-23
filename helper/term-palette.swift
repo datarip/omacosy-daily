@@ -15,10 +15,11 @@
 //            background.
 //
 // The output is one file of KEY='#rrggbb' lines, meant to be sourced by a
-// shell. WHO applies it is not this program's business: omacosy-term-sync
+// shell. WHO applies it is not this program's business: omacosy-auto-theme
 // renders the terminal's own config files from it, or hands the file to a
-// command named in term.conf. The surface ramp is not written: a consumer that
-// wants one derives it from the background, the foreground and MUTED.
+// command named in auto-theme.conf. The surface ramp is not written: a
+// consumer that wants one derives it from the background, the foreground and
+// MUTED.
 import AppKit
 
 struct C { var r: Double, g: Double, b: Double

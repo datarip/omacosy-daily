@@ -1,17 +1,24 @@
-# The terminal follows the theme
+# The terminal follows your wallpaper
 
-Off by default. `omacosy-term-sync on` makes every theme and wallpaper switch
-set the terminal's colors, the Starship prompt and the directory color in
-`ls`, `eza` and yazi.
+Off by default. `omacosy-auto-theme on` turns on the custom theme, where every
+wallpaper in `~/Pictures/wallpapers` is a theme of its own, and makes each
+switch to one set the terminal's colors, the Starship prompt and the directory
+color in `ls`, `eza` and yazi.
 
 ```sh
-omacosy-term-sync            # status: theming, applier, palette file
-omacosy-term-sync on
-omacosy-term-sync off
+omacosy-auto-theme            # status: switch, custom theme, applier, palette file
+omacosy-auto-theme on
+omacosy-auto-theme off
 ```
 
-`theme-set` and `theme-bg-next` call `omacosy-term-sync apply <label>` after
+`theme-set` and `theme-bg-next` call `omacosy-auto-theme apply <label>` after
 they repoint `~/.config/omarchy/current/theme`. Nothing else calls it.
+
+**A stock theme is never changed.** When one of the shipped themes is on
+screen, `apply` removes every generated file, resets the colors of open
+terminals (OSC 104, 110, 111, 112) or runs `<applier> --clear <label>`, and
+puts back the `EZA_COLORS`, `LS_COLORS` and `STARSHIP_CONFIG` a shell had
+before. Each app shows its own colors.
 
 ## 1. Where the colors come from
 
@@ -19,8 +26,8 @@ they repoint `~/.config/omarchy/current/theme`. Nothing else calls it.
 on screen and writes one palette file.
 
 **A shipped theme** (`themes/<name>/`) carries `colors.toml`, a designer's own
-16 colors, and they are used as they are. A theme named gruvbox must give the
-gruvbox terminal, not our reading of its wallpaper.
+16 colors, and they are used as they are. `omacosy-auto-theme` never asks for
+this: a stock theme leaves the terminal alone.
 
 **A computed theme** (a wallpaper of your own) has no `colors.toml`, so the 16
 colors are derived from the palette `omacosy-derive` already wrote:
@@ -62,10 +69,11 @@ background, the foreground and `OMACOSY_MUTED`.
 
 ## 3. Who applies it
 
-`~/.config/omacosy/term.conf`:
+`~/.config/omacosy/auto-theme.conf` (`term.conf`, the file of the old name
+`omacosy-auto-theme`, is read once and moved into it):
 
 ```
-theming = on | off            off by default
+auto-theme = on | off         off by default
 applier = <command>           empty: omacosy writes the config itself
 ```
 
@@ -83,7 +91,8 @@ reads no such file. Your own config is read after it, so a color you set by hand
 still wins.
 
 **Another tool as the applier.** omacosy runs `<command> <palette-file>
-<theme-label>` and writes no terminal config of its own, not even a stale file
+<theme-label>` on a custom theme and `<command> --clear <theme-label>` on a
+stock one, and writes no terminal config of its own, not even a stale file
 an include could pick up. It still writes `term-env.sh` for the directory
 color, which is nobody else's job, and it still repaints open windows.
 
@@ -108,7 +117,7 @@ from yazi's own error messages, kept so they are not learned twice:
   Colouring the rules alone leaves accent names next to blue icons.
 
 A `theme.toml` of your own is never touched: the file is only written when it
-is missing or when its first line says omacosy wrote it. `omacosy-term-sync
+is missing or when its first line says omacosy wrote it. `omacosy-auto-theme
 off` deletes ours and leaves yours.
 
 yazi reads its theme when it starts, so a window that is already open keeps
@@ -126,12 +135,12 @@ that would rather have live colour than an exact one.
 
 ## 4. Windows that are already open
 
-A config file only reaches the next window, so `omacosy-term-sync` writes the
+A config file only reaches the next window, so `omacosy-auto-theme` writes the
 colors to the tty of every shell as escape sequences (OSC 4, 10, 11 and 12).
 The terminal consumes them, so a shell running Neovim or yazi is unharmed.
 
 The prompt needs one more step. Starship builds its prompt string when it draws
-a prompt, so the one on screen keeps the old colors. `omacosy-term-sync` sends
+a prompt, so the one on screen keeps the old colors. `omacosy-auto-theme` sends
 SIGWINCH, and `zsh/zshrc` traps it, re-runs Starship's own precmd and redraws
 the line.
 
@@ -145,7 +154,7 @@ Two details that cost an afternoon, kept here so they are not learned twice:
 
 ## 5. What it does not touch
 
-Neovim, tmux, and any program with colours of its own. `omacosy-term-sync off`
+Neovim, tmux, and any program with colours of its own. `omacosy-auto-theme off`
 deletes the generated files; the next window reads your own colours again.
 
 ## 6. Not done: Neovim

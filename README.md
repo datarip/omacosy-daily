@@ -338,7 +338,7 @@ The commands you run:
 | `omacosy-solo-fullscreen on\|off\|status` | a workspace with one tiled window fills the display. Off by default |
 | `omacosy-window-corners [square\|round\|<radius>]` | sets the radius macOS draws window corners with. No argument shows it |
 | `omacosy-harvest-zshrc` | moves the lines installers appended to `~/.zshrc` into `~/.zshrc.local` |
-| `omacosy-term-sync on\|off\|status` | whether the terminal, the prompt and the `ls` colors follow the theme. Off by default |
+| `omacosy-auto-theme on\|off\|status` | whether your own wallpapers become themes, with the terminal, the prompt, the `ls` colors and yazi to match. Off by default |
 | `theme-set <name>` | switches the whole theme |
 | `theme-next` | the next theme (Super+Shift+T) |
 | `theme-bg-next [path]` | the next wallpaper of the theme, or the image you name (Super+Shift+B) |
@@ -354,7 +354,7 @@ The keys and the daemons run these. You do not need to run them:
 | `omacosy-spawn`, `omacosy-spawn-cmd` | the launch chords: one new window at a time |
 | `omacosy-finder-window` | Super+Shift+F: a new Finder window on this workspace |
 | `omacosy-files` | Super+Shift+Y: yazi in a new terminal window |
-| `omacosy-term-sync apply` | `theme-set` and `theme-bg-next`, when terminal theming is on |
+| `omacosy-auto-theme apply` | `theme-set` and `theme-bg-next`, when auto-theme is on |
 | `omacosy-focus-guard` | AeroSpace, on each workspace change: it undoes a switch that an app caused by activating itself |
 | `omacosy-ws-collapse` | the bar, when a display is unplugged or plugged back in |
 | `omacosy-karabiner-omniwm` | `omacosy-wm-switch` and `omacosy-settings`: the launch chords under OmniWM |
@@ -620,19 +620,20 @@ Four themes means four color schemes, and they were chosen to suit their
 own wallpapers. A picture of your own gets whichever scheme you were on,
 which is how you end up with osaka-jade's dark green pills on a red bar.
 
-Put images in `~/Pictures/wallpapers` and `Super+Shift+T` reaches a fifth
-theme, `custom`, after the four. Inside it **every wallpaper is its own
+Turn on `omacosy-auto-theme`, put images in `~/Pictures/wallpapers`, and
+`Super+Shift+T` reaches a fifth theme, `custom`, after the four. Inside it **every wallpaper is its own
 theme**: `Super+Shift+B` moves to the next picture and recomputes the bar
 color, the pill color, the icon color and the focus ring from it.
 
 ```sh
+omacosy-auto-theme on
 mkdir -p ~/Pictures/wallpapers      # install.sh already made it
 cp ~/Downloads/walls/*.jpg ~/Pictures/wallpapers/
 omacosy-custom-theme status
 ```
 
-That is the whole setup. No config file, no flag. An empty or missing
-directory hides the feature: the cycle stays four themes and nothing is
+That is the whole setup. It is off on a new install. While it is off, or
+while the directory is empty, the cycle stays four themes and nothing is
 printed.
 
 **How the colors are chosen.** The bar's own background keeps the
@@ -676,23 +677,24 @@ omacosy-custom-theme follow on
 Either may name a shipped theme, one of its wallpapers, or a file of your
 own. Full manual: **[docs/derived-themes.md](docs/derived-themes.md)**.
 
-### The terminal follows the theme
+### The terminal follows your wallpaper
 
 Off by default, because a terminal's colors are a personal choice:
 
 ```sh
-omacosy-term-sync            # status
-omacosy-term-sync on         # the terminal follows every theme switch
-omacosy-term-sync off        # stop; your own colors come back
+omacosy-auto-theme            # status
+omacosy-auto-theme on         # custom themes, and the apps follow them
+omacosy-auto-theme off        # stock themes only; your own colors come back
 ```
 
-With it on, `Super+Shift+T` and `Super+Shift+B` also set the terminal
-background, its 16 colors, the Starship prompt and the directory color in
-`ls`, `eza` and yazi. A **shipped** theme hands over its own `colors.toml`,
-so gruvbox gives the gruvbox terminal. A **computed** theme derives the 16
-colors from the wallpaper, and red, green, yellow, blue, magenta and cyan
-keep their hue — only their lightness and saturation follow the picture, so
-an error message still reads as red.
+With it on, a **custom** theme also sets the terminal background, its 16
+colors, the Starship prompt and the directory color in `ls`, `eza` and yazi.
+The 16 colors are derived from the wallpaper, and red, green, yellow, blue,
+magenta and cyan keep their hue — only their lightness and saturation follow
+the picture, so an error message still reads as red.
+
+A **stock** theme changes none of this. When one is on screen, the generated
+files are removed and every app shows its own colors again.
 
 Windows that are already open are repainted, so nothing has to be reloaded
 by hand.
@@ -708,19 +710,20 @@ by hand.
 | `~/.config/yazi/theme.toml` | yazi: directories, name and folder glyph, wear the theme accent. yazi reads it at startup, so an open window changes on reopen. A `theme.toml` of your own is never overwritten |
 
 Your own Ghostty config is read **after** the generated one, so a color you
-set by hand still wins. `omacosy-term-sync off` deletes the generated files,
+set by hand still wins. `omacosy-auto-theme off` deletes the generated files,
 and the next window reads your own colors again.
 
-**Handing the terminal to another tool.** `~/.config/omacosy/term.conf`:
+**Handing the terminal to another tool.** `~/.config/omacosy/auto-theme.conf`:
 
 ```
-theming = on | off            off by default
+auto-theme = on | off         off by default
 applier = <command>           empty: omacosy writes the config itself
 ```
 
 When `applier` names a command, omacosy writes the palette and then runs
 `<command> <palette-file> <theme-label>`, and writes no terminal config of
-its own. That is the hand-off point for a tool that already owns your
+its own. On a stock theme it runs `<command> --clear <theme-label>`, so that
+tool puts back its own colors. That is the hand-off point for a tool that already owns your
 terminal's colors, and it keeps exactly one writer: two programs writing the
 same Ghostty file would fight, and the winner would depend on the order the
 includes are read. Whichever tool applies the colors, a theme you set by
@@ -762,7 +765,7 @@ Only yazi, without touching the shell, is `~/.config/yazi/yazi.toml`:
 edit = [ { run = 'nvim "$@"', block = true } ]
 ```
 
-omacosy writes `~/.config/yazi/theme.toml` when terminal theming is on, and
+omacosy writes `~/.config/yazi/theme.toml` while a custom theme is on screen, and
 never writes `yazi.toml`, so that file is yours alone.
 
 Full manual: **[docs/terminal-theming.md](docs/terminal-theming.md)**.

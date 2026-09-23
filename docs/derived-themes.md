@@ -674,15 +674,16 @@ ln -sfn "$(readlink ~/.config/omarchy/current/theme)" ~/.config/omarchy/current/
 
 ## 6. Setting it up
 
-**Create a directory and put images in it.**
+**Turn on auto-theme, then put images in the directory.**
 
 ```sh
+omacosy-auto-theme on
 mkdir -p ~/Pictures/wallpapers
 cp ~/Downloads/some-wallpapers/*.jpg ~/Pictures/wallpapers/
 ```
 
-`install.sh` creates that directory for you, empty. There is no command to
-run and no flag to set.
+`install.sh` creates that directory for you, empty. Auto-theme is off on a
+new install.
 
 `Super+Shift+T` now reaches a fifth theme, `custom`, after the four
 shipped ones. `Super+Shift+B` inside it moves through your images, and
@@ -705,7 +706,8 @@ night               : (unset)
 derived themes      : 5 cached in /Users/you/.local/state/omacosy/derived
 ```
 
-**An empty or missing directory hides the feature completely.** The cycle
+**Auto-theme off, or an empty or missing directory, hides the feature
+completely.** The cycle
 stays four themes, `theme-set list` prints four names, and `theme-set
 custom` is an unknown theme. No warning is printed, because a machine that
 never opted in has nothing to warn about.
