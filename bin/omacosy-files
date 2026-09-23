@@ -1,54 +1,24 @@
 #!/usr/bin/env bash
-# omacosy-files — open yazi, the terminal file manager, in a new window.
+# omacosy-files — open yazi, a file manager, in a new Ghostty window.
 #
-# Bound to Super+Shift+Y under both window managers. Finder keeps
-# Super+Shift+F: this is the other kind of file manager, not a replacement.
-#
-# The window is a terminal window, so it tiles like every other one and wears
-# the theme's colours. Which terminal is your own choice
-# (TERMINAL in ~/.config/omacosy/settings.conf); only Ghostty can be told to
-# run a command from here, because that is the one whose CLI this knows. With
-# any other terminal the window opens and you type `yazi` yourself.
+# Bound to Super+Shift+Y under both window managers, and only where yazi is
+# installed: install.sh leaves the AeroSpace binding out and
+# omacosy-karabiner-omniwm leaves the OmniWM rule out otherwise. Finder keeps
+# Super+Shift+F; this is the other kind of file manager.
 set -euo pipefail
 
-# apps.conf, not settings.conf: it is the RESOLVED answer. install.sh writes
-# the repo defaults there, omacosy-settings then writes your own over them, and
-# the launch chords already read it. settings.conf is where you WRITE a choice;
-# this is where the system reads it, and it is the only one of the two that a
-# machine running upstream omacosy has at all.
-APPS="$HOME/.config/omacosy/apps.conf"
-TERMINAL=Ghostty
-# shellcheck disable=SC1090
-[ -f "$APPS" ] && . "$APPS"
-: "${TERMINAL:=Ghostty}"
+notify() { /usr/bin/osascript -e "display notification \"$1\" with title \"omacosy\"" >/dev/null 2>&1 || true; }
 
 YAZI="$(command -v yazi 2>/dev/null || true)"
 [ -n "$YAZI" ] || YAZI=/opt/homebrew/bin/yazi
-if [ ! -x "$YAZI" ]; then
-  # Karabiner and AeroSpace both run this with no terminal to complain into.
-  /usr/bin/osascript -e 'display notification "yazi is not installed. Run: brew install yazi" with title "omacosy"' >/dev/null 2>&1 || true
-  exit 1
-fi
+GHOSTTY=/Applications/Ghostty.app/Contents/MacOS/ghostty
+[ -x "$GHOSTTY" ] || GHOSTTY="$HOME/Applications/Ghostty.app/Contents/MacOS/ghostty"
+# a keybinding has no terminal to complain into, under either window manager
+[ -x "$YAZI" ] || { notify "yazi is not installed: brew install yazi, then ./install.sh"; exit 1; }
+[ -x "$GHOSTTY" ] || { notify "Super+Shift+Y opens yazi in Ghostty, which is not installed"; exit 1; }
 
-SPAWN="$HOME/.local/bin/omacosy-spawn"
-GHOSTTY_BIN=/Applications/Ghostty.app/Contents/MacOS/ghostty
-[ -x "$GHOSTTY_BIN" ] || GHOSTTY_BIN="$HOME/Applications/Ghostty.app/Contents/MacOS/ghostty"
-
-if [ "$TERMINAL" = Ghostty ] && [ -x "$GHOSTTY_BIN" ]; then
-  # `-e` is Ghostty's own way to run a command in a new window. It is DETACHED
-  # on purpose: that process lives as long as the window does, and handing it
-  # to omacosy-spawn directly left the spawn lock held for the whole session,
-  # so the next terminal key waited out the 8 s timeout. Backgrounding it lets
-  # the spawn see its window, stamp the split hint and release.
-  if [ -x "$SPAWN" ]; then
-    exec "$SPAWN" --cmd /bin/sh -c "\"$GHOSTTY_BIN\" -e \"$YAZI\" >/dev/null 2>&1 &"
-  fi
-  "$GHOSTTY_BIN" -e "$YAZI" >/dev/null 2>&1 &
-  exit 0
-fi
-
-# any other terminal: open a window, the rest is yours
-if [ -x "$SPAWN" ]; then
-  exec "$SPAWN" "$TERMINAL"
-fi
-exec open -na "$TERMINAL"
+# Through omacosy-spawn, like Super+Enter: the same split side and the same
+# burst ordering. `ghostty -e` lives as long as its window, so it is
+# backgrounded inside the command: the spawn sees the window arrive and
+# releases its lock instead of holding it for the whole yazi session.
+exec "$HOME/.local/bin/omacosy-spawn" --cmd /bin/sh -c "\"$GHOSTTY\" -e \"$YAZI\" >/dev/null 2>&1 &"

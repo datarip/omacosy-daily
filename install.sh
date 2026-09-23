@@ -9,11 +9,14 @@ log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
 usage() {
   cat <<'EOF'
-usage: ./install.sh [--aerospace | --omniwm]
+usage: ./install.sh [--aerospace | --omniwm] [--yazi]
 
   (no option)   keep the window manager this Mac runs; AeroSpace on a new Mac
   --aerospace   install and run AeroSpace
   --omniwm      install and run OmniWM; AeroSpace is not installed
+  --yazi        also install yazi, a file manager on Super+Shift+Y, with the
+                helpers it previews and searches with. Off by default;
+                uninstall.sh removes what it added.
 
 The other window manager installs on first use:
   omacosy-wm-switch omniwm | aerospace
@@ -21,10 +24,12 @@ EOF
 }
 
 WM_FLAG=
+WITH_YAZI=0
 for arg in "$@"; do
   case "$arg" in
     --aerospace) WM_FLAG=aerospace ;;
     --omniwm) WM_FLAG=omniwm ;;
+    --yazi) WITH_YAZI=1 ;;
     -h | --help) usage; exit 0 ;;
     *) printf 'install.sh: unknown option: %s\n\n' "$arg" >&2; usage >&2; exit 2 ;;
   esac
@@ -105,6 +110,19 @@ export HOMEBREW_OMACOSY_WM=$WM
 if ! brew bundle --file="$REPO_DIR/Brewfile"; then
   log "WARNING: some Homebrew packages failed to install (see above)."
   log "  Continuing — re-run install.sh after resolving them."
+fi
+# yazi is opt-in (--yazi): most users never ask for a second file manager.
+# It installs between the two package snapshots, so the manifest records
+# exactly what it added and uninstall.sh takes away exactly that. Once yazi
+# is here, Super+Shift+Y is bound on every later run, flag or not.
+if [ "$WITH_YAZI" = 1 ]; then
+  log "Installing yazi and its preview helpers (--yazi)"
+  for f in yazi fd poppler resvg sevenzip ffmpeg-full imagemagick-full; do
+    brew list --formula "$f" >/dev/null 2>&1 || brew install "$f" || log "WARNING: could not install $f"
+  done
+  # yazi's file-type icons
+  brew list --cask font-symbols-only-nerd-font >/dev/null 2>&1 \
+    || brew install --cask font-symbols-only-nerd-font || log "WARNING: could not install font-symbols-only-nerd-font"
 fi
 # The "-full" builds of ffmpeg and imagemagick keep the codecs the plain ones
 # drop, and yazi previews video and raw photos with them. Homebrew installs
@@ -330,8 +348,11 @@ seed_config() {            # DEST NAME — generated content on stdin
   log "  diff \"$dest\" \"$shipped\""
 }
 
+# Super+Shift+Y is bound only where yazi is installed: an optional tool gets
+# no chord that can only fail. Installing it later takes a re-run.
+if command -v yazi >/dev/null 2>&1 || [ -x /opt/homebrew/bin/yazi ]; then YAZI_LINE='s|^#yazi# ||'; else YAZI_LINE='/^#yazi# /d'; fi
 sed -e "s|@TERMINAL@|$TERMINAL|g" -e "s|@BROWSER@|$BROWSER|g" \
-    -e "s|@MUSIC@|$MUSIC|g" -e "s|@MESSENGER@|$MESSENGER|g" \
+    -e "s|@MUSIC@|$MUSIC|g" -e "s|@MESSENGER@|$MESSENGER|g" -e "$YAZI_LINE" \
     -e "s|@OUTER_TOP@|$OUTER_TOP|g" -e "s|@OUTER_TOP_EXT@|$OUTER_TOP_EXT|g" \
   "$REPO_DIR/config/aerospace/aerospace.template.toml" \
   | seed_config "$REPO_DIR/config/aerospace/aerospace.toml" aerospace.toml
