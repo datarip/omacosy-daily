@@ -580,6 +580,13 @@ unlink_nvim() {
   return 0
 }
 
+# Ghostty reads its config when it starts, not when a window opens, so a window
+# opened after a switch would take the colours of the last start. SIGUSR2 makes
+# every Ghostty process read its config again.
+reload_ghostty() {
+  pkill -USR2 -x -u "${USER:-$(id -un)}" ghostty 2>/dev/null || true
+}
+
 # Repaint windows that are ALREADY open: a config file only reaches the next one.
 repaint() {
   local osc="" i v
@@ -632,6 +639,7 @@ theme_apps() {
     write_btop
     write_nvim
   fi
+  reload_ghostty
   repaint
 }
 
@@ -651,8 +659,10 @@ clear_apps() {
   if [ -n "$cmd" ]; then
     # the applier owns the terminal, so it puts back its own colours
     "$cmd" --clear "$label" >/dev/null 2>&1 || true
+    reload_ghostty
     to_ttys ""
   else
+    reload_ghostty
     # OSC 104, 110, 111, 112: palette, foreground, background and cursor back
     # to what the terminal's own config says
     to_ttys "$(printf '\033]104\007\033]110\007\033]111\007\033]112\007')"

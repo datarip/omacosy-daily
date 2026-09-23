@@ -155,11 +155,17 @@ A running btop changes at once: `SIGUSR2` makes it read `btop.conf` and the
 theme file again. That also matters when it quits, because btop writes
 `btop.conf` on exit. After the reload, the value it writes is the new one.
 
-## 4. Windows that are already open
+## 4. Windows that are already open, and the next one
 
-A config file only reaches the next window, so `omacosy-auto-theme` writes the
-colors to the tty of every shell as escape sequences (OSC 4, 10, 11 and 12).
-The terminal consumes them, so a shell running Neovim or yazi is unharmed.
+Ghostty reads its config when it starts, not when it opens a window. So after
+every switch `omacosy-auto-theme` sends `SIGUSR2` to each Ghostty process,
+which makes it read its config again; without that, a window opened after a
+switch took the colours Ghostty had at its start.
+
+A config file does not repaint a window that is open, so `omacosy-auto-theme`
+also writes the colors to the tty of every shell as escape sequences (OSC 4,
+10, 11 and 12). The terminal consumes them, so a shell running Neovim or yazi
+is unharmed.
 
 The prompt needs one more step. Starship builds its prompt string when it draws
 a prompt, so the one on screen keeps the old colors. `omacosy-auto-theme` sends
