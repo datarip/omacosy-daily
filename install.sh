@@ -9,14 +9,18 @@ log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
 usage() {
   cat <<'EOF'
-usage: ./install.sh [--aerospace | --omniwm] [--yazi]
+usage: ./install.sh [--aerospace | --omniwm] [--yazi | --yazi-full]
 
   (no option)   keep the window manager this Mac runs; AeroSpace on a new Mac
   --aerospace   install and run AeroSpace
   --omniwm      install and run OmniWM; AeroSpace is not installed
   --yazi        also install yazi, a file manager on Super+Shift+Y, with the
-                helpers it previews and searches with. Off by default;
-                uninstall.sh removes what it added.
+                helpers it previews and searches with (fd, poppler, resvg,
+                sevenzip)
+  --yazi-full   the same, plus ffmpeg-full and imagemagick-full for video
+                thumbnails and raw photos (large: ~160 dependencies), and the
+                symbols Nerd Font for its file-type icons
+                Both are off by default; uninstall.sh removes what they added.
 
 The other window manager installs on first use:
   omacosy-wm-switch omniwm | aerospace
@@ -25,11 +29,13 @@ EOF
 
 WM_FLAG=
 WITH_YAZI=0
+YAZI_FULL=0
 for arg in "$@"; do
   case "$arg" in
     --aerospace) WM_FLAG=aerospace ;;
     --omniwm) WM_FLAG=omniwm ;;
     --yazi) WITH_YAZI=1 ;;
+    --yazi-full) WITH_YAZI=1; YAZI_FULL=1 ;;
     -h | --help) usage; exit 0 ;;
     *) printf 'install.sh: unknown option: %s\n\n' "$arg" >&2; usage >&2; exit 2 ;;
   esac
@@ -116,13 +122,15 @@ fi
 # exactly what it added and uninstall.sh takes away exactly that. Once yazi
 # is here, Super+Shift+Y is bound on every later run, flag or not.
 if [ "$WITH_YAZI" = 1 ]; then
-  log "Installing yazi and its preview helpers (--yazi)"
-  for f in yazi fd poppler resvg sevenzip ffmpeg-full imagemagick-full; do
+  YAZI_PKGS="yazi fd poppler resvg sevenzip"
+  [ "$YAZI_FULL" = 1 ] && YAZI_PKGS="$YAZI_PKGS ffmpeg-full imagemagick-full"
+  log "Installing yazi and its preview helpers ($YAZI_PKGS)"
+  for f in $YAZI_PKGS; do
     brew list --formula "$f" >/dev/null 2>&1 || brew install "$f" || log "WARNING: could not install $f"
   done
   # yazi's file-type icons
-  brew list --cask font-symbols-only-nerd-font >/dev/null 2>&1 \
-    || brew install --cask font-symbols-only-nerd-font || log "WARNING: could not install font-symbols-only-nerd-font"
+  [ "$YAZI_FULL" = 1 ] && { brew list --cask font-symbols-only-nerd-font >/dev/null 2>&1 \
+    || brew install --cask font-symbols-only-nerd-font || log "WARNING: could not install font-symbols-only-nerd-font"; }
 fi
 # The "-full" builds of ffmpeg and imagemagick keep the codecs the plain ones
 # drop, and yazi previews video and raw photos with them. Homebrew installs

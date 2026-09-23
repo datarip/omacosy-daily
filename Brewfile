@@ -27,6 +27,7 @@ brew "btop"
 brew "starship"
 brew "jq"
 
-# yazi and its preview helpers are opt-in: ./install.sh --yazi
+# yazi and its preview helpers are opt-in: ./install.sh --yazi, or
+# --yazi-full for video and raw-photo previews and the symbols font
 
 cask "font-jetbrains-mono-nerd-font"

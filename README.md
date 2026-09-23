@@ -375,7 +375,7 @@ The keys and the daemons run these. You do not need to run them:
 | Prompt | starship | `config/starship.toml` |
 | Shell | zsh | `zsh/zshrc` + your `~/.zshrc.local` |
 | CLI stack | fzf, eza, zoxide, ripgrep, bat, lazygit, btop | wired in `zsh/zshrc` |
-| Files, opt-in | yazi on `Super+shift+y`. `./install.sh --yazi` installs it with fd, ffmpeg-full, imagemagick-full, poppler, resvg and sevenzip for its previews; without the flag nothing is installed and the key stays unbound | run `yazi` in a terminal |
+| Files, opt-in | yazi on `Super+shift+y`. `./install.sh --yazi` installs it with fd, poppler, resvg and sevenzip for its previews; `--yazi-full` adds ffmpeg-full, imagemagick-full and the symbols font. Without either flag nothing is installed and the key stays unbound | run `yazi` in a terminal |
 
 Why so much of it is self-built:
 
@@ -553,7 +553,7 @@ typing or app shortcuts. Caps Lock tapped alone is Escape.
 | `Super+enter` / `Super+shift+enter` | terminal / browser |
 | `Super+space` | launcher (Raycast; the OmniWM option opens OmniWM's command palette instead) |
 | `Super+shift+f` / `+m` / `+g` | files / music / messenger (set in `settings.conf`) |
-| `Super+shift+y` | yazi, the terminal file manager, in a new window (after `./install.sh --yazi`) |
+| `Super+shift+y` | yazi, the terminal file manager, in a new window (after `./install.sh --yazi` or `--yazi-full`) |
 | `Super+shift+t` | next theme |
 | `Super+shift+b` | next wallpaper of the current theme |
 | `Super+shift+l` | lock the screen |
@@ -728,8 +728,8 @@ own. They keep their configuration.
 
 `Super+Shift+Y` opens **yazi**, a file manager in a terminal window. It tiles
 like any other window and wears the theme's colors. It is opt-in:
-`./install.sh --yazi` installs it and binds the key; without the flag,
-neither happens.
+`./install.sh --yazi` installs it and binds the key, and `--yazi-full` adds
+video and raw-photo previews; without a flag, neither happens.
 
 Opening a file from yazi hands it to `$EDITOR`. omacosy sets no editor, so an
 unset `$EDITOR` means `vi`, and Vim opened on a **directory** shows its own
