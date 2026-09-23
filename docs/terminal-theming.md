@@ -3,7 +3,8 @@
 Off by default. `omacosy-auto-theme on` turns on the custom theme, where every
 wallpaper in `~/Pictures/wallpapers` is a theme of its own, and makes each
 switch to one set the terminal's colors, the Starship prompt and the directory
-color in `ls`, `eza` and yazi, btop's colors, and Neovim's colourscheme.
+color in `ls`, `eza` and yazi, the colours of bat, delta and fzf, btop's colors,
+and Neovim's colourscheme.
 
 ```sh
 omacosy-auto-theme            # status: switch, custom theme, applier, palette file
@@ -83,7 +84,7 @@ applier = <command>           empty: omacosy writes the config itself
 | --- | --- |
 | `ghostty-theme.conf` | Ghostty, through `config-file = ?~/.config/omacosy/ghostty-theme.conf` in the shipped config |
 | `starship.toml` | Starship, generated from `config/starship-omacosy.template.toml` plus the palette |
-| `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, and `STARSHIP_CONFIG` |
+| `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, `BAT_THEME=ansi` (bat and delta then draw in the 16 colours), `STARSHIP_CONFIG`, and fzf's `--color` added to your own `FZF_DEFAULT_OPTS`. Your own values of all five are kept and put back on a stock theme |
 | `~/.config/yazi/theme.toml` | yazi. Written in both modes, because yazi paints itself and no terminal palette reaches it |
 | `~/.config/btop/themes/omacosy.theme` | btop, through `color_theme = "omacosy"` in `btop.conf`. Written in both modes, for the same reason |
 
@@ -95,7 +96,8 @@ still wins.
 <theme-label>` on a custom theme and `<command> --clear <theme-label>` on a
 stock one, and writes no terminal config of its own, not even a stale file
 an include could pick up. It still writes `term-env.sh` for the directory
-color, which is nobody else's job, and it still repaints open windows.
+color and `BAT_THEME`, which are nobody else's job, and it still repaints open
+windows. The prompt and fzf's colours are left to the applier.
 
 This exists to keep exactly ONE writer. Two programs writing Ghostty's config
 would fight, and the winner would depend on the order the includes are read.
