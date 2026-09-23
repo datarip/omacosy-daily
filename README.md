@@ -689,7 +689,8 @@ omacosy-auto-theme off        # stock themes only; your own colors come back
 
 With it on, a **custom** theme also sets the terminal background, its 16
 colors, the Starship prompt, the directory color in `ls`, `eza` and yazi, the
-colors of bat, delta and fzf, btop's colors, and Neovim's colorscheme.
+colors of bat, delta, fzf, lazygit and fastfetch, btop's colors, and Neovim's
+colorscheme.
 The 16 colors are derived from the wallpaper, and red, green, yellow, blue,
 magenta and cyan keep their hue — only their lightness and saturation follow
 the picture, so an error message still reads as red.
@@ -707,7 +708,8 @@ by hand.
 | `term-palette.env` | the palette of the theme on screen, `OMACOSY_BG`, `OMACOSY_P0` … `OMACOSY_P15` |
 | `ghostty-theme.conf` | Ghostty, through `config-file = ?…` in the shipped config. The `?` makes it optional |
 | `starship.toml` | Starship, generated from `config/starship-omacosy.template.toml`, whose colors are named by role |
-| `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, `BAT_THEME=ansi` for bat and delta, and, when omacosy owns the prompt, `STARSHIP_CONFIG` and fzf's colors. Your own values come back on a stock theme |
+| `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, `BAT_THEME=ansi` for bat and delta, `LG_CONFIG_FILE` for lazygit, a `fastfetch` function with the colors, and, when omacosy owns the prompt, `STARSHIP_CONFIG` and fzf's colors. Your own values come back on a stock theme |
+| `lazygit-theme.yml` | lazygit's theme keys only, added after your own `config.yml` |
 | `~/.config/yazi/theme.toml` | yazi: directories, name and folder glyph, wear the theme accent. yazi reads it at startup, so an open window changes on reopen. A `theme.toml` of your own is never overwritten |
 | `~/.config/btop/themes/omacosy.theme` | btop, with `color_theme = "omacosy"` in `btop.conf`. A running btop changes at once. A stock theme puts back btop's own theme |
 | `~/.config/omacosy/nvim/palette.lua` | Neovim, through `config/nvim/omacosy-theme.lua`, which `on` links into `~/.config/nvim/lua/plugins/`. It builds a base16 colorscheme with `mini.base16`, and an open Neovim changes at once. A stock theme puts back your own colorscheme |
