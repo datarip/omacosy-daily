@@ -3,7 +3,7 @@
 Off by default. `omacosy-auto-theme on` turns on the custom theme, where every
 wallpaper in `~/Pictures/wallpapers` is a theme of its own, and makes each
 switch to one set the terminal's colors, the Starship prompt and the directory
-color in `ls`, `eza` and yazi.
+color in `ls`, `eza` and yazi, and btop's colors.
 
 ```sh
 omacosy-auto-theme            # status: switch, custom theme, applier, palette file
@@ -85,6 +85,7 @@ applier = <command>           empty: omacosy writes the config itself
 | `starship.toml` | Starship, generated from `config/starship-omacosy.template.toml` plus the palette |
 | `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, and `STARSHIP_CONFIG` |
 | `~/.config/yazi/theme.toml` | yazi. Written in both modes, because yazi paints itself and no terminal palette reaches it |
+| `~/.config/btop/themes/omacosy.theme` | btop, through `color_theme = "omacosy"` in `btop.conf`. Written in both modes, for the same reason |
 
 The `?` makes Ghostty's include optional, so a machine that never turns this on
 reads no such file. Your own config is read after it, so a color you set by hand
@@ -133,6 +134,24 @@ cream. The colour stayed live and stopped being the accent. The palette file
 still carries `OMACOSY_ACCENT_ANSI`, the nearest slot by name, for a consumer
 that would rather have live colour than an exact one.
 
+### btop
+
+btop paints itself from a theme file too. The CPU, temperature and memory
+meters run from `OK` to `WARN` to `ERR`, because load has a meaning, as red
+does in the terminal. The highlights take the accent. Box outlines, dividers
+and meter backgrounds are the accent or the dimmed text, mixed toward the
+background.
+
+On a custom theme, `color_theme` in `btop.conf` is set to `omacosy`, and
+btop's own value is kept in `~/.local/state/omacosy/btop-color-theme`. A
+stock theme puts it back, but only while `btop.conf` still names `omacosy`: a
+theme chosen in btop's menu since then stays. An `omacosy.theme` of your own,
+without the first line omacosy writes, is never touched.
+
+A running btop changes at once: `SIGUSR2` makes it read `btop.conf` and the
+theme file again. That also matters when it quits, because btop writes
+`btop.conf` on exit. After the reload, the value it writes is the new one.
+
 ## 4. Windows that are already open
 
 A config file only reaches the next window, so `omacosy-auto-theme` writes the
@@ -154,7 +173,7 @@ Two details that cost an afternoon, kept here so they are not learned twice:
 
 ## 5. What it does not touch
 
-Neovim, tmux, and any program with colours of its own. `omacosy-auto-theme off`
+Neovim, tmux, and any other program with colours of its own. `omacosy-auto-theme off`
 deletes the generated files; the next window reads your own colours again.
 
 ## 6. Not done: Neovim

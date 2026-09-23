@@ -688,7 +688,8 @@ omacosy-auto-theme off        # stock themes only; your own colors come back
 ```
 
 With it on, a **custom** theme also sets the terminal background, its 16
-colors, the Starship prompt and the directory color in `ls`, `eza` and yazi.
+colors, the Starship prompt, the directory color in `ls`, `eza` and yazi, and
+btop's colors.
 The 16 colors are derived from the wallpaper, and red, green, yellow, blue,
 magenta and cyan keep their hue — only their lightness and saturation follow
 the picture, so an error message still reads as red.
@@ -708,6 +709,7 @@ by hand.
 | `starship.toml` | Starship, generated from `config/starship-omacosy.template.toml`, whose colors are named by role |
 | `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, and `STARSHIP_CONFIG` when omacosy owns the prompt |
 | `~/.config/yazi/theme.toml` | yazi: directories, name and folder glyph, wear the theme accent. yazi reads it at startup, so an open window changes on reopen. A `theme.toml` of your own is never overwritten |
+| `~/.config/btop/themes/omacosy.theme` | btop, with `color_theme = "omacosy"` in `btop.conf`. A running btop changes at once. A stock theme puts back btop's own theme |
 
 Your own Ghostty config is read **after** the generated one, so a color you
 set by hand still wins. `omacosy-auto-theme off` deletes the generated files,
@@ -729,8 +731,8 @@ same Ghostty file would fight, and the winner would depend on the order the
 includes are read. Whichever tool applies the colors, a theme you set by
 hand wins until the next omacosy theme switch.
 
-**What it does not touch:** Neovim, tmux, and any program with colors of its
-own. They keep their configuration.
+**What it does not touch:** Neovim, tmux, and any other program with colors
+of its own. They keep their configuration.
 
 ### yazi and your editor
 
