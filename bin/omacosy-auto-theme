@@ -331,14 +331,20 @@ remove_yazi() {
 # the one that never got the sequences. (A login shell is also called "-zsh",
 # not "zsh", which is what made the shell-only filter miss those too.)
 to_ttys() {
-  local osc="$1" t
+  local osc="$1" t w
   # a keybinding may run with no USER set, and set -u would stop here
   ps -o tty= -u "${USER:-$(id -un)}" 2>/dev/null |
     awk '$1 != "??" { print $1 }' |
     sort -u |
     while read -r t; do
       [ -w "/dev/$t" ] || continue
-      [ -z "$osc" ] || printf '%s' "$osc" > "/dev/$t" 2>/dev/null || true
+      if [ -n "$osc" ]; then
+        # A terminal that reads nothing would block this write, and the theme
+        # switch with it, so the write runs aside and is stopped after 2 s.
+        printf '%s' "$osc" > "/dev/$t" 2>/dev/null &
+        w=$!
+        ( sleep 2; kill "$w" 2>/dev/null ) >/dev/null 2>&1 &
+      fi
       # A program only shows the new palette when it draws again. SIGWINCH is
       # the redraw signal every terminal program already handles: zsh rebuilds
       # its prompt (zsh/zshrc re-runs starship's precmd first), yazi and vim
