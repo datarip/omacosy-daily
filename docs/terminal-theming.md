@@ -157,6 +157,32 @@ A running btop changes at once: `SIGUSR2` makes it read `btop.conf` and the
 theme file again. That also matters when it quits, because btop writes
 `btop.conf` on exit. After the reload, the value it writes is the new one.
 
+### delta's line strips
+
+`BAT_THEME=ansi` colours the code in a diff, but the strips behind added and
+removed lines are delta's own dark green and dark red. On a light terminal
+they sit under dark text, which then cannot be read. delta reads those styles
+only from git's config, so omacosy writes `~/.config/omacosy/delta.gitconfig`
+and `~/.gitconfig` includes it:
+
+```
+[include]
+	path = ~/.config/omacosy/delta.gitconfig
+```
+
+git skips an include whose file is missing, so on a stock theme delta uses its
+own colours again.
+
+Each strip is built in OKLCH, not mixed in sRGB. A mix of the palette's green
+into a blue background came out teal, and red into a light background came
+out brown: tested on 10 wallpapers, both stopped reading as added and removed.
+So the hue is the palette's green or red held within 8 degrees of pure green
+(142) and pure red (29), the lightness is the background's moved by 0.07 away
+from black or white (at least 0.29 on a dark terminal), and the chroma is
+0.075, lowered only as far as sRGB requires. The word-level highlights use a
+step of 0.14 and a chroma of 0.12. On those 10 wallpapers the text on a strip
+reads at 7.4:1 or more.
+
 ## 4. Windows that are already open, and the next one
 
 Ghostty reads its config when it starts, not when it opens a window. So after

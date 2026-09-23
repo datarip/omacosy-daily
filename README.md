@@ -712,6 +712,7 @@ by hand.
 | `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, `BAT_THEME=ansi` for bat and delta, `LG_CONFIG_FILE` for lazygit, a `fastfetch` function with the colors, and, when omacosy owns the prompt, `STARSHIP_CONFIG` and fzf's colors. Your own values come back on a stock theme |
 | `lazygit-theme.yml` | lazygit's theme keys only, added after your own `config.yml` |
 | `tmux-theme.conf` | tmux: the band behind the bar takes the terminal background |
+| `delta.gitconfig` | delta's added and removed line strips, in the palette's green and red. `~/.gitconfig` needs `[include] path = ~/.config/omacosy/delta.gitconfig` |
 | `~/.config/yazi/theme.toml` | yazi: directories, name and folder glyph, wear the theme accent. yazi reads it at startup, so an open window changes on reopen. A `theme.toml` of your own is never overwritten |
 | `~/.config/btop/themes/omacosy.theme` | btop, with `color_theme = "omacosy"` in `btop.conf`. A running btop changes at once. A stock theme puts back btop's own theme |
 | `~/.config/omacosy/nvim/palette.lua` | Neovim, through `config/nvim/omacosy-theme.lua`, which `on` links into `~/.config/nvim/lua/plugins/`. It builds a base16 colorscheme with `mini.base16`, and an open Neovim changes at once. A stock theme puts back your own colorscheme |
