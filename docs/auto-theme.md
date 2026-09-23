@@ -33,6 +33,20 @@ colours.
 - [6. tmux](#6-tmux)
 - [7. What it does not touch](#7-what-it-does-not-touch)
 
+**Recommended: a transparent terminal.** The apps above draw on the terminal's
+own background so that Ghostty's transparency shows through them. Ghostty is
+opaque by default; two lines in your own Ghostty config,
+`~/Library/Application Support/com.mitchellh.ghostty/config`, turn it on:
+
+```
+background-opacity = 0.85
+background-blur = 10
+```
+
+On macOS, Ghostty applies a change to `background-opacity` only after a full
+restart, so quit and reopen it. This is a setting of yours, not of
+auto-theme: it stays the same on every theme.
+
 ## 1. Where the colors come from
 
 `omacosy-term-palette <theme-dir> <out.env> [<label>]` reads the theme that is

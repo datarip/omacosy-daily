@@ -720,6 +720,20 @@ background shows the same transparency as the shell.
 neovim, git-delta, tmux and fastfetch are not in the base install;
 `./install.sh --tui-tools` adds them.
 
+**Recommended with auto-theme: a transparent terminal.** Add these two lines
+to your own Ghostty config, `~/Library/Application Support/com.mitchellh.ghostty/config`,
+then quit and reopen Ghostty (on macOS a reload does not change the
+transparency):
+
+```
+background-opacity = 0.85
+background-blur = 10
+```
+
+The wallpaper then shows through the terminal, and btop, Neovim and the tmux
+band show it too. Use your own config, not omacosy's `~/.config/ghostty/config`:
+an update replaces omacosy's file and keeps yours.
+
 **What it writes**, all under `~/.config/omacosy/` unless the path says otherwise:
 
 | File | Read by |
