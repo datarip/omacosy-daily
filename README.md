@@ -380,6 +380,7 @@ The keys and the daemons run these. You do not need to run them:
 | Prompt | starship | `config/starship.toml` |
 | Shell | zsh | `zsh/zshrc` + your `~/.zshrc.local` |
 | CLI stack | fzf, eza, zoxide, ripgrep, bat, lazygit, btop | wired in `zsh/zshrc` |
+| More terminal tools, opt-in | `./install.sh --tui-tools` installs neovim, git-delta, tmux and fastfetch, the tools `omacosy-auto-theme` colours beyond the ones above. Only the missing ones are installed, and `uninstall.sh` removes what it added | `install.sh` |
 | Files, opt-in | yazi on `Super+shift+y`. `./install.sh --yazi` installs it with fd, poppler, resvg and sevenzip for its previews; `--yazi-full` adds ffmpeg-full, imagemagick-full and the symbols font. Without either flag nothing is installed and the key stays unbound | run `yazi` in a terminal |
 
 Why so much of it is self-built:

@@ -9,7 +9,7 @@ log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
 usage() {
   cat <<'EOF'
-usage: ./install.sh [--aerospace | --omniwm] [--yazi | --yazi-full]
+usage: ./install.sh [--aerospace | --omniwm] [--yazi | --yazi-full] [--tui-tools]
 
   (no option)   keep the window manager this Mac runs; AeroSpace on a new Mac
   --aerospace   install and run AeroSpace
@@ -20,7 +20,10 @@ usage: ./install.sh [--aerospace | --omniwm] [--yazi | --yazi-full]
   --yazi-full   the same, plus ffmpeg-full and imagemagick-full for video
                 thumbnails and raw photos (large: ~160 dependencies), and the
                 symbols Nerd Font for its file-type icons
-                Both are off by default; uninstall.sh removes what they added.
+  --tui-tools   also install the terminal tools auto-theme colours that the
+                base install leaves out: neovim, git-delta, tmux, fastfetch
+                All three are off by default; uninstall.sh removes what they
+                added.
 
 The other window manager installs on first use:
   omacosy-wm-switch omniwm | aerospace
@@ -30,12 +33,14 @@ EOF
 WM_FLAG=
 WITH_YAZI=0
 YAZI_FULL=0
+WITH_TUI=0
 for arg in "$@"; do
   case "$arg" in
     --aerospace) WM_FLAG=aerospace ;;
     --omniwm) WM_FLAG=omniwm ;;
     --yazi) WITH_YAZI=1 ;;
     --yazi-full) WITH_YAZI=1; YAZI_FULL=1 ;;
+    --tui-tools) WITH_TUI=1 ;;
     -h | --help) usage; exit 0 ;;
     *) printf 'install.sh: unknown option: %s\n\n' "$arg" >&2; usage >&2; exit 2 ;;
   esac
@@ -131,6 +136,16 @@ if [ "$WITH_YAZI" = 1 ]; then
   # yazi's file-type icons
   [ "$YAZI_FULL" = 1 ] && { brew list --cask font-symbols-only-nerd-font >/dev/null 2>&1 \
     || brew install --cask font-symbols-only-nerd-font || log "WARNING: could not install font-symbols-only-nerd-font"; }
+fi
+# The terminal tools omacosy-auto-theme colours beyond the Brewfile's own
+# (bat, fzf, lazygit and btop are there already). Opt-in, and installed between
+# the two package snapshots like yazi, so uninstall.sh takes away exactly these.
+if [ "$WITH_TUI" = 1 ]; then
+  TUI_PKGS="neovim git-delta tmux fastfetch"
+  log "Installing the terminal tools auto-theme colours ($TUI_PKGS)"
+  for f in $TUI_PKGS; do
+    brew list --formula "$f" >/dev/null 2>&1 || brew install "$f" || log "WARNING: could not install $f"
+  done
 fi
 # The "-full" builds of ffmpeg and imagemagick keep the codecs the plain ones
 # drop, and yazi previews video and raw photos with them. Homebrew installs
