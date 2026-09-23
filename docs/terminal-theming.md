@@ -143,7 +143,9 @@ btop paints itself from a theme file too. The CPU, temperature and memory
 meters run from `OK` to `WARN` to `ERR`, because load has a meaning, as red
 does in the terminal. The highlights take the accent. Box outlines, dividers
 and meter backgrounds are the accent or the dimmed text, mixed toward the
-background.
+background. `main_bg` is left empty, so btop draws on the terminal's own
+background: Ghostty makes only that background transparent, and draws any
+colour a program paints fully solid.
 
 On a custom theme, `color_theme` in `btop.conf` is set to `omacosy`, and
 btop's own value is kept in `~/.local/state/omacosy/btop-color-theme`. A
@@ -216,6 +218,11 @@ too.
 `terminal_color_0` to `terminal_color_15` are set too, so a `:terminal` matches
 the one outside.
 
+`Normal`, `NormalNC`, `SignColumn`, `EndOfBuffer`, `LineNr` and `FoldColumn`
+get no background, so the editor shows the terminal's own background and its
+transparency. Popups, the status line and selections keep their colour, to
+stay readable.
+
 **Following a switch.** The plugin watches `~/.config/omacosy/nvim/`, the
 folder and not the file, because omacosy replaces the file with a rename and
 a watch on a file stops after the first rename. On a stock theme the file is
@@ -227,7 +234,36 @@ it remembers.
 sets the colourscheme from a palette. Two such plugins fight over it, so keep
 one of the two.
 
-## 6. What it does not touch
+## 6. tmux
 
-tmux, and any other program with colours of its own. `omacosy-auto-theme off`
+tmux keeps its own bar, from `tmux.conf` or a theme plugin. Only the band
+behind the bar changes: the colour it is painted on becomes the terminal's
+background.
+
+A theme plugin such as tmux-tokyo-night writes fixed colours into the text of
+the bar and takes no colours from outside. So `omacosy-auto-theme tmux-bar`,
+run by tmux itself, reads the band colour from `status-style` after the bar is
+drawn. As a background it becomes `default`, the terminal's own, with its
+transparency. As a text colour it draws the arrows between a pill and the
+band, so it becomes the terminal's background colour. The pills keep their
+colours: without knowing what each colour means, moving them to the palette
+is a guess.
+
+On each switch omacosy reads `tmux.conf` again in every running server, so the
+bar is first what it draws on its own, and then the band is replaced. On a
+stock theme only the first step runs, and the band comes back.
+
+A server that starts later needs one line at the end of `tmux.conf`, after a
+plugin manager's `run` line:
+
+```
+source-file -q ~/.config/omacosy/tmux-theme.conf
+```
+
+`-q` keeps tmux silent while the file does not exist: on a stock theme, and
+while auto-theme is off.
+
+## 7. What it does not touch
+
+Any other program with colours of its own. `omacosy-auto-theme off`
 deletes the generated files; the next window reads your own colours again.

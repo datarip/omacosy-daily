@@ -34,6 +34,15 @@ local function apply()
   vim.cmd("hi clear")
   vim.o.background = p.dark and "dark" or "light"
   require("mini.base16").setup({ palette = p.base16, use_cterm = true })
+  -- The editor's own background is the terminal's, so its transparency shows
+  -- through as it does in the shell. A terminal draws a painted colour solid.
+  -- Popups, the status line and selections keep their colour, to stay readable.
+  for _, g in ipairs({ "Normal", "NormalNC", "SignColumn", "EndOfBuffer", "LineNr", "FoldColumn" }) do
+    local hl = vim.api.nvim_get_hl(0, { name = g, link = false })
+    hl.bg = nil
+    hl.ctermbg = nil
+    vim.api.nvim_set_hl(0, g, hl)
+  end
   vim.g.colors_name = "omacosy"
   -- a :terminal inside Neovim wears the same 16 colours as the one outside
   for i, c in ipairs(p.ansi) do vim.g["terminal_color_" .. (i - 1)] = c end

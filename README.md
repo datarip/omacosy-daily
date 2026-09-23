@@ -710,6 +710,7 @@ by hand.
 | `starship.toml` | Starship, generated from `config/starship-omacosy.template.toml`, whose colors are named by role |
 | `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, `BAT_THEME=ansi` for bat and delta, `LG_CONFIG_FILE` for lazygit, a `fastfetch` function with the colors, and, when omacosy owns the prompt, `STARSHIP_CONFIG` and fzf's colors. Your own values come back on a stock theme |
 | `lazygit-theme.yml` | lazygit's theme keys only, added after your own `config.yml` |
+| `tmux-theme.conf` | tmux: the band behind the bar takes the terminal background |
 | `~/.config/yazi/theme.toml` | yazi: directories, name and folder glyph, wear the theme accent. yazi reads it at startup, so an open window changes on reopen. A `theme.toml` of your own is never overwritten |
 | `~/.config/btop/themes/omacosy.theme` | btop, with `color_theme = "omacosy"` in `btop.conf`. A running btop changes at once. A stock theme puts back btop's own theme |
 | `~/.config/omacosy/nvim/palette.lua` | Neovim, through `config/nvim/omacosy-theme.lua`, which `on` links into `~/.config/nvim/lua/plugins/`. It builds a base16 colorscheme with `mini.base16`, and an open Neovim changes at once. A stock theme puts back your own colorscheme |
@@ -734,8 +735,11 @@ same Ghostty file would fight, and the winner would depend on the order the
 includes are read. Whichever tool applies the colors, a theme you set by
 hand wins until the next omacosy theme switch.
 
-**What it does not touch:** tmux, and any other program with colors of its
-own. They keep their configuration.
+**tmux** keeps its own bar; only the band behind it takes the terminal's
+background. A server that starts later needs `source-file -q
+~/.config/omacosy/tmux-theme.conf` at the end of `tmux.conf`.
+
+**What it does not touch:** any other program with colors of its own. They keep their configuration.
 
 ### yazi and your editor
 
