@@ -125,7 +125,7 @@ The fixes this build offers upstream, and their state today.
 | [#31](https://github.com/paulsp94/omacosy/pull/31) | OPEN | feat(tiling): a workspace holding one window can fill the display |
 | [#30](https://github.com/paulsp94/omacosy/pull/30) | OPEN | feat(bar): one command for autohide and the top gap it implies |
 | [#29](https://github.com/paulsp94/omacosy/pull/29) | OPEN | feat(bar): split the top edge between this bar and the native one |
-| [#28](https://github.com/paulsp94/omacosy/pull/28) | OPEN | fix(tiling): a read is a guess until it settles, and a prediction needs a live layout |
+| [#28](https://github.com/paulsp94/omacosy/pull/28) | OPEN | fix(tiling): a new window chains only off a verified slot on its own workspace |
 | [#27](https://github.com/paulsp94/omacosy/pull/27) | OPEN | fix(helper): split-hint stacks slots that are wider than tall |
 | [#26](https://github.com/paulsp94/omacosy/pull/26) | OPEN | fix(aerospace): Super+Shift+F raises the Finder window instead of opening a new one |
 | [#25](https://github.com/paulsp94/omacosy/pull/25) | OPEN | fix(config): size the top gap from the display's safe-area inset |
