@@ -206,7 +206,7 @@ grant hide themselves rather than half-work.
 
 | Grant | Who asks | What it does | Without it |
 |---|---|---|---|
-| **Accessibility** | AeroSpace *or* OmniWM, `omacosy-gesture`, `omacosy-bar` (reads the focused app's menus for the app-pill popup), `omacosy-ffm` (AeroSpace mode only) | Move, resize and focus other apps' windows. This is the tiling itself, and it is the broadest permission here. | Nothing tiles. Not optional in practice. |
+| **Accessibility** | AeroSpace *or* OmniWM, `omacosy-gesture`, `omacosy-bar` (reads the focused app's menus for the app-pill popup), `omacosy-ffm` (AeroSpace mode only), `omacosy-borders` (hears the ringed window close) | Move, resize and focus other apps' windows. This is the tiling itself, and it is the broadest permission here. The focus ring uses it only to hear an app report that the ringed window is closing. | Nothing tiles. Not optional in practice. Without it for `omacosy-borders` alone, the ring leaves a window closed with Cmd-W about 0.25 s later. |
 | **Input Monitoring** | Karabiner-Elements, `omacosy-gesture` (and OmniWM, under that option) | Karabiner reads keys to remap Caps Lock; `omacosy-gesture` reads raw trackpad contacts, because macOS 26 stopped carrying touch data in normal events. | No Super key, no swipe gestures. |
 | **Screen Recording** | the program that first starts `omacosy-overview` ([see below](#permissions)), `omacosy-bar` | Overview captures a thumbnail per window for its cards, including windows the window manager has stashed offscreen, which a screenshot of the visible screen could not see. The bar samples the native menu bar's colour once, so an auto-hiding bar can paint it on the first frame instead of resolving a blur on every reveal. | Cards fall back to app icons and titles; the bar falls back to a live blur, which reveals more slowly and matches the menu bar less exactly. |
 | **Bluetooth** | `omacosy-bar` | Reads adapter power and the paired-device list for the bluetooth pill and its menu. | The pill hides itself. |
@@ -248,6 +248,12 @@ shows its dialog at the first one. With `autohide=off` it never asks.
   request arrives on; no coordinates are gathered or sent, and the bar
   holds no location API. Delete the weather pill and nothing leaves the
   machine.
+- **The focus ring only listens.** `omacosy-borders` asks for
+  Accessibility to hear an app report that the ringed window is closing.
+  It reads the app's window list and registers for that one report on
+  that one window. It never clicks, types, moves a window or reads what a
+  window shows. Refuse the grant and the ring still works; a window
+  closed with Cmd-W keeps its ring about 0.25 s longer.
 - **omacosy's own binaries never run as root.** `install.sh` uses no
   sudo, installs no LaunchDaemon, and every helper it builds runs as
   you, in your login session.
