@@ -56,8 +56,9 @@ and each one waits for its first run on a notched MacBook:
 3. The media pill sits at the left edge, because the camera takes the
    centre of the strip.
 4. The media title is cut at 20 characters, not 28.
-5. At the top edge, right of the split, the bar steps aside so the
-   native menu bar and its status icons can come through.
+5. At the top edge, the native menu bar comes down over the bar, so its
+   menus and status icons are reachable. The bar rests below the native
+   menu bar and above other apps' windows.
 6. A fullscreen window starts below the camera strip, and the strip is
    painted black, so fullscreen looks complete.
 
