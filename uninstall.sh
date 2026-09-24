@@ -393,6 +393,17 @@ if [ -f "$MANIFEST" ] && grep -qE '^brew-(formula|cask) ' "$MANIFEST"; then
   [ -z "$FAILED" ] \
     || log "WARNING: could not remove:$FAILED (see the messages above)"
 fi
+# --yazi-full linked ffmpeg-full and imagemagick-full over the user's own
+# plain formula; with the -full one gone, link the plain one again. A kept
+# -full one stays linked.
+grep '^brew-relink ' "$MANIFEST" 2>/dev/null | awk '{print $2}' | while read -r f; do
+  brew list --formula "$f" >/dev/null 2>&1 || continue
+  brew list --formula "$f-full" >/dev/null 2>&1 && continue
+  # brew may still count it as linked, and then `brew link` does nothing
+  brew unlink "$f" >/dev/null 2>&1
+  brew link --overwrite "$f" >/dev/null 2>&1 && log "Linked your $f again" \
+    || log "WARNING: could not link $f again; run: brew link --overwrite $f"
+done
 # the login item would point at an app that is gone
 if [ ! -d /Applications/OmniWM.app ]; then
   osascript -e 'tell application "System Events" to if exists login item "OmniWM" then delete login item "OmniWM"' >/dev/null 2>&1 || true

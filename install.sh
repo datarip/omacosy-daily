@@ -151,11 +151,15 @@ fi
 # drop, and yazi previews video and raw photos with them. Homebrew installs
 # both to the Cellar but leaves whichever was linked first in /opt/homebrew/bin,
 # so a machine with the plain build already installed silently keeps it. Linking
-# is a no-op when only one is present.
-for f in ffmpeg-full imagemagick-full; do
-  if brew list --formula 2>/dev/null | grep -qx "$f"; then
-    brew link "$f" -f --overwrite >/dev/null 2>&1 || log "WARNING: could not link $f"
+# is a no-op when only one is present. A plain one the user has is recorded, so
+# uninstall.sh links it again.
+for f in ffmpeg imagemagick; do
+  brew list --formula "$f-full" >/dev/null 2>&1 || continue
+  if brew list --formula "$f" >/dev/null 2>&1 && ! have "brew-relink $f"; then
+    mark "brew-relink $f"
+    log "Linking $f-full over your $f; uninstall.sh links $f again"
   fi
+  brew link "$f-full" -f --overwrite >/dev/null 2>&1 || log "WARNING: could not link $f-full"
 done
 
 # record only packages that brew bundle ACTUALLY added
