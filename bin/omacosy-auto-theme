@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# omacosy-auto-theme [on|off|status|apply [<label>]|enabled] — whether the
+# omacosy-auto-theme [on [desktop-only]|off|status|apply [<label>]|enabled] — whether the
 # desktop and its apps take their colours from your own wallpapers. No args =
 # status.
 #
@@ -9,8 +9,9 @@
 #   - the custom theme appears in the theme cycle: every wallpaper in
 #     ~/Pictures/wallpapers is a theme of its own, and the bar, the ring and
 #     the cheat sheet take its colours (omacosy-custom-theme)
-#   - while a custom theme is on screen, the terminal and its apps take the
-#     same colours: Ghostty, the Starship prompt, ls and eza, bat, delta
+#   - while a custom theme is on screen, unless `on desktop-only` was asked,
+#     the terminal and its apps take the same colours: Ghostty, the Starship
+#     prompt, ls and eza, bat, delta
 #     and its line strips, fzf, lazygit, fastfetch, yazi, btop, Neovim (a
 #     plugin that `on` links into ~/.config/nvim/lua/plugins/), and the band
 #     behind tmux's bar
@@ -21,6 +22,10 @@
 # ~/.config/omacosy/auto-theme.conf:
 #
 #   auto-theme = on | off         off by default
+#   apps = on | off               on by default; off (`on desktop-only`) keeps
+#                                 the custom themes for the bar, the ring and the
+#                                 cheat sheet, and leaves the terminal and its
+#                                 apps in their own colours
 #   applier = <command>           empty = omacosy renders the files itself
 #
 # WHAT IT DOES. Every switch to a custom theme writes its palette to
@@ -91,7 +96,7 @@ conf_get() {
 conf_set() {
   migrate
   mkdir -p "$DIR"
-  [ -f "$CONF" ] || printf '# omacosy — do the desktop and its apps follow your own wallpapers?\n# auto-theme = on | off     (off by default)\n# applier = <command>       (empty: omacosy writes the config itself)\n' > "$CONF"
+  [ -f "$CONF" ] || printf '# omacosy — do the desktop and its apps follow your own wallpapers?\n# auto-theme = on | off     (off by default)\n# applier = <command>       (empty: omacosy writes the config itself)\n# apps = on | off           (off: only the desktop follows custom themes)\n' > "$CONF"
   if grep -qE "^$1 *=" "$CONF"; then
     awk -v k="$1" -v v="$2" '$0 ~ "^"k" *=" { print k" = "v; next } { print }' "$CONF" > "$CONF.tmp"
     mv "$CONF.tmp" "$CONF"
@@ -101,6 +106,8 @@ conf_set() {
 }
 
 setting() { case "$(conf_get auto-theme)" in on) echo on ;; *) echo off ;; esac; }
+# the terminal and its apps follow custom themes unless apps = off
+apps_setting() { case "$(conf_get apps)" in off) echo off ;; *) echo on ;; esac; }
 
 # An applier is a command, so it is looked up the way a command is — but
 # Karabiner runs a keybinding with PATH=/usr/bin:/bin only, where nothing a
@@ -806,16 +813,28 @@ clear_apps() {
 cmd_apply() {
   [ "$(setting)" = on ] || exit 0
   local label="${1:-omacosy}"
-  if on_custom; then theme_apps "$label"; else clear_apps "$label"; fi
+  # with apps = off a custom theme is treated like a stock one for the apps:
+  # every generated file goes and each app shows its own colours
+  if on_custom && [ "$(apps_setting)" = on ]; then theme_apps "$label"; else clear_apps "$label"; fi
   exit 0
 }
 
 stock_count() { local n=0 t; for t in "$THEMES_DIR"/*/; do n=$((n+1)); done; echo "$n"; }
 
 cmd_on() {
+  case "${1:-}" in
+    "") conf_set apps on ;;
+    desktop-only) conf_set apps off ;;
+    *) echo "usage: omacosy-auto-theme on [desktop-only]" >&2; exit 2 ;;
+  esac
   conf_set auto-theme on
-  echo "auto-theme: on"
-  link_nvim
+  if [ "$(apps_setting)" = on ]; then
+    echo "auto-theme: on (the desktop, the terminal and its apps)"
+    link_nvim
+  else
+    echo "auto-theme: on, desktop only (bar, ring, cheat sheet); the terminal and its apps keep their own colours"
+    unlink_nvim
+  fi
   local d n
   if d="$("$CUSTOM" dir 2>/dev/null)"; then
     n="$("$CUSTOM" list 2>/dev/null | wc -l | tr -d ' ')"
@@ -853,6 +872,11 @@ cmd_status() {
   cmd="$(applier_cmd || true)"
   now="$("$CUSTOM" current 2>/dev/null || echo none)"
   echo "auto-theme   : $(setting)"
+  if [ "$(apps_setting)" = on ]; then
+    echo "apps         : on — the terminal and its apps follow custom themes"
+  else
+    echo "apps         : off — desktop only; the terminal and its apps keep their own colours"
+  fi
   if [ "$(setting)" = on ]; then
     if d="$("$CUSTOM" dir 2>/dev/null)"; then
       n="$("$CUSTOM" list 2>/dev/null | wc -l | tr -d ' ')"
@@ -864,7 +888,11 @@ cmd_status() {
     echo "custom theme : hidden while auto-theme is off"
   fi
   if [ "$now" = custom ]; then
-    echo "on screen    : custom — the apps follow the wallpaper"
+    if [ "$(apps_setting)" = on ]; then
+      echo "on screen    : custom — the apps follow the wallpaper"
+    else
+      echo "on screen    : custom — the desktop follows the wallpaper, the apps do not"
+    fi
   else
     echo "on screen    : $now — a stock theme, the apps show their own colours"
   fi
@@ -880,7 +908,7 @@ cmd_status() {
 }
 
 case "${1:-status}" in
-  on)      cmd_on ;;
+  on)      shift; cmd_on "${1:-}" ;;
   off)     cmd_off ;;
   status)  cmd_status ;;
   apply)   shift; cmd_apply "${1:-omacosy}" ;;
@@ -888,5 +916,5 @@ case "${1:-status}" in
   enabled) [ "$(setting)" = on ] ;;
   # run by tmux from tmux-theme.conf: the bar's band takes the terminal's background
   tmux-bar) shift; cmd_tmux_bar "${1:-}" ;;
-  *) echo "usage: omacosy-auto-theme [on|off|status|apply [<label>]]" >&2; exit 2 ;;
+  *) echo "usage: omacosy-auto-theme [on [desktop-only]|off|status|apply [<label>]]" >&2; exit 2 ;;
 esac

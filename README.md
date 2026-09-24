@@ -338,7 +338,7 @@ The commands you run:
 | `omacosy-solo-fullscreen on\|off\|status` | a workspace with one tiled window fills the display. Off by default |
 | `omacosy-window-corners [square\|round\|<radius>]` | sets the radius macOS draws window corners with. No argument shows it |
 | `omacosy-harvest-zshrc` | moves the lines installers appended to `~/.zshrc` into `~/.zshrc.local` |
-| `omacosy-auto-theme on\|off\|status` | whether your own wallpapers become themes, with the terminal, the prompt, the `ls` colors and yazi to match. Off by default |
+| `omacosy-auto-theme on\|off\|status` | whether your own wallpapers become themes, with the terminal and its tools to match. `on desktop-only` themes the desktop alone. Off by default |
 | `theme-set <name>` | switches the whole theme |
 | `theme-next` | the next theme (Super+Shift+T) |
 | `theme-bg-next [path]` | the next wallpaper of the theme, or the image you name (Super+Shift+B) |
@@ -685,8 +685,14 @@ Off by default, because a terminal's colors are a personal choice:
 ```sh
 omacosy-auto-theme            # status
 omacosy-auto-theme on         # custom themes, and the apps follow them
+omacosy-auto-theme on desktop-only   # custom themes for the bar, ring and cheat sheet only
 omacosy-auto-theme off        # stock themes only; your own colors come back
 ```
+
+**Desktop only.** `on desktop-only` keeps the custom themes for the desktop,
+the bar, the focus ring and the cheat sheet, and leaves the terminal and every
+tool in its own colors, as on a stock theme. `on` alone turns the apps back
+on. It is stored as `apps = on | off` in `~/.config/omacosy/auto-theme.conf`.
 
 `on` makes the **custom** theme appear (see *Your own wallpapers* above).
 While a custom theme is on screen, the terminal and its apps take the colors
@@ -757,6 +763,7 @@ and the next window reads your own colors again.
 
 ```
 auto-theme = on | off         off by default
+apps = on | off               on by default; off: the desktop only (on desktop-only)
 applier = <command>           empty: omacosy writes the config itself
 ```
 

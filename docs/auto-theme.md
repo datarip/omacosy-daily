@@ -11,8 +11,15 @@ tmux's bar.
 ```sh
 omacosy-auto-theme            # status: switch, custom theme, applier, palette file, btop, Neovim
 omacosy-auto-theme on
+omacosy-auto-theme on desktop-only
 omacosy-auto-theme off
 ```
+
+**Desktop only.** `on desktop-only` sets `apps = off`: the custom themes stay,
+and the bar, the focus ring and the cheat sheet follow the wallpaper, but on a
+custom theme `apply` does what it does on a stock theme for the apps. Every
+generated file is removed and each app shows its own colours. `on` alone sets
+`apps = on` again and links the Neovim plugin back.
 
 `theme-set` and `theme-bg-next` call `omacosy-auto-theme apply <label>` after
 they repoint `~/.config/omarchy/current/theme`. Nothing else calls it, except
@@ -101,6 +108,7 @@ background, the foreground and `OMACOSY_MUTED`.
 
 ```
 auto-theme = on | off         off by default
+apps = on | off               on by default; off = `on desktop-only`
 applier = <command>           empty: omacosy writes the config itself
 ```
 
