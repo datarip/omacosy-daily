@@ -306,9 +306,17 @@ int main(int argc, char** argv)
 	} else if (!strcmp(op, "leave-fullscreen")) {
 		// A window opened beside a Super+F window lands in that window's
 		// hidden tile, drawn on top, while the fullscreen one stays (OmniWM
-		// 0.7.2). Ending the fullscreen first makes it the ordinary case. Waits
-		// until the frame no longer covers a tile and reads the same twice, 1 s
-		// cap, so the preselect after it measures the real tile.
+		// 0.7.2). Ending the fullscreen first makes it the ordinary case.
+		//
+		// The wait is a bounded frame check, not a listener, because OmniWM
+		// sends no event for a fullscreen exit. Measured 2026-09-25 (0.7.2,
+		// 1440x900, a 2-tile workspace, 3 runs): with layout-changed, focus and
+		// windows-changed subscribed before toggle-fullscreen, all three stay
+		// silent while the focused frame animates 1424 -> 708 in ~165-200 ms.
+		// layout-changed is published only when the workspace-bar projection
+		// changes (SurfaceReconciler) and by setWorkspaceLayout;
+		// toggleFullscreen only requests a relayout. So poll the focused frame
+		// until it no longer covers a tile and reads the same twice, 1 s cap.
 		double f[4], last[4] = { 0, 0, 0, 0 };
 		if (focused_covers_a_tile(c, f) == 1) {
 			rc = omniwm_command(c, "toggle-fullscreen", NULL) ? 0 : 1;

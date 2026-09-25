@@ -3505,9 +3505,10 @@ final class BarSurface {
         // This does NOT make the fullscreen check redundant, which was the
         // hope. On a notched display a fullscreen window starts BELOW the
         // notch — measured at y=32 — so it cannot cover a bar drawn from
-        // y=0 by z-order alone. Being below windows is still worth it: the
-        // bar can never float over an app, and on a flat display fullscreen
-        // covers it for free.
+        // y=0 by z-order alone. This is only the starting level: a bar that
+        // stays visible is raised to barRestLevel (20) below, which clears
+        // app overlays and sits under the native menu bar. An auto-hiding
+        // bar is off screen at rest, so fullscreen covers it for free.
         window.level = NSWindow.Level(rawValue: -20)
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         window.acceptsMouseMovedEvents = true // tracking areas need the moves
