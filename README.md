@@ -89,6 +89,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#73](https://github.com/paulsp94/omacosy/pull/73) | OPEN | fix(spawn): a Super+F window leaves fullscreen before a new window opens beside it |
 | [#71](https://github.com/paulsp94/omacosy/pull/71) | OPEN | fix(ghostty): close a window without a prompt, as on Omarchy |
 | [#70](https://github.com/paulsp94/omacosy/pull/70) | OPEN | fix(spawn): a burst waits for each window to settle before the next one |
 | [#69](https://github.com/paulsp94/omacosy/pull/69) | MERGED | docs(readme): name the Screen Recording entries macOS checks |
