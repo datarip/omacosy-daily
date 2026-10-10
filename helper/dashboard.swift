@@ -3467,13 +3467,16 @@ final class PaletteModel {
         case "red": return slot(1)
         case "green": return slot(2)
         case "yellow", "warn": return slot(3)
-        case "blue", "info": return slot(6)
+        case "blue": return slot(4)
+        case "info": return slot(6)
         case "magenta": return slot(5)
         case "cyan": return slot(6)
         case "err": return slot(1)
-        case "mix_bg_muted_50": return mixHex(slot(0), slot(8, "#808080"), 50)
-        case "mix_bg_muted_60": return mixHex(slot(0), slot(8, "#808080"), 60)
-        case "mix_bg_accent_55": return mixHex(slot(0), finalExtended["accent"] ?? slot(1), 55)
+        // Aether's orange is the red slot lightened 15%; its accent is the blue
+        // slot. These are the roles the ported templates bind to.
+        case "orange": return lightenedHex(slot(1), percent: 15)
+        case "lighter_bg": return mixHex(slot(0), "#ffffff", 10)
+        case "light_fg": return lightenedHex(slot(7, "#ffffff"), percent: 15)
         default:
             if source.hasPrefix("p"), let i = Int(source.dropFirst(1)) { return slot(i) }
             return "#000000"
