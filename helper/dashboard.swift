@@ -4784,8 +4784,8 @@ final class TemplateOverrideSectionView: NSView {
     var onToolOpacity: ((Int?) -> Void)?
     let opacitySlider = OpacitySliderView()
 
-    private let headerH: CGFloat = 26
-    private let settingsH: CGFloat = 28
+    private let headerH: CGFloat = 44
+    private let settingsH: CGFloat = 30
     private let chipsH: CGFloat = 30
     private let cols = 4
     private let cardH: CGFloat = 34
@@ -4807,27 +4807,27 @@ final class TemplateOverrideSectionView: NSView {
 
     static func height(roleCount: Int) -> CGFloat {
         let rows = max(1, (roleCount + 3) / 4)
-        return 26 + 28 + 30 + 6 + CGFloat(rows) * (34 + 15) + CGFloat(rows - 1) * 12 + 22
+        return 44 + 30 + 30 + 6 + CGFloat(rows) * (34 + 15) + CGFloat(rows - 1) * 12 + 18
     }
 
     private var contentTop: CGFloat { headerH + settingsH + chipsH + 6 }
     private var editRowTop: CGFloat { headerH }
-    private var sliderX: CGFloat { 60 }
+    private var sliderX: CGFloat { 94 }
 
     private var inheritRect: NSRect {
-        NSRect(x: bounds.width - 108, y: bounds.height - editRowTop - 24, width: 104, height: 20)
+        NSRect(x: bounds.width - 108 - 16, y: bounds.height - editRowTop - 26, width: 104, height: 20)
     }
 
     override func layout() {
         super.layout()
-        let w = max(80, bounds.width - sliderX - 108 - 8 - 46)
-        opacitySlider.frame = NSRect(x: sliderX, y: bounds.height - editRowTop - 21, width: w, height: 14)
+        let w = max(60, bounds.width - sliderX - 108 - 32 - 50)
+        opacitySlider.frame = NSRect(x: sliderX, y: bounds.height - editRowTop - 23, width: w, height: 14)
     }
 
     private func appRects() -> [NSRect] {
         var out: [NSRect] = []
         let font = nerdFont("Regular", 11)
-        var x: CGFloat = 0
+        var x: CGFloat = 16
         for name in apps {
             let w = advance(name, font) + 14
             out.append(NSRect(x: x, y: bounds.height - headerH - settingsH - chipsH + 4,
@@ -4840,11 +4840,12 @@ final class TemplateOverrideSectionView: NSView {
     private func cardRects() -> [NSRect] {
         guard !roles.isEmpty, bounds.width > 0 else { return [] }
         let colGap: CGFloat = 8
-        let colW = (bounds.width - CGFloat(cols - 1) * colGap) / CGFloat(cols)
+        let insetL: CGFloat = 16
+        let colW = (bounds.width - insetL * 2 - CGFloat(cols - 1) * colGap) / CGFloat(cols)
         var out: [NSRect] = []
         for i in roles.indices {
             let col = i % cols, row = i / cols
-            let x = CGFloat(col) * (colW + colGap)
+            let x = insetL + CGFloat(col) * (colW + colGap)
             let top = contentTop + CGFloat(row) * (cardH + labelH + rowGap)
             out.append(NSRect(x: x, y: bounds.height - top - cardH, width: colW, height: cardH))
         }
@@ -4853,26 +4854,41 @@ final class TemplateOverrideSectionView: NSView {
 
     private var resetRect: NSRect? {
         guard canReset else { return nil }
-        let w = advance("Reset override", nerdFont("Regular", 11)) + 8
-        // in the header row (the top), not beside the opacity slider
-        return NSRect(x: bounds.width - w, y: bounds.height - 22, width: w, height: 18)
+        let w = advance("Reset \(selectedAppName)", nerdFont("Regular", 11)) + 10
+        // the header's title line, right-aligned
+        return NSRect(x: bounds.width - w - 16, y: bounds.height - 26, width: w, height: 20)
+    }
+
+    private var selectedAppName: String {
+        apps.indices.contains(selectedApp) ? apps[selectedApp] : ""
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        // framed card, like the semantic groups
+        let card = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let cardPath = NSBezierPath(roundedRect: card, xRadius: 6, yRadius: 6)
+        palette.itemBG.withAlphaComponent(0.12).setFill()
+        cardPath.fill()
+        palette.muted.withAlphaComponent(0.15).setStroke()
+        cardPath.lineWidth = 1
+        cardPath.stroke()
+
         drawTopLeft("Template Override", nerdFont("Bold", 12), palette.accent,
-                    x: 16, top: 0, height: bounds.height)
+                    x: 16, top: 8, height: bounds.height)
         drawTopLeft("Per-app colours; applied only when the terminal follows the theme.",
                     nerdFont("Regular", 10), palette.muted,
-                    x: 16 + 140, top: 1, height: bounds.height)
+                    x: 16, top: 26, height: bounds.height)
         if let r = resetRect {
-            drawMidLeft("Reset override", nerdFont("Regular", 11), .systemRed,
+            drawMidLeft("Reset \(selectedAppName)", nerdFont("Regular", 11), .systemRed,
                         x: r.minX + 3, midTop: bounds.height - r.midY, height: bounds.height)
         }
-        // Tool opacity: an edition slider that inherits the machine default
-        // unless set, and the machine default below it.
+        // separator under the header
+        palette.muted.withAlphaComponent(0.15).setFill()
+        NSRect(x: 1, y: bounds.height - headerH, width: bounds.width - 2, height: 1).fill()
+        // Tool opacity: an edition slider that inherits the machine default.
         let sfont = nerdFont("Regular", 11)
         drawMidLeft("Opacity", nerdFont("Regular", 10), palette.muted,
-                    x: 0, midTop: editRowTop + 14, height: bounds.height)
+                    x: 16, midTop: editRowTop + 15, height: bounds.height)
         let effective = toolOpacity ?? globalOpacity ?? terminalOpacity ?? 100
         drawMidLeft("\(effective)%", sfont, palette.label,
                     x: opacitySlider.frame.maxX + 8, midTop: editRowTop + 14, height: bounds.height)
