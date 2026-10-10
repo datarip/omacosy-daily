@@ -4159,6 +4159,84 @@ struct ThemeLibrary {
     }
 }
 
+// MARK: - Template overrides
+
+// The per-app colour roles a saved edition can override. One catalogue, so the
+// editor's Template Override panel and the appliers (through the edition's
+// overrides.env) agree on the key names. `source` names the palette slot the
+// default comes from; it only seeds the editor's swatch — the writer computes
+// the real value the override replaces.
+struct TemplateRole {
+    let key: String
+    let label: String
+    let source: String
+}
+
+struct TemplateApp {
+    let id: String
+    let name: String
+    let roles: [TemplateRole]
+}
+
+enum Templates {
+    // A role key must be usable in an environment variable name:
+    // OMACOSY_OVR_<app>_<key>.
+    static func sanitize(_ s: String) -> String {
+        String(s.map { ($0.isLetter || $0.isNumber) ? $0 : "_" })
+    }
+
+    static let apps: [TemplateApp] = {
+        var ghostty: [TemplateRole] = [
+            .init(key: "background", label: "Background", source: "bg"),
+            .init(key: "foreground", label: "Foreground", source: "fg"),
+            .init(key: "cursor_color", label: "Cursor", source: "cursor"),
+            .init(key: "cursor_text", label: "Cursor Text", source: "bg"),
+            .init(key: "selection_background", label: "Selection Background", source: "sel_bg"),
+            .init(key: "selection_foreground", label: "Selection Foreground", source: "sel_fg"),
+        ]
+        for i in 0..<16 {
+            ghostty.append(.init(key: "palette_\(i)", label: "Palette \(i)", source: "p\(i)"))
+        }
+        return [
+            TemplateApp(id: "btop", name: "btop", roles: [
+                .init(key: "main_bg", label: "Main Background", source: "bg"),
+                .init(key: "main_fg", label: "Main Foreground", source: "fg"),
+                .init(key: "title", label: "Title", source: "fg"),
+                .init(key: "hi_fg", label: "Highlight Foreground", source: "accent"),
+                .init(key: "selected_bg", label: "Selected Background", source: "sel_bg"),
+                .init(key: "selected_fg", label: "Selected Foreground", source: "sel_fg"),
+                .init(key: "inactive_fg", label: "Inactive Foreground", source: "muted"),
+                .init(key: "graph_text", label: "Graph Text", source: "muted"),
+                .init(key: "meter_bg", label: "Meter Background", source: "muted"),
+                .init(key: "proc_misc", label: "Process Misc", source: "accent"),
+                .init(key: "cpu_box", label: "CPU Box", source: "accent"),
+                .init(key: "mem_box", label: "Memory Box", source: "accent"),
+                .init(key: "net_box", label: "Network Box", source: "accent"),
+                .init(key: "proc_box", label: "Process Box", source: "accent"),
+                .init(key: "div_line", label: "Divider Line", source: "muted"),
+            ]),
+            TemplateApp(id: "ghostty", name: "Ghostty", roles: ghostty),
+            TemplateApp(id: "fastfetch", name: "fastfetch", roles: [
+                .init(key: "color_keys", label: "Keys Colour", source: "accent"),
+                .init(key: "color_title", label: "Title Colour", source: "accent"),
+            ]),
+            TemplateApp(id: "lazygit", name: "lazygit", roles: [
+                .init(key: "activeBorderColor", label: "Active Border", source: "accent"),
+                .init(key: "inactiveBorderColor", label: "Inactive Border", source: "muted"),
+                .init(key: "searchingActiveBorderColor", label: "Searching Border", source: "warn"),
+                .init(key: "optionsTextColor", label: "Options Text", source: "info"),
+                .init(key: "selectedLineBgColor", label: "Selected Line Background", source: "sel_bg"),
+                .init(key: "cherryPickedCommitFgColor", label: "Cherry-Picked Foreground", source: "accent"),
+                .init(key: "cherryPickedCommitBgColor", label: "Cherry-Picked Background", source: "sel_bg"),
+                .init(key: "markedBaseCommitFgColor", label: "Marked Base Foreground", source: "info"),
+                .init(key: "markedBaseCommitBgColor", label: "Marked Base Background", source: "warn"),
+                .init(key: "unstagedChangesColor", label: "Unstaged Changes", source: "err"),
+                .init(key: "defaultFgColor", label: "Default Foreground", source: "fg"),
+            ]),
+        ]
+    }()
+}
+
 // MARK: - Materialise
 
 // Turns a stored theme record into a runnable theme directory. The bar, the
@@ -4332,6 +4410,22 @@ enum Materialise {
         try sb.write(to: dir.appendingPathComponent("sketchybar.sh"), atomically: true, encoding: .utf8)
         try bd.write(to: dir.appendingPathComponent("borders.sh"), atomically: true, encoding: .utf8)
         try toml.write(to: dir.appendingPathComponent("colors.toml"), atomically: true, encoding: .utf8)
+
+        // The per-app overrides, shell-sourceable, next to colors.toml. The
+        // terminal appliers source it (only when terminal = on) and consult it
+        // role by role; an edition with none writes nothing.
+        var overrides = ""
+        for app in theme.appOverrides.keys.sorted() {
+            let roles = theme.appOverrides[app]!
+            for role in roles.keys.sorted() {
+                overrides += "OMACOSY_OVR_\(Templates.sanitize(app))_"
+                    + "\(Templates.sanitize(role))='\(roles[role]!)'\n"
+            }
+        }
+        if !overrides.isEmpty {
+            try overrides.write(to: dir.appendingPathComponent("overrides.env"),
+                                atomically: true, encoding: .utf8)
+        }
 
         let backgroundDir = dir.appendingPathComponent("backgrounds", isDirectory: true)
         try FileManager.default.createDirectory(at: backgroundDir, withIntermediateDirectories: true)
@@ -5042,6 +5136,25 @@ case "modes":
         }
     }
     exit(0)
+
+case "template":
+    guard let sub = args.first else { usage() }
+    args.removeFirst()
+    switch sub {
+    case "apps":
+        noExtraArguments()
+        if jsonOut {
+            let payload: [[String: Any]] = Templates.apps.map { app in
+                ["id": app.id, "name": app.name,
+                 "roles": app.roles.map { ["key": $0.key, "label": $0.label, "source": $0.source] }]
+            }
+            printJSON(["apps": payload])
+        }
+        for app in Templates.apps { print("\(app.id)\t\(app.name)\t\(app.roles.count) roles") }
+        exit(0)
+    default:
+        usage()
+    }
 
 case "theme":
     guard let sub = args.first else { usage() }
