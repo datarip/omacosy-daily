@@ -8356,10 +8356,13 @@ final class ThemeEditor {
         DispatchQueue.global().async { [weak self] in
             let command = "\(themecoreBin()) image auto \(op) \(q) --json 2>/dev/null"
             let (code, out) = shell(command)
-            guard code == 0, let data = out.data(using: .utf8),
-                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
             DispatchQueue.main.async {
                 guard let self else { return }
+                guard code == 0, let data = out.data(using: .utf8),
+                      let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                    self.showMessage("Auto correction failed", red: true)
+                    return
+                }
                 if op == "white-balance" {
                     let temp = (obj["temperature"] as? NSNumber)?.doubleValue ?? 0
                     let tint = (obj["tint"] as? NSNumber)?.doubleValue ?? 0
