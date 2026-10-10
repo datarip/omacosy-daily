@@ -5538,9 +5538,17 @@ final class PreviewPaneView: NSView {
         return r
     }
 
+    // one glyph, centred on its ink in both axes (bar.swift's drawIcon): a
+    // nerd-font icon drifts high and left in a line-box centre.
     private func drawGlyph(_ s: String, _ font: NSFont, _ color: NSColor, in box: NSRect) {
-        drawMidCenter(s, font, color, centerX: box.midX,
-                      midTop: bounds.height - box.midY, height: bounds.height)
+        guard !s.isEmpty, let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let line = textLine(s, font, color)
+        // measure from the line origin: a previous text draw leaves a
+        // non-zero text position, and the ink bounds are relative to it
+        ctx.textPosition = .zero
+        let ink = CTLineGetImageBounds(line, ctx)
+        ctx.textPosition = CGPoint(x: box.midX - ink.midX, y: box.midY - ink.midY)
+        CTLineDraw(line, ctx)
     }
 
     // The real bar on this machine is transparent (autohide off): the pills sit
