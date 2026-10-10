@@ -3559,7 +3559,7 @@ struct Theme {
     var wallpaper = ThemeWallpaper()
     var palette: Palette16
     var appOverrides: [String: [String: String]] = [:]
-    var toolBackground: String?   // nil = follow the machine default
+    var toolOpacity: Int?   // 0...100; nil = follow the machine default
     var terminals = Theme.defaultTerminals
     var favorite = false
     var raw: [String: Any] = [:]
@@ -3819,12 +3819,12 @@ extension Theme {
             }
         }
 
-        var toolBackground: String? = nil
-        if let value = top["toolBackground"], !(value is NSNull) {
-            guard let s = JSONField.string(value), s == "transparent" || s == "theme" else {
-                try bad("\"toolBackground\" must be \"transparent\" or \"theme\"")
+        var toolOpacity: Int? = nil
+        if let value = top["toolOpacity"], !(value is NSNull) {
+            guard let n = JSONField.number(value), n == n.rounded(), n >= 0, n <= 100 else {
+                try bad("\"toolOpacity\" must be a whole number from 0 to 100")
             }
-            toolBackground = s
+            toolOpacity = Int(n)
         }
 
         var terminals = Theme.defaultTerminals
@@ -3859,7 +3859,7 @@ extension Theme {
                      palette: Palette16(method: method, mode: mode, resolvedMode: resolvedMode,
                                            colors: colors, extended: extended, locked: locked,
                                            adjustments: adjustments, curve: curve),
-                     appOverrides: appOverrides, toolBackground: toolBackground,
+                     appOverrides: appOverrides, toolOpacity: toolOpacity,
                      terminals: terminals, favorite: favorite, raw: top)
     }
 }
@@ -3935,7 +3935,7 @@ extension Theme {
         out["favorite"] = favorite
         out["terminals"] = terminals
         out["appOverrides"] = appOverrides
-        if let toolBackground { out["toolBackground"] = toolBackground } else { out.removeValue(forKey: "toolBackground") }
+        if let toolOpacity { out["toolOpacity"] = toolOpacity } else { out.removeValue(forKey: "toolOpacity") }
 
         var wall = JSONField.dict(raw["wallpaper"]) ?? [:]
         wall["path"] = jsonOrNull(wallpaper.path)
@@ -4358,7 +4358,7 @@ enum Materialise {
         parts.append(theme.wallpaper.media ?? "")
         parts.append(theme.wallpaper.blur ? "1" : "0")
         parts.append(theme.wallpaper.edited ? "1" : "0")
-        parts.append(theme.toolBackground ?? "-")
+        parts.append(theme.toolOpacity.map(String.init) ?? "-")
         for app in theme.appOverrides.keys.sorted() {
             let roles = theme.appOverrides[app]!
             parts.append(app + ":" + roles.keys.sorted().map { "\($0)=\(roles[$0]!)" }.joined(separator: ","))
@@ -4487,8 +4487,8 @@ enum Materialise {
         // terminal appliers source it (only when terminal = on) and consult it
         // role by role; an edition with none writes nothing.
         var overrides = ""
-        if let tb = theme.toolBackground {
-            overrides += "OMACOSY_TOOL_BACKGROUND='\(tb)'\n"
+        if let op = theme.toolOpacity {
+            overrides += "OMACOSY_TOOL_OPACITY='\(op)'\n"
         }
         for app in theme.appOverrides.keys.sorted() {
             let roles = theme.appOverrides[app]!

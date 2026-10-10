@@ -157,16 +157,18 @@ func setConfKey(_ file: String, _ key: String, _ value: String) -> Bool {
 
 let SECRETS = HOME + "/.config/omacosy/secrets.conf"
 
-// The machine-wide tool transparency the editor's Template Override header
-// shows and writes; an edition's own toolBackground overrides it.
+// The machine-wide tool opacity (0...100) the editor shows; an edition's own
+// toolOpacity overrides it. nil = unset, so the terminal's own setting stands.
 let TERM_AUTO_CONF = HOME + "/.config/omacosy/term-auto-theme.conf"
 
-func readGlobalToolBackground() -> String {
-    readConfKey(TERM_AUTO_CONF, "tools_background") == "theme" ? "theme" : "transparent"
+func readGlobalToolOpacity() -> Int? {
+    guard let s = readConfKey(TERM_AUTO_CONF, "tool_opacity"), let n = Int(s),
+          n >= 0, n <= 100 else { return nil }
+    return n
 }
 
-func writeGlobalToolBackground(_ value: String) {
-    _ = setConfKey(TERM_AUTO_CONF, "tools_background", value)
+func writeGlobalToolOpacity(_ value: Int?) {
+    _ = setConfKey(TERM_AUTO_CONF, "tool_opacity", value.map(String.init) ?? "")
 }
 
 func readSecret(_ key: String) -> String {
@@ -2870,9 +2872,8 @@ final class PaletteModel {
     private(set) var appOverrides: [String: [String: String]] = [:]
     private(set) var templateApps: [TemplateAppInfo] = []
     private(set) var selectedTemplateApp = 0
-    // nil = follow the machine default (term-auto-theme.conf); else this
-    // edition's own choice, "transparent" or "theme".
-    private(set) var toolBackground: String?
+    // nil = follow the machine default; else this edition's opacity, 0...100.
+    private(set) var toolOpacity: Int?
 
     // Undo/redo: whole-editor snapshots, 50 deep. A burst of changes to the
     // same control inside one second folds into a single step (a slider drag
@@ -2887,7 +2888,7 @@ final class PaletteModel {
         var resolvedMode: String
         var sourceName: String?
         var appOverrides: [String: [String: String]]
-        var toolBackground: String?
+        var toolOpacity: Int?
     }
     private var undoStack: [HistoryEntry] = []
     private var redoStack: [HistoryEntry] = []
@@ -2981,7 +2982,7 @@ final class PaletteModel {
         sourceName = nil
         appOverrides.removeAll()
         selectedTemplateApp = 0
-        toolBackground = nil
+        toolOpacity = nil
         undoStack.removeAll()
         redoStack.removeAll()
         lastPushKey = nil
@@ -3026,7 +3027,7 @@ final class PaletteModel {
             appOverrides = ov
         }
         selectedTemplateApp = 0
-        toolBackground = record["toolBackground"] as? String
+        toolOpacity = record["toolOpacity"] as? Int
         undoStack.removeAll()
         redoStack.removeAll()
         lastPushKey = nil
@@ -3100,7 +3101,7 @@ final class PaletteModel {
         HistoryEntry(baseColors: baseColors, extendedHex: extendedHex,
                      adjustments: adjustments, curve: curve, method: method,
                      mode: mode, resolvedMode: resolvedMode, sourceName: sourceName,
-                     appOverrides: appOverrides, toolBackground: toolBackground)
+                     appOverrides: appOverrides, toolOpacity: toolOpacity)
     }
 
     private func pushHistory(_ key: String?) {
@@ -3141,7 +3142,7 @@ final class PaletteModel {
         resolvedMode = e.resolvedMode
         sourceName = e.sourceName
         appOverrides = e.appOverrides
-        toolBackground = e.toolBackground
+        toolOpacity = e.toolOpacity
         sourceIsPreset = e.sourceName.map { name in presetsCache?.contains { $0.name == name } ?? false } ?? false
         update()
         refreshRender()
@@ -3533,11 +3534,11 @@ final class PaletteModel {
         !(appOverrides[app] ?? [:]).isEmpty
     }
 
-    // The per-edition tool transparency: nil inherits the machine default.
-    func setToolBackground(_ value: String?) {
-        guard toolBackground != value else { return }
+    // The per-edition tool opacity: nil inherits the machine default.
+    func setToolOpacity(_ value: Int?) {
+        guard toolOpacity != value else { return }
         pushHistory(nil)
-        toolBackground = value
+        toolOpacity = value
         edited()
         update()
     }
@@ -4665,6 +4666,38 @@ final class SemanticSectionView: NSView {
 // swatches; a swatch that carries an override is ringed in the accent, and
 // Reset clears them for the app. The values reach the terminal tools only
 // while the terminal theme follows the theme.
+// A small 0...100 slider, shared by the editor's per-edition control and the
+// Options tab's machine default. nil draws as an empty track (unset).
+final class OpacitySliderView: NSView {
+    var value: Int? { didSet { needsDisplay = true } }
+    var onChange: ((Int) -> Void)?
+
+    override func draw(_ dirtyRect: NSRect) {
+        let trackH: CGFloat = 4
+        let track = NSRect(x: 0, y: bounds.midY - trackH / 2, width: bounds.width, height: trackH)
+        palette.itemBG.withAlphaComponent(0.55).setFill()
+        NSBezierPath(roundedRect: track, xRadius: trackH / 2, yRadius: trackH / 2).fill()
+        guard let value else { return }
+        let v = CGFloat(max(0, min(100, value))) / 100
+        let fill = NSRect(x: 0, y: track.minY, width: bounds.width * v, height: trackH)
+        palette.accent.withAlphaComponent(0.9).setFill()
+        NSBezierPath(roundedRect: fill, xRadius: trackH / 2, yRadius: trackH / 2).fill()
+        let hx = max(6, min(bounds.width - 6, bounds.width * v))
+        palette.accent.setFill()
+        NSBezierPath(ovalIn: NSRect(x: hx - 6, y: bounds.midY - 6, width: 12, height: 12)).fill()
+    }
+
+    private func setFrom(_ p: NSPoint) {
+        guard bounds.width > 0 else { return }
+        let v = Int((max(0, min(1, p.x / bounds.width)) * 100).rounded())
+        if value != v { value = v; onChange?(v) }
+    }
+    override func mouseDown(with event: NSEvent) { setFrom(convert(event.locationInWindow, from: nil)) }
+    override func mouseDragged(with event: NSEvent) { setFrom(convert(event.locationInWindow, from: nil)) }
+    override var acceptsFirstResponder: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 final class TemplateOverrideSectionView: NSView {
     struct Role {
         let key: String
@@ -4678,50 +4711,53 @@ final class TemplateOverrideSectionView: NSView {
     var roles: [Role] = [] { didSet { needsDisplay = true } }
     var canReset = false { didSet { needsDisplay = true } }
     var editTarget: PaletteModel.EditTarget? { didSet { needsDisplay = true } }
-    var toolBackground: String? { didSet { needsDisplay = true } }
-    var globalBackground = "transparent" { didSet { needsDisplay = true } }
+    var toolOpacity: Int? { didSet { needsDisplay = true; opacitySlider.value = toolOpacity ?? globalOpacity } }
+    var globalOpacity: Int? { didSet { needsDisplay = true; globalSlider.value = globalOpacity } }
     var onSelectApp: ((Int) -> Void)?
     var onEdit: ((String, String) -> Void)?
     var onReset: (() -> Void)?
-    var onToolBackground: ((String?) -> Void)?
-    var onToggleGlobal: (() -> Void)?
+    var onToolOpacity: ((Int?) -> Void)?
+    var onSetGlobalOpacity: ((Int?) -> Void)?
+    let opacitySlider = OpacitySliderView()
+    let globalSlider = OpacitySliderView()
 
     private let headerH: CGFloat = 26
-    private let settingsH: CGFloat = 30
+    private let settingsH: CGFloat = 56
     private let chipsH: CGFloat = 30
     private let cols = 4
     private let cardH: CGFloat = 34
     private let labelH: CGFloat = 15
     private let rowGap: CGFloat = 12
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        opacitySlider.onChange = { [weak self] v in self?.onToolOpacity?(v) }
+        globalSlider.onChange = { [weak self] v in self?.onSetGlobalOpacity?(v) }
+        addSubview(opacitySlider)
+        addSubview(globalSlider)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
     static func height(roleCount: Int) -> CGFloat {
         let rows = max(1, (roleCount + 3) / 4)
-        return 26 + 30 + 30 + 6 + CGFloat(rows) * (34 + 15) + CGFloat(rows - 1) * 12 + 22
+        return 26 + 56 + 30 + 6 + CGFloat(rows) * (34 + 15) + CGFloat(rows - 1) * 12 + 22
     }
 
     private var contentTop: CGFloat { headerH + settingsH + chipsH + 6 }
+    private var editRowTop: CGFloat { headerH }
+    private var globalRowTop: CGFloat { headerH + 28 }
+    private var sliderX: CGFloat { 60 }
 
-    // The 3-state edition control (nil = inherit the machine default) and the
-    // machine default chip.
-    private func backgroundRects() -> [(rect: NSRect, value: String?)] {
-        let font = nerdFont("Regular", 11)
-        let options: [(String, String?)] = [("Global", nil), ("Transparent", "transparent"), ("Opaque", "theme")]
-        var out: [(NSRect, String?)] = []
-        var x = advance("Tool Background ", font)
-        let y = bounds.height - headerH - settingsH + 4
-        for (label, value) in options {
-            let w = advance(label, font) + 16
-            out.append((NSRect(x: x, y: y, width: w, height: 22), value))
-            x += w + 5
-        }
-        return out
+    private var inheritRect: NSRect {
+        NSRect(x: bounds.width - 108, y: bounds.height - editRowTop - 24, width: 104, height: 20)
     }
 
-    private var globalRect: NSRect {
-        let font = nerdFont("Regular", 11)
-        let w = advance("Default: transparent", font) + 16
-        return NSRect(x: bounds.width - w, y: bounds.height - headerH - settingsH + 4,
-                      width: w, height: 22)
+    override func layout() {
+        super.layout()
+        let w = max(80, bounds.width - sliderX - 108 - 8 - 46)
+        opacitySlider.frame = NSRect(x: sliderX, y: bounds.height - editRowTop - 21, width: w, height: 14)
+        globalSlider.frame = NSRect(x: sliderX, y: bounds.height - globalRowTop - 21,
+                                    width: max(80, bounds.width - sliderX - 46), height: 14)
     }
 
     private func appRects() -> [NSRect] {
@@ -4767,39 +4803,33 @@ final class TemplateOverrideSectionView: NSView {
             drawMidLeft("Reset override", nerdFont("Regular", 11), .systemRed,
                         x: r.minX + 3, midTop: bounds.height - r.midY, height: bounds.height)
         }
-        // Tool background: a 3-state edition control (Global = inherit) and the
-        // machine default it inherits from.
-        let rowMidTop = headerH + settingsH - 15
-        drawMidLeft("Tool Background", nerdFont("Regular", 10), palette.muted,
-                    x: 0, midTop: rowMidTop, height: bounds.height)
-        for (rect, value) in backgroundRects() {
-            let selected = value == toolBackground
-            let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
-            if selected {
-                palette.accent.withAlphaComponent(0.9).setFill()
-                path.fill()
-            } else {
-                palette.itemBG.withAlphaComponent(0.3).setFill()
-                path.fill()
-                palette.muted.withAlphaComponent(0.3).setStroke()
-                path.lineWidth = 1
-                path.stroke()
-            }
-            let label = value == nil ? "Global" : (value == "transparent" ? "Transparent" : "Opaque")
-            drawMidCenter(label, selected ? nerdFont("Bold", 11) : nerdFont("Regular", 11),
-                          selected ? palette.barBG : palette.label,
-                          centerX: rect.midX, midTop: bounds.height - rect.midY,
-                          height: bounds.height)
+        // Tool opacity: an edition slider that inherits the machine default
+        // unless set, and the machine default below it.
+        let sfont = nerdFont("Regular", 11)
+        drawMidLeft("Opacity", nerdFont("Regular", 10), palette.muted,
+                    x: 0, midTop: editRowTop + 14, height: bounds.height)
+        let effective = toolOpacity ?? globalOpacity
+        drawMidLeft(effective.map { "\($0)%" } ?? "—", sfont, palette.label,
+                    x: opacitySlider.frame.maxX + 8, midTop: editRowTop + 14, height: bounds.height)
+        let ir = inheritRect
+        let ipath = NSBezierPath(roundedRect: ir, xRadius: 5, yRadius: 5)
+        if toolOpacity == nil {
+            palette.accent.withAlphaComponent(0.9).setFill()
+            ipath.fill()
+        } else {
+            palette.itemBG.withAlphaComponent(0.3).setFill()
+            ipath.fill()
+            palette.muted.withAlphaComponent(0.3).setStroke()
+            ipath.lineWidth = 1
+            ipath.stroke()
         }
-        let gr = globalRect
-        let gpath = NSBezierPath(roundedRect: gr, xRadius: 6, yRadius: 6)
-        palette.itemBG.withAlphaComponent(0.3).setFill()
-        gpath.fill()
-        palette.muted.withAlphaComponent(0.3).setStroke()
-        gpath.lineWidth = 1
-        gpath.stroke()
-        drawMidCenter("Default: \(globalBackground)", nerdFont("Regular", 10), palette.muted,
-                      centerX: gr.midX, midTop: bounds.height - gr.midY, height: bounds.height)
+        drawMidCenter("Inherit global", nerdFont("Regular", 10),
+                      toolOpacity == nil ? palette.barBG : palette.label,
+                      centerX: ir.midX, midTop: bounds.height - ir.midY, height: bounds.height)
+        drawMidLeft("Default", nerdFont("Regular", 10), palette.muted,
+                    x: 0, midTop: globalRowTop + 14, height: bounds.height)
+        drawMidLeft(globalOpacity.map { "\($0)%" } ?? "—", sfont, palette.muted,
+                    x: globalSlider.frame.maxX + 8, midTop: globalRowTop + 14, height: bounds.height)
         for (i, rect) in appRects().enumerated() {
             let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
             if i == selectedApp {
@@ -4847,11 +4877,7 @@ final class TemplateOverrideSectionView: NSView {
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         if let r = resetRect, r.contains(p) { onReset?(); return }
-        for (rect, value) in backgroundRects() where rect.contains(p) {
-            onToolBackground?(value)
-            return
-        }
-        if globalRect.contains(p) { onToggleGlobal?(); return }
+        if inheritRect.contains(p) { onToolOpacity?(nil); return }
         for (i, rect) in appRects().enumerated() where rect.contains(p) {
             onSelectApp?(i)
             return
@@ -5823,6 +5849,10 @@ final class PreviewPaneView: NSView {
     var showMenuBar = true
     var showTerminal = true
     var showRing = true
+    // The effective tool opacity (0...100) the terminal window is drawn at;
+    // nil anywhere means opaque.
+    var toolOpacity: Int?
+    var globalOpacity: Int?
 
     private let toggleMenuBar = PreviewIconButton()
     private let toggleTerminal = PreviewIconButton()
@@ -6142,7 +6172,7 @@ final class PreviewPaneView: NSView {
         // the window: Ghostty's 0.85 background, so the wallpaper shows through
         // exactly as it does on the desktop
         let body = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
-        termBG.withAlphaComponent(0.85).setFill()
+        termBG.withAlphaComponent(CGFloat(toolOpacity ?? globalOpacity ?? 100) / 100).setFill()
         body.fill()
         cols[8].withAlphaComponent(0.6).setStroke()
         body.lineWidth = 1
@@ -6377,12 +6407,12 @@ final class PaletteCanvasView: NSView {
             self?.model?.selectForEdit(.override(app, key))
         }
         doc.template.onReset = { [weak self] in self?.model?.resetAppOverrides() }
-        doc.template.onToolBackground = { [weak self] v in self?.model?.setToolBackground(v) }
-        doc.template.onToggleGlobal = { [weak self] in
-            guard let self else { return }
-            let next = readGlobalToolBackground() == "theme" ? "transparent" : "theme"
-            writeGlobalToolBackground(next)
-            self.doc.template.globalBackground = next
+        doc.template.onToolOpacity = { [weak self] v in self?.model?.setToolOpacity(v) }
+        doc.template.onSetGlobalOpacity = { [weak self] v in
+            writeGlobalToolOpacity(v)
+            self?.doc.template.globalOpacity = readGlobalToolOpacity()
+            self?.preview.globalOpacity = readGlobalToolOpacity()
+            self?.preview.needsDisplay = true
         }
     }
 
@@ -6460,8 +6490,10 @@ final class PaletteCanvasView: NSView {
                 ? 0 : TemplateOverrideSectionView.height(roleCount: 0)
         }
         doc.template.editTarget = model.editTarget
-        doc.template.toolBackground = model.toolBackground
-        doc.template.globalBackground = readGlobalToolBackground()
+        doc.template.toolOpacity = model.toolOpacity
+        doc.template.globalOpacity = readGlobalToolOpacity()
+        preview.toolOpacity = model.toolOpacity
+        preview.globalOpacity = readGlobalToolOpacity()
 
         doc.needsDisplay = true
         preview.needsDisplay = true
@@ -7071,10 +7103,10 @@ final class ThemeEditor {
         } else {
             top["appOverrides"] = model.appOverrides
         }
-        if let tb = model.toolBackground {
-            top["toolBackground"] = tb
+        if let op = model.toolOpacity {
+            top["toolOpacity"] = op
         } else {
-            top.removeValue(forKey: "toolBackground")
+            top.removeValue(forKey: "toolOpacity")
         }
         return top
     }
