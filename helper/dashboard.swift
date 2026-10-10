@@ -5409,6 +5409,31 @@ final class PaletteBuilderDoc: NSView {
 // cropped from it. Everything it draws comes from the PaletteModel; it never
 // reads ~/.config/omarchy/current/theme, so an unsaved draft cannot be fooled
 // by the live theme.
+// A small icon button for the preview toolbar. It follows the ButtonView
+// glyph pattern (centred on its ink, not its line box) but draws a translucent
+// dark backplate so it stays legible over any wallpaper, and colours the glyph
+// with the accent when ON and the muted role when OFF.
+final class PreviewIconButton: NSView {
+    var glyph = "" { didSet { needsDisplay = true } }
+    var on = true { didSet { needsDisplay = true } }
+    var onClick: (() -> Void)?
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.black.withAlphaComponent(0.4).setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6).fill()
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let font = nerdFont("Regular", 12)
+        let line = textLine(glyph, font, on ? palette.accent : palette.muted)
+        let ink = CTLineGetImageBounds(line, ctx)
+        ctx.textPosition = CGPoint(x: bounds.midX - ink.midX, y: bounds.midY - ink.midY)
+        CTLineDraw(line, ctx)
+    }
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
+    override var acceptsFirstResponder: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 final class PreviewPaneView: NSView {
     weak var model: PaletteModel?
 
@@ -5421,6 +5446,68 @@ final class PreviewPaneView: NSView {
     var showMenuBar = true
     var showTerminal = true
     var showRing = true
+
+    private let toggleMenuBar = PreviewIconButton()
+    private let toggleTerminal = PreviewIconButton()
+    private let toggleRing = PreviewIconButton()
+    private let viewPrompt = PreviewIconButton()
+    private let viewCode = PreviewIconButton()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        toggleMenuBar.glyph = "\u{f0c9}"
+        toggleMenuBar.toolTip = "Menu Bar Preview"
+        toggleMenuBar.onClick = { [weak self] in
+            guard let self else { return }
+            self.showMenuBar.toggle(); self.toggleMenuBar.on = self.showMenuBar
+            self.needsDisplay = true
+        }
+        toggleTerminal.glyph = "\u{f120}"
+        toggleTerminal.toolTip = "Terminal Preview"
+        toggleTerminal.onClick = { [weak self] in
+            guard let self else { return }
+            self.showTerminal.toggle(); self.toggleTerminal.on = self.showTerminal
+            self.needsDisplay = true
+        }
+        toggleRing.glyph = "\u{f2d0}"
+        toggleRing.toolTip = "Focus Ring Preview"
+        toggleRing.onClick = { [weak self] in
+            guard let self else { return }
+            self.showRing.toggle(); self.toggleRing.on = self.showRing
+            self.needsDisplay = true
+        }
+        viewPrompt.glyph = "\u{f489}"
+        viewPrompt.toolTip = "Terminal View"
+        viewPrompt.onClick = { [weak self] in
+            guard let self else { return }
+            self.showPrompt.toggle(); self.viewPrompt.on = self.showPrompt
+            self.needsDisplay = true
+        }
+        viewCode.glyph = "\u{f121}"
+        viewCode.toolTip = "Code View"
+        viewCode.onClick = { [weak self] in
+            guard let self else { return }
+            self.showCode.toggle(); self.viewCode.on = self.showCode
+            self.needsDisplay = true
+        }
+        for b in [toggleMenuBar, toggleTerminal, toggleRing, viewPrompt, viewCode] { addSubview(b) }
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layout() {
+        super.layout()
+        let s = screen
+        guard s.width > 1, s.height > 1 else { return }
+        let size: CGFloat = 22, gap: CGFloat = 4
+        let items = [toggleMenuBar, toggleTerminal, toggleRing, viewPrompt, viewCode]
+        let total = CGFloat(items.count) * size + CGFloat(items.count - 1) * gap
+        var x = max(s.minX + 6, s.maxX - 8 - total)
+        let y = s.minY + 8
+        for b in items {
+            b.frame = NSRect(x: x, y: y, width: size, height: size)
+            x += size + gap
+        }
+    }
 
     // The six bar roles, resolved from the editor's own state: `palette roles`
     // for bar/pill/muted/label/accent/ring, with the rendered palette as the
@@ -5531,6 +5618,202 @@ final class PreviewPaneView: NSView {
         }
     }
 
+    // --- fake terminal + code editor ---------------------------------------
+
+    // `term view` shows the Starship-like prompt, `edit` shows the code sample;
+    // the terminal/code toolbar toggle shows the whole window.
+    var showPrompt = true
+    var showCode = true
+    private var selectedLanguage = 0
+    static let languages = ["C", "JS", "PY", "RS", "GO", "JAVA"]
+    private static let fileNames = ["fib.c", "fib.js", "fib.py", "fib.rs", "fib.go", "Fib.java"]
+
+    // The window floats over the desktop, stored normalised to the screen rect
+    // so it keeps its place when the pane is resized.
+    private var termOrigin = NSPoint(x: 0.17, y: 0.19)
+    private var termSize = NSSize(width: 0.66, height: 0.62)
+    private var dragging = false
+    private var dragStart = NSPoint.zero
+    private var dragOrigin = NSPoint.zero
+    private var tabRects: [NSRect] = []
+
+    private var screen: NSRect {
+        screenRect(in: bounds.insetBy(dx: 14, dy: 12)).integral
+    }
+
+    private func terminalRect(in screen: NSRect) -> NSRect {
+        NSRect(x: screen.minX + screen.width * termOrigin.x,
+               y: screen.minY + screen.height * termOrigin.y,
+               width: screen.width * termSize.width,
+               height: screen.height * termSize.height)
+    }
+
+    // The plan's fixed syntax map: keyword 5, string 2, comment 8, function 4,
+    // number 3, type 6, plain 7.
+    private enum Token { case kw, str, cmt, fn, num, type, fg }
+
+    private func tokenColor(_ t: Token, _ c: [NSColor]) -> NSColor {
+        func pick(_ i: Int) -> NSColor { c.indices.contains(i) ? c[i] : .white }
+        switch t {
+        case .fg: return pick(7)
+        case .kw: return pick(5)
+        case .str: return pick(2)
+        case .cmt: return pick(8)
+        case .fn: return pick(4)
+        case .num: return pick(3)
+        case .type: return pick(6)
+        }
+    }
+
+    // One small function per language, so the same roles light up in each.
+    private func sample(_ lang: Int) -> [[(String, Token)]] {
+        let name = (String(Self.fileNames[max(0, min(Self.fileNames.count - 1, lang))].dropLast(2)), Token.fn)
+        switch lang {
+        case 0: return [ // C
+            [("// fibonacci", .cmt)],
+            [("char *", .type), ("name", .fg), (" = ", .fg), ("\"" + name.0 + "\"", .str), (";", .fg)],
+            [("int ", .type), (name.0, .fn), ("(int n) {", .fg)],
+            [("  ", .fg), ("if", .kw), (" (n < ", .fg), ("2", .num), (") ", .fg), ("return", .kw), (" n;", .fg)],
+            [("  ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(n-", .fg), ("1", .num),
+             (") + ", .fg), (name.0, .fn), ("(n-", .fg), ("2", .num), (");", .fg)],
+            [("}", .fg)],
+        ]
+        case 1: return [ // JavaScript
+            [("// fibonacci", .cmt)],
+            [("const", .kw), (" name = ", .fg), ("\"" + name.0 + "\"", .str), (";", .fg)],
+            [("function", .kw), (" ", .fg), (name.0, .fn), ("(n) {", .fg)],
+            [("  ", .fg), ("if", .kw), (" (n < ", .fg), ("2", .num), (") ", .fg), ("return", .kw), (" n;", .fg)],
+            [("  ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(n - ", .fg), ("1", .num),
+             (") + ", .fg), (name.0, .fn), ("(n - ", .fg), ("2", .num), (");", .fg)],
+            [("}", .fg)],
+        ]
+        case 2: return [ // Python
+            [("# fibonacci", .cmt)],
+            [("name", .fg), (" = ", .fg), ("\"" + name.0 + "\"", .str)],
+            [("def", .kw), (" ", .fg), (name.0, .fn), ("(n):", .fg)],
+            [("    ", .fg), ("if", .kw), (" n < ", .fg), ("2", .num), (": ", .fg), ("return", .kw), (" n", .fg)],
+            [("    ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(n - ", .fg), ("1", .num),
+             (") + ", .fg), (name.0, .fn), ("(n - ", .fg), ("2", .num), (")", .fg)],
+        ]
+        case 3: return [ // Rust
+            [("// fibonacci", .cmt)],
+            [("let", .kw), (" name = ", .fg), ("\"" + name.0 + "\"", .str), (";", .fg)],
+            [("fn", .kw), (" ", .fg), (name.0, .fn), ("(n: ", .fg), ("u32", .type), (") -> ", .fg), ("u32", .type), (" {", .fg)],
+            [("    ", .fg), ("if", .kw), (" n < ", .fg), ("2", .num), (" { n } ", .fg), ("else", .kw), (" {", .fg)],
+            [("        ", .fg), (name.0, .fn), ("(n - ", .fg), ("1", .num),
+             (") + ", .fg), (name.0, .fn), ("(n - ", .fg), ("2", .num), (")", .fg)],
+            [("    }", .fg)],
+        ]
+        case 4: return [ // Go
+            [("// fibonacci", .cmt)],
+            [("name", .fg), (" := ", .fg), ("\"" + name.0 + "\"", .str)],
+            [("func", .kw), (" ", .fg), (name.0, .fn), ("(n ", .fg), ("int", .type), (") ", .fg), ("int", .type), (" {", .fg)],
+            [("    ", .fg), ("if", .kw), (" n < ", .fg), ("2", .num), (" { ", .fg), ("return", .kw), (" n }", .fg)],
+            [("    ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(n-", .fg), ("1", .num),
+             (") + ", .fg), (name.0, .fn), ("(n-", .fg), ("2", .num), (")", .fg)],
+            [("}", .fg)],
+        ]
+        default: return [ // Java
+            [("// fibonacci", .cmt)],
+            [("String", .type), (" name = ", .fg), ("\"" + name.0 + "\"", .str), (";", .fg)],
+            [("int ", .type), (name.0, .fn), ("(int n) {", .fg)],
+            [("    ", .fg), ("if", .kw), (" (n < ", .fg), ("2", .num), (") ", .fg), ("return", .kw), (" n;", .fg)],
+            [("    ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(n-", .fg), ("1", .num),
+             (") + ", .fg), (name.0, .fn), ("(n-", .fg), ("2", .num), (");", .fg)],
+            [("}", .fg)],
+        ]
+        }
+    }
+
+    private func drawTerminal(in screen: NSRect) {
+        let r = resolvedRoles()
+        guard let model else { return }
+        let colors = model.finalColors.count == 16 ? model.finalColors : model.baseColors
+        let cols = (0..<16).map { i in
+            colors.indices.contains(i) ? nsColor(fromHex: colors[i]) : NSColor.black
+        }
+        let termBG = cols[0]
+        let rect = terminalRect(in: screen)
+
+        // the focus ring, outside the window, in the ring role
+        if showRing {
+            let ring = NSBezierPath(roundedRect: rect.insetBy(dx: -3, dy: -3), xRadius: 10, yRadius: 10)
+            r.ring.setStroke()
+            ring.lineWidth = 2.5
+            ring.stroke()
+        }
+
+        // the window: Ghostty's 0.85 background, so the wallpaper shows through
+        // exactly as it does on the desktop
+        let body = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+        termBG.withAlphaComponent(0.85).setFill()
+        body.fill()
+        cols[8].withAlphaComponent(0.6).setStroke()
+        body.lineWidth = 1
+        body.stroke()
+
+        let font = nerdFont("Regular", 11)
+        let bold = nerdFont("Bold", 11)
+        let tabFont = nerdFont("Bold", 10)
+        let lineH: CGFloat = 14
+        let pad: CGFloat = 10
+        let titleH: CGFloat = 18
+
+        // title bar: traffic lights and the file name
+        let dots = [cols[1], cols[3], cols[2]]
+        for (i, dc) in dots.enumerated() {
+            let cx = rect.minX + 12 + CGFloat(i) * 13
+            dc.setFill()
+            NSBezierPath(ovalIn: NSRect(x: cx - 4, y: rect.maxY - titleH / 2 - 4,
+                                        width: 8, height: 8)).fill()
+        }
+        drawBaseline(Self.fileNames[selectedLanguage], bold, r.label,
+                     x: rect.minX + 56, baseline: rect.maxY - titleH / 2 - bold.capHeight / 2)
+
+        var y = rect.maxY - titleH - pad
+        func drawLine(_ segs: [(String, NSColor)]) {
+            var cx = rect.minX + pad
+            for (s, c) in segs {
+                drawBaseline(s, font, c, x: cx, baseline: y - font.ascender)
+                cx += advance(s, font)
+            }
+            y -= lineH
+        }
+
+        // the Starship-like prompt
+        if showPrompt {
+            drawLine([("\u{f0ab} ", cols[2]), ("~/Projects/omacosy", cols[4]),
+                      (" ", cols[7]), ("\u{e0b0} main", cols[3])])
+            drawLine([("\u{f0da} ", cols[2]), ("bat ", cols[7]),
+                      (Self.fileNames[selectedLanguage], cols[7])])
+            drawLine([("# syntax preview, live from the palette", cols[8])])
+            y -= 4
+        }
+
+        // the code sample, with short language tabs
+        if showCode {
+            tabRects.removeAll()
+            var tx = rect.minX + pad
+            for (i, label) in Self.languages.enumerated() {
+                let w = advance(label, tabFont) + 12
+                let tab = NSRect(x: tx, y: y - 15, width: w, height: 16)
+                tabRects.append(tab)
+                if i == selectedLanguage {
+                    r.accent.setFill()
+                    NSBezierPath(roundedRect: tab.insetBy(dx: 1, dy: 0), xRadius: 3, yRadius: 3).fill()
+                    drawGlyph(label, tabFont, termBG, in: tab)
+                } else {
+                    drawGlyph(label, tabFont, r.muted, in: tab)
+                }
+                tx += w
+            }
+            y -= 22
+            for line in sample(selectedLanguage) {
+                drawLine(line.map { ($0.0, tokenColor($0.1, cols)) })
+            }
+        }
+    }
+
     private var cachePath = ""
     private var cacheSide = 0
     private var cacheImage: CGImage?
@@ -5555,7 +5838,7 @@ final class PreviewPaneView: NSView {
         NSBezierPath(rect: bounds).fill()
 
         let path = model?.imagePath ?? ""
-        let screen = screenRect(in: bounds.insetBy(dx: 14, dy: 12)).integral
+        let screen = self.screen
         if screen.width > 1, screen.height > 1, !path.isEmpty {
             ensureImage(path: path, screen: screen)
             if cachePath == path, let cg = cacheImage {
@@ -5578,12 +5861,45 @@ final class PreviewPaneView: NSView {
         if showMenuBar, screen.width > 1, screen.height > 1 {
             drawMenuBar(in: screen)
         }
+        if showTerminal, screen.width > 1, screen.height > 1 {
+            drawTerminal(in: screen)
+        }
         // the frame line, drawn on every edge so the panel reads as a frame
         palette.muted.withAlphaComponent(0.3).setStroke()
         let border = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
         border.lineWidth = 1
         border.stroke()
     }
+
+    override var acceptsFirstResponder: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if showTerminal, showCode, let i = tabRects.firstIndex(where: { $0.contains(p) }) {
+            if i != selectedLanguage { selectedLanguage = i; needsDisplay = true }
+            return
+        }
+        if showTerminal, terminalRect(in: screen).contains(p) {
+            dragging = true
+            dragStart = p
+            dragOrigin = termOrigin
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard dragging else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        let s = screen
+        guard s.width > 0, s.height > 0 else { return }
+        termOrigin.x = min(max(0, dragOrigin.x + (p.x - dragStart.x) / s.width),
+                           max(0, 1 - termSize.width))
+        termOrigin.y = min(max(0, dragOrigin.y + (p.y - dragStart.y) / s.height),
+                           max(0, 1 - termSize.height))
+        needsDisplay = true
+    }
+
+    override func mouseUp(with event: NSEvent) { dragging = false }
 
     // Decode only when the picture or the needed pixel size changes; a size
     // change reuses the same path and re-decodes to the new cap.
