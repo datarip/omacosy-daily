@@ -2997,7 +2997,7 @@ final class EditorColumnView: NSView {
 // stays the record and this drives the fast in-process CoreImage preview only.
 // Keep the field names, the JSON keys and the strength rule in step with
 // helper/themecore.swift's ImageFilters.
-struct EditorFilters {
+struct EditorFilters: Equatable {
     var blur = 0.0
     var brightness = 100.0
     var contrast = 100.0
@@ -3132,6 +3132,136 @@ struct EditorFilters {
             && exposure == 0 && vignette == 0 && sharpen == 0 && grain == 0 && shadows == 0
             && highlights == 0 && temperature == 0 && tint == 0 && rotate == 0 && !flipH && !flipV
             && cropX == 0 && cropY == 0 && cropW == 1 && cropH == 1 && resizeW == 0 && resizeH == 0
+    }
+
+    // Keyed access to the numeric fields the editor's sliders drive.
+    subscript(key: String) -> Double {
+        get {
+            switch key {
+            case "blur": return blur
+            case "brightness": return brightness
+            case "contrast": return contrast
+            case "saturation": return saturation
+            case "hueRotate": return hueRotate
+            case "sepia": return sepia
+            case "invert": return invert
+            case "exposure": return exposure
+            case "vignette": return vignette
+            case "sharpen": return sharpen
+            case "grain": return grain
+            case "shadows": return shadows
+            case "highlights": return highlights
+            case "temperature": return temperature
+            case "tint": return tint
+            case "paletteStrength": return paletteStrength
+            case "cropX": return cropX
+            case "cropY": return cropY
+            case "cropW": return cropW
+            case "cropH": return cropH
+            case "resizeW": return resizeW
+            case "resizeH": return resizeH
+            case "rotate": return rotate
+            case "strength": return strength
+            default: return 0
+            }
+        }
+        set {
+            switch key {
+            case "blur": blur = newValue
+            case "brightness": brightness = newValue
+            case "contrast": contrast = newValue
+            case "saturation": saturation = newValue
+            case "hueRotate": hueRotate = newValue
+            case "sepia": sepia = newValue
+            case "invert": invert = newValue
+            case "exposure": exposure = newValue
+            case "vignette": vignette = newValue
+            case "sharpen": sharpen = newValue
+            case "grain": grain = newValue
+            case "shadows": shadows = newValue
+            case "highlights": highlights = newValue
+            case "temperature": temperature = newValue
+            case "tint": tint = newValue
+            case "paletteStrength": paletteStrength = newValue
+            case "cropX": cropX = newValue
+            case "cropY": cropY = newValue
+            case "cropW": cropW = newValue
+            case "cropH": cropH = newValue
+            case "resizeW": resizeW = newValue
+            case "resizeH": resizeH = newValue
+            case "rotate": rotate = newValue
+            case "strength": strength = newValue
+            default: break
+            }
+        }
+    }
+}
+
+// The wallpaper editor's own state and history, deliberately separate from
+// PaletteModel's palette history: an edit to the picture conditions the
+// colours it later yields, so the two histories never interleave. Mirrors
+// Aether, whose filter history is local to the editor while the palette
+// history is a separate global store. 50 deep; a burst on one control inside
+// a second folds into a single step.
+final class EditorState {
+    private(set) var filters = EditorFilters()
+    var onChange: (() -> Void)?
+
+    private var undoStack: [EditorFilters] = []
+    private var redoStack: [EditorFilters] = []
+    private var lastPushKey: String?
+    private var lastPushTime = Date.distantPast
+
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+    var hasEdits: Bool { filters != EditorFilters() }
+
+    // One door for a change. Rejected when the value did not move; otherwise
+    // it folds (same control, within 1 s) and reports every accepted change.
+    func edit(_ key: String?, _ mutate: (inout EditorFilters) -> Void) {
+        var next = filters
+        mutate(&next)
+        guard next != filters else { return }
+        pushHistory(key)
+        filters = next
+        onChange?()
+    }
+
+    func set(_ key: String, _ value: Double) { edit(key) { $0[key] = value } }
+
+    func reset() {
+        guard hasEdits else { return }
+        pushHistory(nil)
+        filters = EditorFilters()
+        onChange?()
+    }
+
+    func undo() {
+        guard let entry = undoStack.popLast() else { return }
+        redoStack.append(filters)
+        filters = entry
+        onChange?()
+    }
+
+    func redo() {
+        guard let entry = redoStack.popLast() else { return }
+        undoStack.append(filters)
+        filters = entry
+        onChange?()
+    }
+
+    private func pushHistory(_ key: String?) {
+        let now = Date()
+        if let key, key == lastPushKey, now.timeIntervalSince(lastPushTime) < 1.0 {
+            // same control inside a second: one step, already pushed
+            lastPushTime = now
+            return
+        }
+        undoStack.append(filters)
+        if undoStack.count > 50 { undoStack.removeFirst(undoStack.count - 50) }
+        redoStack.removeAll()
+        lastPushKey = key
+        lastPushTime = now
     }
 }
 
@@ -11090,6 +11220,58 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-do
         }
         exit(rc)
     } catch { print("download failed: \(error.localizedDescription)"); exit(1) }
+}
+
+// Headless checks for EditorState's history and folding. Like
+// --wallhaven-selftest, it runs before the window opens.
+func editorStateSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    let s = EditorState()
+    check("starts neutral", s.filters.isIdentity && !s.canUndo && !s.canRedo && !s.hasEdits)
+    s.set("brightness", 100)
+    check("a no-op edit is rejected", !s.canUndo && !s.hasEdits)
+
+    s.set("brightness", 110)
+    check("an edit is remembered", s.filters["brightness"] == 110 && s.canUndo && s.hasEdits)
+    s.set("brightness", 120)
+    check("a same-control burst folds", s.filters["brightness"] == 120)
+    s.undo()
+    check("undo returns before the burst", s.filters["brightness"] == 100 && !s.canUndo)
+    s.redo()
+    check("redo returns the burst result", s.filters["brightness"] == 120 && s.canUndo && !s.canRedo)
+
+    s.set("contrast", 110)
+    s.set("contrast", 130)
+    s.undo()
+    check("a burst on a new control is one step",
+          s.filters["contrast"] == 100 && s.filters["brightness"] == 120)
+    s.undo()
+    check("undo keeps walking", s.filters.isIdentity && !s.canUndo)
+    s.redo()
+    check("redo walks forward again", s.filters["brightness"] == 120)
+
+    s.reset()
+    check("reset clears the recipe", s.filters.isIdentity)
+    s.undo()
+    check("reset is one undoable step", s.filters["brightness"] == 120)
+    s.set("strength", 80)
+    s.set("strength", 60)
+    check("strength folds too", s.filters["strength"] == 60)
+    s.undo()
+    check("strength burst undoes in one",
+          s.filters["strength"] == 100 && s.filters["brightness"] == 120)
+
+    print(failures == 0 ? "editor-state selftest: all checks passed"
+                        : "editor-state selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--image-editor-selftest") {
+    exit(editorStateSelfTest() == 0 ? 0 : 1)
 }
 
 // The wallpaper editor's preview door (Phase 8b): render the in-process
