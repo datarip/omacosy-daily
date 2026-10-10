@@ -3011,40 +3011,10 @@ enum EditorFilterFields {
     ]
 }
 
-// The picture, drawn aspect-fit inside the editor column. A press-and-hold
-// compare (the original) is wired in a later session; the hook is here.
-final class EditorPreviewView: NSView {
-    var image: CGImage? { didSet { needsDisplay = true } }
-    var original: CGImage?
-    var showingOriginal = false { didSet { needsDisplay = true } }
-    private let inset: CGFloat = 8
-
-    override func draw(_ dirtyRect: NSRect) {
-        let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
-                               xRadius: 6, yRadius: 6)
-        palette.itemBG.withAlphaComponent(0.35).setFill()
-        box.fill()
-        palette.muted.withAlphaComponent(0.3).setStroke()
-        box.lineWidth = 1
-        box.stroke()
-        guard let img = showingOriginal ? (original ?? image) : image else {
-            drawMidCenter("No picture", nerdFont("Regular", 11), palette.muted,
-                          centerX: bounds.midX, midTop: bounds.midY, height: bounds.height)
-            return
-        }
-        let avail = bounds.insetBy(dx: inset, dy: inset)
-        let iw = CGFloat(img.width), ih = CGFloat(img.height)
-        let scale = min(avail.width / iw, avail.height / ih)
-        let w = iw * scale, h = ih * scale
-        let rect = NSRect(x: avail.midX - w / 2, y: avail.midY - h / 2, width: w, height: h)
-        NSGraphicsContext.current?.cgContext.draw(img, in: rect)
-    }
-}
-
-// The scrollable editor body: the preview, then the four slider groups, then
-// the picture history's own Undo / Redo / Reset (separate from the palette's).
+// The scrollable editor body: the four slider groups, then the picture
+// history's own Undo / Redo / Reset (separate from the palette's). The edited
+// picture is shown in the central pane, not here.
 final class EditorPanelDoc: NSView {
-    let preview = EditorPreviewView()
     let undoButton = ButtonView()
     let redoButton = ButtonView()
     let resetButton = ButtonView()
@@ -3056,13 +3026,11 @@ final class EditorPanelDoc: NSView {
 
     private let insetL: CGFloat = 12
     private let insetR: CGFloat = 12
-    static let previewH: CGFloat = 150
     private var groupTops: [(title: String, top: CGFloat)] = []
     private var buttonsTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        addSubview(preview)
         for group in EditorFilterFields.groups {
             for f in group.fields {
                 let s = AdjustmentSliderView(spec: f)
@@ -3093,7 +3061,6 @@ final class EditorPanelDoc: NSView {
 
     func contentHeight() -> CGFloat {
         var h: CGFloat = 10
-        h += EditorPanelDoc.previewH + 16
         for group in EditorFilterFields.groups {
             h += 30
             h += CGFloat(group.fields.count) * AdjustmentSliderView.rowHeight
@@ -3110,8 +3077,6 @@ final class EditorPanelDoc: NSView {
     override func layout() {
         super.layout()
         var top: CGFloat = 10
-        preview.frame = rect(top: top, h: EditorPanelDoc.previewH, x: insetL, w: contentW)
-        top += EditorPanelDoc.previewH + 16
         groupTops.removeAll()
         var i = 0
         for group in EditorFilterFields.groups {
@@ -3141,22 +3106,16 @@ final class EditorPanelDoc: NSView {
     }
 }
 
-// The right column: the scroll host for EditorPanelDoc, with its own preview
-// render. The source is decoded once; each edit re-runs the CoreImage chain at
-// <=960 px on a 75 ms debounce, so a slider drag stays smooth.
+// The right column: controls only. The edited picture is shown in the central
+// pane; this column scrolls EditorPanelDoc (the four slider groups and the
+// picture history's Undo / Redo / Reset).
 final class EditorColumnView: NSView {
     var state: EditorState? { didSet { wire() } }
-    var imagePath = "" { didSet { if imagePath != oldValue { loadSource() } } }
 
     let doc = EditorPanelDoc()
     private let scroll = NSScrollView()
     private let scroller = CustomScroller()
-    private var base: CIImage?
-    private var baseGeneration = 0
-    private var renderWork: DispatchWorkItem?
     private let scrollerW: CGFloat = 8
-
-    static let previewMaxSize = 960
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -3188,7 +3147,8 @@ final class EditorColumnView: NSView {
 
     private func wire() {
         guard let state else { return }
-        state.onChange = { [weak self] in self?.schedulePreview() }
+        // EditorState.onChange belongs to the editor (dirty + the central
+        // preview); the column only drives its own controls.
         doc.onSlider = { [weak state] key, value in state?.set(key, value) }
         doc.onUndo = { [weak state] in state?.undo() }
         doc.onRedo = { [weak state] in state?.redo() }
@@ -3196,51 +3156,11 @@ final class EditorColumnView: NSView {
         syncFromState()
     }
 
-    private func syncFromState() {
+    // Redraws the slider thumbs from the state; the editor calls this after an
+    // undo, redo or reset so the controls follow the history.
+    func syncFromState() {
         guard let state else { return }
         for s in doc.sliders { s.setValue(state.filters[s.spec.key], notify: false) }
-    }
-
-    func loadSource() {
-        guard !imagePath.isEmpty else {
-            base = nil
-            doc.preview.image = nil
-            doc.preview.original = nil
-            return
-        }
-        baseGeneration += 1
-        let gen = baseGeneration
-        let path = imagePath
-        DispatchQueue.global().async { [weak self] in
-            let cg = editorSourceCGImage(URL(fileURLWithPath: path))
-            let ci = cg.map { CIImage(cgImage: $0) }
-            DispatchQueue.main.async {
-                guard let self, self.baseGeneration == gen else { return }
-                self.base = ci
-                self.doc.preview.original = cg
-                self.schedulePreview()
-            }
-        }
-    }
-
-    private func schedulePreview() {
-        renderWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.renderPreview() }
-        renderWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.075, execute: work)
-    }
-
-    private func renderPreview() {
-        guard let base else { return }
-        let filters = state?.filters ?? EditorFilters()
-        let gen = baseGeneration
-        DispatchQueue.global().async { [weak self] in
-            let cg = editorPreviewRender(base, raw: filters, maxSize: EditorColumnView.previewMaxSize)
-            DispatchQueue.main.async {
-                guard let self, self.baseGeneration == gen else { return }
-                self.doc.preview.image = cg
-            }
-        }
     }
 
     override func layout() {
@@ -7126,6 +7046,10 @@ final class PreviewPaneView: NSView {
     var toolOpacity: Int?
     var globalOpacity: Int?
     var terminalOpacity: Int?
+    // The edited render while a wallpaper filter is active; nil shows the raw
+    // picture. The central pane is the edit surface, so the picture behind the
+    // mock desktop reflects the edit.
+    var editedImage: CGImage? { didSet { needsDisplay = true } }
 
     private let toggleMenuBar = PreviewIconButton()
     private let toggleTerminal = PreviewIconButton()
@@ -7529,6 +7453,21 @@ final class PreviewPaneView: NSView {
                       width: w, height: h)
     }
 
+    // The picture, aspect-filled into the screen rect. The edited render draws
+    // here in place of the raw decode while a filter is active.
+    private func drawWallpaper(_ cg: CGImage, in screen: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: screen).addClip()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        let iw = CGFloat(cg.width), ih = CGFloat(cg.height)
+        let s = max(screen.width / iw, screen.height / ih)
+        let dw = iw * s, dh = ih * s
+        NSImage(cgImage: cg, size: NSSize(width: iw, height: ih))
+            .draw(in: NSRect(x: screen.midX - dw / 2, y: screen.midY - dh / 2,
+                             width: dw, height: dh))
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         // A dark frame fills the whole column (Aether's preview panel) and the
         // wallpaper is centred inside it, so the picture never floats on the
@@ -7540,17 +7479,10 @@ final class PreviewPaneView: NSView {
         let screen = self.screen
         if screen.width > 1, screen.height > 1, !path.isEmpty {
             ensureImage(path: path, screen: screen)
-            if cachePath == path, let cg = cacheImage {
-                NSGraphicsContext.saveGraphicsState()
-                NSBezierPath(rect: screen).addClip()
-                NSGraphicsContext.current?.imageInterpolation = .high
-                let iw = CGFloat(cg.width), ih = CGFloat(cg.height)
-                let s = max(screen.width / iw, screen.height / ih)
-                let dw = iw * s, dh = ih * s
-                NSImage(cgImage: cg, size: NSSize(width: iw, height: ih))
-                    .draw(in: NSRect(x: screen.midX - dw / 2, y: screen.midY - dh / 2,
-                                     width: dw, height: dh))
-                NSGraphicsContext.restoreGraphicsState()
+            if let cg = editedImage {
+                drawWallpaper(cg, in: screen)
+            } else if cachePath == path, let cg = cacheImage {
+                drawWallpaper(cg, in: screen)
             } else {
                 drawMidCenter("Loading preview…", nerdFont("Regular", 11), palette.muted,
                               centerX: screen.midX, midTop: bounds.height - screen.midY,
@@ -7774,6 +7706,12 @@ final class PaletteCanvasView: NSView {
         needsDisplay = true
         preview.needsDisplay = true
         markTree(doc)
+    }
+
+    // The wallpaper editor hands its edited render here; nil shows the raw
+    // picture again. The central pane is the edit surface.
+    func setEditedImage(_ cg: CGImage?) {
+        preview.editedImage = cg
     }
 
     private func markTree(_ view: NSView) {
@@ -8206,14 +8144,16 @@ final class ThemeEditor {
             guard let self else { return }
             self.dirty = true
             self.root.dirty = true
+            self.root.wallpaperEditor.syncFromState()
+            self.refreshEditedPreview()
         }
         model.onUpdate = { [weak self] in
             guard let self else { return }
             self.root.paletteBuilder.sync()
             self.root.paletteCanvas.sync()
-            // the picture the previews and palette see (an edition's media or
-            // a draft's wallpaper); the panel decodes it and renders the edit
-            self.root.wallpaperEditor.imagePath = self.model.imagePath
+            // the picture the central pane and the palette see (an edition's
+            // media or a draft's wallpaper); decode it once for the edits
+            self.loadEditBase()
         }
         model.onUserEdit = { [weak self] in
             guard let self else { return }
@@ -8236,6 +8176,59 @@ final class ThemeEditor {
         // the system resets its level to floating on every show — below the
         // editor card. Watch it and lift it back above on every appearance.
         Self.installPanelWatch()
+    }
+
+    // --- the central pane's edited preview ------------------------------
+
+    private var editBasePath = ""
+    private var editBase: CIImage?
+    private var editBaseGeneration = 0
+    private var editRenderWork: DispatchWorkItem?
+
+    // Decode the subject's picture once when it changes; the central pane
+    // draws the edited render on top of it while a filter is active.
+    private func loadEditBase() {
+        let path = model.imagePath
+        guard path != editBasePath else { return }
+        editBasePath = path
+        editBaseGeneration += 1
+        let gen = editBaseGeneration
+        editBase = nil
+        root.paletteCanvas.setEditedImage(nil)
+        guard !path.isEmpty else { return }
+        DispatchQueue.global().async { [weak self] in
+            let cg = editorSourceCGImage(URL(fileURLWithPath: path))
+            let ci = cg.map { CIImage(cgImage: $0) }
+            DispatchQueue.main.async {
+                guard let self, self.editBaseGeneration == gen else { return }
+                self.editBase = ci
+                self.refreshEditedPreview()
+            }
+        }
+    }
+
+    // 75 ms debounce, the same as the panel's own controls.
+    private func refreshEditedPreview() {
+        editRenderWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.renderEditedPreview() }
+        editRenderWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.075, execute: work)
+    }
+
+    private func renderEditedPreview() {
+        let filters = editorState.filters
+        guard let base = editBase, !filters.isIdentity else {
+            root.paletteCanvas.setEditedImage(nil)
+            return
+        }
+        let gen = editBaseGeneration
+        DispatchQueue.global().async { [weak self] in
+            let cg = editorPreviewRender(base, raw: filters, maxSize: 1280)
+            DispatchQueue.main.async {
+                guard let self, self.editBaseGeneration == gen else { return }
+                self.root.paletteCanvas.setEditedImage(cg)
+            }
+        }
     }
 
     private static var panelWatchInstalled = false
@@ -11630,51 +11623,6 @@ if CommandLine.arguments.count >= 5, CommandLine.arguments[1] == "--image-previe
 }
 
 let app = NSApplication.shared
-// Off-screen render of the wallpaper editor for layout review, like
-// --wallhaven-shot. Never ordered front. An optional 4th argument is a recipe
-// JSON, so a specific edit can be captured.
-if CommandLine.arguments.count >= 4, CommandLine.arguments[1] == "--editor-shot" {
-    app.setActivationPolicy(.accessory)
-    let src = CommandLine.arguments[2]
-    let out = CommandLine.arguments[3]
-    let root = ThemeEditorView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700))
-    root.wantsLayer = true
-    let win = NSWindow(contentRect: root.frame, styleMask: .borderless,
-                       backing: .buffered, defer: false)
-    win.contentView = root
-    let state = EditorState()
-    root.wallpaperEditor.state = state
-    root.wallpaperEditor.imagePath = src
-    if CommandLine.arguments.count >= 5, let obj = editorFiltersJSON(CommandLine.arguments[4]) {
-        let f = EditorFilters(json: obj)
-        state.edit(nil) { $0 = f }
-    }
-    root.layoutSubtreeIfNeeded()
-    let deadline = Date().addingTimeInterval(2.5)
-    while Date() < deadline {
-        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
-        root.layoutSubtreeIfNeeded()
-    }
-    let w = Int(root.bounds.width), h = Int(root.bounds.height)
-    guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
-                              bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
-    if let layer = root.layer {
-        layer.render(in: ctx)
-    } else {
-        let nsctx = NSGraphicsContext(cgContext: ctx, flipped: false)
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = nsctx
-        root.displayIgnoringOpacity(root.bounds, in: nsctx)
-        NSGraphicsContext.restoreGraphicsState()
-    }
-    guard let cg = ctx.makeImage() else { exit(1) }
-    let rep = NSBitmapImageRep(cgImage: cg)
-    guard let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
-    try? png.write(to: URL(fileURLWithPath: out))
-    print("wrote \(out)")
-    exit(0)
-}
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wh-icon-debug" {
     let size = NSSize(width: 420, height: 120)
     let img = NSImage(size: size)
