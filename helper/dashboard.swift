@@ -2855,6 +2855,33 @@ final class PaletteModel {
         ("selection_foreground", "Selection Text"),
         ("selection_background", "Selection"),
     ]
+
+    // Aether's pinnable semantic shades: derived from the palette, but a
+    // click-to-edit stores an explicit value that survives palette swaps
+    // until "Reset N pinned".
+    static let shadeKeys: [(key: String, label: String)] = [
+        ("darker_bg", "Darker Background"),
+        ("dark_bg", "Dark Background"),
+        ("lighter_bg", "Lighter Background"),
+        ("dark_fg", "Dark Foreground"),
+        ("light_fg", "Light Foreground"),
+        ("bright_fg", "Bright Foreground"),
+        ("orange", "Orange"),
+        ("brown", "Brown"),
+    ]
+
+    func pinnedShadeCount() -> Int {
+        Self.shadeKeys.filter { extendedHex[$0.key] != nil }.count
+    }
+
+    func clearShadePins() {
+        guard pinnedShadeCount() > 0 else { return }
+        pushHistory(nil)
+        for slot in Self.shadeKeys { extendedHex.removeValue(forKey: slot.key) }
+        edited()
+        update()
+        refreshRender()
+    }
     static let ansiLabels = ["BG", "RD", "GR", "YL", "BL", "MG", "CY", "FG",
                              "DIM", "RD+", "GR+", "YL+", "BL+", "MG+", "CY+", "FG+"]
 
@@ -2909,8 +2936,8 @@ final class PaletteModel {
         baseColors = (pal["colors"] as? [String]) ?? []
         extendedHex = defaultExtended(baseColors, accent: nil)
         if let ext = pal["extended"] as? [String: Any] {
-            for slot in Self.extendedKeys {
-                if let v = ext[slot.key] as? String { extendedHex[slot.key] = v }
+            for (key, raw) in ext {
+                if let v = raw as? String { extendedHex[key] = v }
             }
         }
         method = (pal["method"] as? String) ?? "magic"
@@ -3222,7 +3249,8 @@ final class PaletteModel {
     func editTargetHex() -> String? {
         switch editTarget {
         case .color(let i): return baseColors.indices.contains(i) ? baseColors[i] : nil
-        case .extended(let key): return extendedHex[key]
+        case .extended(let key):
+            return extendedHex[key] ?? shades[key] ?? defaultExtended(baseColors, accent: nil)[key]
         case nil: return nil
         }
     }
@@ -3233,7 +3261,9 @@ final class PaletteModel {
             guard Self.ansiLabels.indices.contains(i) else { return "Colour \(i)" }
             return "\(Self.ansiLabels[i]) (ANSI \(i))"
         case .extended(let key):
-            return Self.extendedKeys.first { $0.key == key }?.label ?? key
+            if let slot = Self.extendedKeys.first(where: { $0.key == key }) { return slot.label }
+            if let slot = Self.shadeKeys.first(where: { $0.key == key }) { return slot.label }
+            return key
         case nil:
             return "No colour selected"
         }
@@ -3292,9 +3322,10 @@ final class PaletteModel {
     // Aether's setPalette: a whole-palette swap re-derives the four UI
     // extended colours from the new palette, so the desktop accent follows
     // the Method you pick instead of staying at the seed's wallpaper colour.
+    // Pinned shades are the user's own choice and survive the swap.
     private func resetExtended(_ colors: [String]) {
         guard colors.count == 16 else { return }
-        extendedHex = defaultExtended(colors, accent: nil)
+        for (k, v) in defaultExtended(colors, accent: nil) { extendedHex[k] = v }
     }
 
     private func parseCurve(_ raw: Any?) -> [[Double]] {
@@ -4317,7 +4348,15 @@ final class SemanticSectionView: NSView {
     struct Card {
         let label: String
         let hex: String
-        let key: String?   // non-nil: an editable extended colour
+        let key: String?   // non-nil: an editable extended colour (UI or shade)
+        let slot: Int?     // non-nil: an ANSI slot this card edits
+
+        init(label: String, hex: String, key: String? = nil, slot: Int? = nil) {
+            self.label = label
+            self.hex = hex
+            self.key = key
+            self.slot = slot
+        }
     }
     struct Group {
         let title: String
@@ -4389,6 +4428,14 @@ final class SemanticSectionView: NSView {
                         path.lineWidth = 2
                         path.stroke()
                     }
+                } else if let slot = card.slot {
+                    var isEditing = false
+                    if case .color(let i) = editTarget, i == slot { isEditing = true }
+                    if isEditing {
+                        palette.accent.setStroke()
+                        path.lineWidth = 2
+                        path.stroke()
+                    }
                 }
             }
         }
@@ -4397,11 +4444,10 @@ final class SemanticSectionView: NSView {
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         for (group, _, rects) in boxes() {
-            for (j, card) in group.cards.enumerated() where card.key != nil {
-                if rects[j].contains(p) {
-                    onEdit?(.extended(card.key!))
-                    return
-                }
+            for (j, card) in group.cards.enumerated() {
+                guard rects[j].contains(p) else { continue }
+                if let key = card.key { onEdit?(.extended(key)); return }
+                if let slot = card.slot { onEdit?(.color(slot)); return }
             }
         }
     }
@@ -5370,28 +5416,29 @@ final class PaletteCanvasView: NSView {
 
         func base(_ i: Int) -> String { finals.indices.contains(i) ? finals[i] : "#000000" }
         func shade(_ key: String, _ fallback: Int) -> String {
-            model.shades[key] ?? base(fallback)
+            // a pinned shade shows its pin; otherwise the derived value
+            model.extendedHex[key] ?? model.shades[key] ?? base(fallback)
         }
         func ext(_ key: String) -> String {
             model.finalExtended[key] ?? model.extendedHex[key] ?? "#000000"
         }
         doc.semantic.groups = [
             SemanticSectionView.Group(title: "Background", cards: [
-                .init(label: "Darker", hex: shade("darker_bg", 0), key: nil),
-                .init(label: "Dark", hex: shade("dark_bg", 0), key: nil),
-                .init(label: "Base", hex: base(0), key: nil),
-                .init(label: "Lighter", hex: shade("lighter_bg", 0), key: nil),
+                .init(label: "Darker", hex: shade("darker_bg", 0), key: "darker_bg"),
+                .init(label: "Dark", hex: shade("dark_bg", 0), key: "dark_bg"),
+                .init(label: "Base", hex: base(0), slot: 0),
+                .init(label: "Lighter", hex: shade("lighter_bg", 0), key: "lighter_bg"),
             ]),
             SemanticSectionView.Group(title: "Foreground", cards: [
-                .init(label: "Muted", hex: base(8), key: nil),
-                .init(label: "Dark", hex: shade("dark_fg", 7), key: nil),
-                .init(label: "Base", hex: base(7), key: nil),
-                .init(label: "Light", hex: shade("light_fg", 7), key: nil),
-                .init(label: "Bright", hex: shade("bright_fg", 7), key: nil),
+                .init(label: "Muted", hex: base(8), slot: 8),
+                .init(label: "Dark", hex: shade("dark_fg", 7), key: "dark_fg"),
+                .init(label: "Base", hex: base(7), slot: 7),
+                .init(label: "Light", hex: shade("light_fg", 7), key: "light_fg"),
+                .init(label: "Bright", hex: shade("bright_fg", 7), key: "bright_fg"),
             ]),
             SemanticSectionView.Group(title: "Accent", cards: [
-                .init(label: "Orange", hex: shade("orange", 1), key: nil),
-                .init(label: "Brown", hex: shade("brown", 1), key: nil),
+                .init(label: "Orange", hex: shade("orange", 1), key: "orange"),
+                .init(label: "Brown", hex: shade("brown", 1), key: "brown"),
             ]),
             SemanticSectionView.Group(title: "UI", cards: [
                 .init(label: "Accent", hex: ext("accent"), key: "accent"),
@@ -5401,6 +5448,8 @@ final class PaletteCanvasView: NSView {
             ]),
         ]
         doc.semantic.editTarget = model.editTarget
+        doc.pinnedCount = model.pinnedShadeCount()
+        doc.onResetPins = { [weak self] in self?.model?.clearShadePins() }
         doc.needsDisplay = true
         needsDisplay = true
     }
@@ -5448,6 +5497,8 @@ final class PaletteCanvasDoc: NSView {
     let colorCards = PaletteCardsView()
     let semantic = SemanticSectionView()
     var methodText = ""
+    var pinnedCount = 0 { didSet { needsDisplay = true } }
+    var onResetPins: (() -> Void)?
 
     private let insetL: CGFloat = 16
     private let insetR: CGFloat = 14
@@ -5505,9 +5556,29 @@ final class PaletteCanvasDoc: NSView {
                     x: insetL, top: hintTop, height: h)
         drawTopLeft("Semantic Colors", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: semanticTop, height: h)
-        drawTopLeft("Derived automatically.",
+        drawTopLeft("Derived automatically. Click a shade to pin it.",
                     nerdFont("Regular", 10), palette.muted,
                     x: insetL + 118, top: semanticTop + 1, height: h)
+        if pinnedCount > 0, let r = resetRect {
+            drawTopLeft("Reset \(pinnedCount) pinned",
+                        nerdFont("Regular", 11), .systemRed,
+                        x: r.minX + 3, top: semanticTop + 1, height: h)
+        }
+    }
+
+    // Aether's "Reset N pinned": clears every pinned shade back to auto.
+    private var resetRect: NSRect? {
+        guard pinnedCount > 0 else { return nil }
+        let w = advance("Reset \(pinnedCount) pinned", nerdFont("Regular", 11)) + 8
+        return NSRect(x: bounds.width - insetR - w, y: bounds.height - semanticTop - 18,
+                      width: w, height: 18)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if let r = resetRect, r.contains(p) {
+            onResetPins?()
+        }
     }
 }
 
@@ -5963,10 +6034,10 @@ final class ThemeEditor {
     }
 
     private func palettePayload() -> [String: Any] {
+        // pins only: the four UI keys are always seeded, shade keys ride
+        // along exactly when the user pinned them
         var extended: [String: String] = [:]
-        for slot in PaletteModel.extendedKeys {
-            extended[slot.key] = model.extendedHex[slot.key] ?? "#000000"
-        }
+        for (key, hex) in model.extendedHex { extended[key] = hex }
         return ["method": model.method, "mode": model.mode, "resolvedMode": model.resolvedMode,
                 "colors": model.baseColors, "extended": extended,
                 "locked": model.locked.sorted(),
