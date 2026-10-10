@@ -8090,7 +8090,7 @@ func whThumbsDir() -> String { HOME + "/.local/state/omacosy/studio/wallhaven-th
 struct WHConfig {
     var categories = "111"
     var purity = "100"
-    var sorting = "date_added"
+    var sorting = "relevance"
     var order = "desc"
     var atleast = ""
     var colors = ""
@@ -8172,6 +8172,13 @@ final class WHBookmarkStore {
 
     func all() -> [WHBookmark] {
         byID.values.sorted { $0.savedAt > $1.savedAt }
+    }
+
+    // Off-screen review only: seed in memory, never written to disk.
+    func debugInsert(_ w: WHWallpaper) {
+        byID[w.id] = WHBookmark(id: w.id, imageURL: w.imageURL, pageURL: w.pageURL,
+                                thumbURL: w.smallThumbURL, resolution: w.resolution,
+                                fileSize: w.fileSize, savedAt: Date().timeIntervalSince1970)
     }
 
     private func load() {
@@ -8584,15 +8591,42 @@ func whDrawThumb(_ img: NSImage, in rect: NSRect, radius: CGFloat) {    NSGraphi
     NSGraphicsContext.restoreGraphicsState()
 }
 
-// Centres a glyph on its typographic width and cap height. Unlike
-// CTLineGetImageBounds this needs no live context matrix, so it never
-// silently draws nothing inside the dashboard's layer-backed views.
+// The ink box of a string, from the font's own glyph metrics and advances.
+// Context-independent, so it is reliable where CTLineGetImageBounds is not.
+func whGlyphInkBounds(_ s: String, _ font: NSFont) -> CGRect {
+    let ct = font as CTFont
+    let chars = Array(s.utf16)
+    guard !chars.isEmpty else { return .zero }
+    var glyphs = [CGGlyph](repeating: 0, count: chars.count)
+    guard CTFontGetGlyphsForCharacters(ct, chars, &glyphs, chars.count) else { return .zero }
+    var rects = [CGRect](repeating: .zero, count: glyphs.count)
+    CTFontGetBoundingRectsForGlyphs(ct, .default, glyphs, &rects, glyphs.count)
+    var advances = [CGSize](repeating: .zero, count: glyphs.count)
+    CTFontGetAdvancesForGlyphs(ct, .default, glyphs, &advances, glyphs.count)
+    var union = CGRect.null
+    var x: CGFloat = 0
+    for i in 0..<glyphs.count {
+        var r = rects[i]
+        r.origin.x += x
+        union = union.union(r)
+        x += advances[i].width
+    }
+    return union.isNull ? .zero : union
+}
+
+// Centres a glyph on the centre of its ink, so a square (checkbox), an arrow
+// (download) and a bookmark all sit identically inside their pill.
 func whDrawGlyphCentered(_ glyph: String, in r: NSRect, color: NSColor, size: CGFloat) {
     guard let ctx = NSGraphicsContext.current?.cgContext else { return }
     let font = nerdFont("Regular", size)
     let line = textLine(glyph, font, color)
-    let w = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-    ctx.textPosition = CGPoint(x: r.midX - w / 2, y: r.midY - font.capHeight / 2)
+    let ink = whGlyphInkBounds(glyph, font)
+    if ink.width > 0 && ink.height > 0 {
+        ctx.textPosition = CGPoint(x: r.midX - ink.midX, y: r.midY - ink.midY)
+    } else {
+        let w = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+        ctx.textPosition = CGPoint(x: r.midX - w / 2, y: r.midY - font.capHeight / 2)
+    }
     CTLineDraw(line, ctx)
 }
 
@@ -8640,6 +8674,30 @@ final class WHDropdown: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+// The download notification. It occupies the same slot as the bulk
+// Download button (the button's place), so a finished download reads as
+// the button turning into "Added" rather than a pill floating over the
+// cards. Green on success, red on failure.
+final class WHToast: NSView {
+    var message = "" { didSet { isHidden = message.isEmpty; needsDisplay = true } }
+    var ok = true { didSet { needsDisplay = true } }
+
+    override var isFlipped: Bool { false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard !message.isEmpty else { return }
+        let r = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let p = NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6)
+        (ok ? NSColor.systemGreen : NSColor.systemRed).withAlphaComponent(0.95).setFill()
+        p.fill()
+        let f = nerdFont("Bold", 11)
+        drawMidCenter(truncate(message, f, bounds.width - 16), f, .white,
+                      centerX: bounds.midX, midTop: bounds.height / 2, height: bounds.height)
+    }
+
+    override var acceptsFirstResponder: Bool { false }
+}
+
 // The scrolling results grid. Cards are laid out in columns whose width
 // follows the S/M/L size; thumbnails are cached on disk and loaded only for
 // the visible rows. All per-card state is keyed by wallhaven id, so a
@@ -8653,13 +8711,16 @@ final class WHGridView: NSView {
     var downloaded: Set<String> = []
     var downloading: [String: Double] = [:]
     var cellFrames: [Int: NSRect] = [:]
+    // the scroll viewport height; the document is padded to at least this so
+    // a short list (e.g. a handful of bookmarks) top-aligns instead of
+    // sitting at the bottom of a non-flipped scroll view
+    var minContentHeight: CGFloat = 0
     var hovered: Int? = nil
     private var hoverTracking: NSTrackingArea?
 
     var onBookmark: ((WHWallpaper) -> Void)?
     var onDownload: ((WHWallpaper) -> Void)?
     var onToggleSelect: ((WHWallpaper) -> Void)?
-    var onOpen: ((WHWallpaper) -> Void)?
 
     private let gap: CGFloat = 12
     private let metaH: CGFloat = 24
@@ -8686,7 +8747,7 @@ final class WHGridView: NSView {
         let thumbH = (cellW * 9 / 16).rounded()
         let cellH = thumbH + metaH
         let rows = max(1, (cards.count + cols - 1) / cols)
-        let contentH = topPad + CGFloat(rows) * (cellH + gap) - gap + bottomPad
+        let contentH = max(topPad + CGFloat(rows) * (cellH + gap) - gap + bottomPad, minContentHeight)
         var top = topPad
         var i = 0
         for _ in 0..<rows {
@@ -8724,51 +8785,58 @@ final class WHGridView: NSView {
 
     private func drawCard(_ i: Int, _ f: NSRect) {
         let w = cards[i]
-        let bg = NSBezierPath(roundedRect: f.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
-        palette.itemBG.withAlphaComponent(0.35).setFill(); bg.fill()
-        (hovered == i ? palette.accent : palette.muted.withAlphaComponent(0.3)).setStroke()
-        bg.lineWidth = 1; bg.stroke()
-
         let t = thumbRect(f)
+        let corner = min(windowCornerRadius(7), min(t.width, t.height) / 2)
+        let thumb = NSBezierPath(roundedRect: t, xRadius: corner, yRadius: corner)
+
+        // thumbnail: rounded, with the same ring treatment as the Themes tab
         if let img = thumbs[w.id] {
-            whDrawThumb(img, in: t, radius: 0)
+            whDrawThumb(img, in: t, radius: corner)
         } else {
+            NSGraphicsContext.current?.saveGraphicsState()
+            thumb.setClip()
             palette.itemBG.withAlphaComponent(0.5).setFill()
-            NSBezierPath(roundedRect: t, xRadius: 0, yRadius: 0).fill()
-            drawMidCenter("…", nerdFont("Regular", 14), palette.muted,
+            t.fill()
+            NSGraphicsContext.current?.restoreGraphicsState()
+            drawMidCenter("loading…", nerdFont("Regular", 10), palette.muted,
                           centerX: t.midX, midTop: bounds.height - t.midY, height: bounds.height)
         }
 
-        // meta row: resolution on the left, size on the right
-        let rf = nerdFont("Regular", 11)
-        let metaMid = bounds.height - (f.minY + metaH / 2)
-        drawMidLeft(w.resolution.replacingOccurrences(of: "x", with: " × "), rf, palette.label,
-                    x: f.minX + 2, midTop: metaMid, height: bounds.height)
-        let sizeText = whFormatSize(w.fileSize)
-        drawMidLeft(sizeText, rf, palette.muted,
-                    x: f.maxX - advance(sizeText, rf) - 2, midTop: metaMid, height: bounds.height)
-
         let isDownloaded = downloaded.contains(w.id)
         let isSelected = selected.contains(w.id)
+        let isBookmarked = isBookmarkedCard(i)
         let showOverlays = (hovered == i) || isSelected || downloading[w.id] != nil
 
+        // top and bottom scrim, a gradient like Aether's: dark under the top
+        // icons, clear across the middle, dark under the bottom one
         if showOverlays {
-            // top + bottom translucent bands so the icons read on any picture
-            NSColor.black.withAlphaComponent(0.34).setFill()
-            NSRect(x: t.minX, y: t.maxY - 30, width: t.width, height: 30).fill()
-            NSColor.black.withAlphaComponent(0.42).setFill()
-            NSRect(x: t.minX, y: t.minY, width: t.width, height: 30).fill()
-            let r = hotRects(f)
-            iconButton("\u{f02e}", in: r.bookmark, tint: isBookmarkedCard(i) ? palette.accent : .white, fillAlpha: 0.5)
+            NSGraphicsContext.current?.saveGraphicsState()
+            thumb.setClip()
+            if let grad = NSGradient(colorsAndLocations:
+                (NSColor.black.withAlphaComponent(0.42), 0.0),
+                (NSColor.black.withAlphaComponent(0.0), 0.34),
+                (NSColor.black.withAlphaComponent(0.0), 0.48),
+                (NSColor.black.withAlphaComponent(0.72), 1.0)) {
+                grad.draw(in: t, angle: 270)
+            }
+            NSGraphicsContext.current?.restoreGraphicsState()
+        }
+
+        // bookmark: always shown once bookmarked, in the theme accent
+        let r = hotRects(f)
+        if isBookmarked || showOverlays {
+            iconButton("\u{f02e}", in: r.bookmark, tint: isBookmarked ? palette.accent : .white, fillAlpha: 0.5)
+        }
+        if showOverlays {
             iconButton(isSelected ? "\u{f00c}" : "\u{f096}", in: r.check,
                        tint: isSelected ? palette.accent : .white, fillAlpha: 0.5)
             iconButton("\u{f019}", in: r.download, tint: .white, fillAlpha: 0.5)
         }
 
         if isDownloaded {
-            let label = "  Saved"
-            let f = nerdFont("Bold", 10)
-            let pillW = advance(label, f) + 30
+            let label = "  Added"
+            let bf = nerdFont("Bold", 10)
+            let pillW = advance(label, bf) + 30
             let pill = NSRect(x: t.minX + iconPad, y: t.minY + iconPad, width: pillW, height: 22)
             let p = NSBezierPath(roundedRect: pill, xRadius: 6, yRadius: 6)
             NSColor.systemGreen.withAlphaComponent(0.9).setFill(); p.fill()
@@ -8785,6 +8853,26 @@ final class WHGridView: NSView {
             let fp = NSBezierPath(roundedRect: fill, xRadius: 2.5, yRadius: 2.5)
             NSColor.systemGreen.setFill(); fp.fill()
         }
+
+        // the ring: 1px muted, 2px accent on hover or selection
+        thumb.lineWidth = 1
+        palette.muted.withAlphaComponent(0.3).setStroke()
+        thumb.stroke()
+        if hovered == i || isSelected {
+            thumb.lineWidth = 2
+            palette.accent.setStroke()
+            thumb.stroke()
+        }
+
+        // resolution + size below the thumbnail, dissociated from the ring
+        let rf = nerdFont("Regular", 11)
+        let metaMid = bounds.height - (f.minY + metaH / 2)
+        drawMidLeft(w.resolution.replacingOccurrences(of: "x", with: " × "), rf,
+                    isSelected ? palette.accent : palette.label,
+                    x: f.minX + 2, midTop: metaMid, height: bounds.height)
+        let sizeText = whFormatSize(w.fileSize)
+        drawMidLeft(sizeText, rf, palette.muted,
+                    x: f.maxX - advance(sizeText, rf) - 2, midTop: metaMid, height: bounds.height)
     }
 
     // The grid does not own the bookmark store, so the tab injects the
@@ -8828,7 +8916,8 @@ final class WHGridView: NSView {
             if r.check.contains(p) { onToggleSelect?(w); return }
             if r.bookmark.contains(p) { onBookmark?(w); return }
             if r.download.contains(p) { onDownload?(w); return }
-            onOpen?(w)
+            // a click on the picture itself does nothing: applying a wallpaper
+            // happens from the Themes tab, and no link leaves the dashboard
             return
         }
     }
@@ -8864,6 +8953,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     private let moreButton = ButtonView()
     private let sizeSeg = SegmentedView()
     private let bulkButton = ButtonView()
+    private let toastView = WHToast()
 
     private let client = WallhavenClient()
     private var config = WHConfig.load()
@@ -8873,6 +8963,10 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     private var selected: Set<String> = []
     private var downloadedIDs: Set<String> = []
     private var activeDownloads: [String: WHFileDownloader] = [:]
+    private var bulkIDs: Set<String> = []
+    private var bulkTotal = 0
+    private var bulkDoneCount = 0
+    private var bulkFailedCount = 0
 
     private var searchToken = 0
     private var isSearching = false
@@ -8883,9 +8977,8 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     private var searchError = ""
     private var hasAPIKey = false
     private var statusMessage = ""
-    private var toast = ""
-    private var toastOK = true
     private var toastToken = 0
+    private var pendingTopScroll = false
     private var didInitialSearch = false
 
     // header geometry
@@ -8938,7 +9031,16 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         if grid.cards.count > 1 { grid.selected.insert(grid.cards[1].id) }
         if grid.cards.count > 2 { grid.downloaded.insert(grid.cards[2].id) }
         if grid.cards.count > 3 { grid.downloading[grid.cards[3].id] = 0.55 }
+        if grid.cards.count > 4 { grid.bookmarkedIDs.insert(grid.cards[4].id) }
         grid.needsDisplay = true
+    }
+
+    func debugToast() { showNotice("Added", ok: true) }
+
+    func debugShowBookmarks(_ n: Int) {
+        for w in grid.cards.prefix(n) { bookmarks.debugInsert(w) }
+        config.bookmarkedOnly = true
+        rebuildGrid()
     }
 
     override init(frame frameRect: NSRect) {
@@ -8950,6 +9052,8 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         scroll.documentView = grid
         addSubview(scroller)
         scroller.scrollView = scroll
+        addSubview(toastView)
+        toastView.isHidden = true
 
         field.isBezeled = false
         field.drawsBackground = true
@@ -9030,8 +9134,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
             guard let self else { return }
             self.config.cardSize = ["small", "medium", "large"][i]
             self.config.save()
-            self.grid.cardSize = self.config.cardSize
-            self.layoutGrid()
+            self.applyCardSize()
         }
         addSubview(sizeSeg)
 
@@ -9046,7 +9149,6 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         grid.onBookmark = { [weak self] w in self?.toggleBookmark(w) }
         grid.onDownload = { [weak self] w in self?.download(w) }
         grid.onToggleSelect = { [weak self] w in self?.toggleSelected(w) }
-        grid.onOpen = { [weak self] w in self?.openPage(w) }
 
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(visibleChanged),
@@ -9092,16 +9194,11 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         return p
     }
 
-    // 400 ms debounce: one search once typing pauses, never one per keystroke
+    // No search on keystroke: a wallhaven session shares one small rate
+    // budget, so the query only goes out on the Search button or Return.
+    // The delegate is kept only to clear the drawn placeholder on typing.
     func controlTextDidChange(_ obj: Notification) {
         needsDisplay = true
-        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(debouncedSearch), object: nil)
-        perform(#selector(debouncedSearch), with: nil, afterDelay: 0.4)
-    }
-
-    @objc private func debouncedSearch() {
-        if config.bookmarkedOnly { return }
-        beginSearch(reset: true)
     }
 
     @objc private func searchNowAction() { beginSearch(reset: true) }
@@ -9198,17 +9295,24 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         grid.bookmarkedIDs = Set(bookmarks.all().map { $0.id })
         let avail = bounds.width - scrollerW - 14
         if avail > 40 { grid.frame.size.width = avail }
+        grid.minContentHeight = scroll.contentSize.height
         grid.rebuild()
+        if config.bookmarkedOnly { pendingTopScroll = true }
         needsLayout = true
         needsDisplay = true
     }
 
-    private func layoutGrid() {
-        let avail = bounds.width - scrollerW - 14
-        if avail > 40, abs(grid.frame.width - avail) > 0.5 {
-            grid.frame.size.width = avail
-            grid.rebuild()
-        }
+    // S/M/L: rebuild in place, keeping the view inside the new bounds
+    private func applyCardSize() {
+        grid.cardSize = config.cardSize
+        grid.minContentHeight = scroll.contentSize.height
+        grid.rebuild()
+        let maxY = max(0, grid.frame.height - scroll.contentSize.height)
+        let y = min(scroll.contentView.bounds.origin.y, maxY)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        scroller.refresh()
+        grid.needsDisplay = true
     }
 
     // --- actions ---
@@ -9246,39 +9350,86 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
             guard let self else { return }
             self.activeDownloads[w.id] = nil
             self.grid.downloading[w.id] = nil
-            switch res {
-            case .success:
+            let ok: Bool
+            if case .success = res {
+                ok = true
                 self.downloadedIDs.insert(w.id)
                 self.grid.downloaded = self.downloadedIDs
-                self.showToast("Saved \(w.id)", ok: true)
-            case .failure(let e):
-                self.showToast("Failed \(w.id): \(e.localizedDescription)", ok: false)
+            } else {
+                ok = false
             }
             self.grid.needsDisplay = true
+
+            let isBulk = self.bulkTotal > 0 && self.bulkIDs.contains(w.id)
+            if isBulk {
+                self.bulkIDs.remove(w.id)
+                self.bulkDoneCount += 1
+                if !ok { self.bulkFailedCount += 1 }
+                if self.bulkIDs.isEmpty {
+                    self.finishBulk()
+                } else {
+                    // dynamic: the running added count in the button's slot
+                    self.showNotice("Added \(self.bulkDoneCount)/\(self.bulkTotal)",
+                                    ok: true, sticky: true)
+                }
+            } else if ok {
+                self.showNotice("Added", ok: true)
+            } else if case .failure(let e) = res {
+                self.showNotice("Failed — \(e.localizedDescription)", ok: false)
+            }
         })
         activeDownloads[w.id] = d
     }
 
+    // Bulk download: the button slot becomes a running "Added k/N" and then
+    // a final "Added N" (or "Added N, M failed"), after which the selection
+    // clears and the button is gone.
     private func downloadSelected() {
-        let items = grid.cards.filter { selected.contains($0.id) }
+        let items = grid.cards.filter {
+            selected.contains($0.id) && !downloadedIDs.contains($0.id) && activeDownloads[$0.id] == nil
+        }
+        bulkIDs = Set(items.map { $0.id })
+        bulkTotal = items.count
+        bulkDoneCount = 0
+        bulkFailedCount = 0
+        if bulkIDs.isEmpty { clearSelection(); return }
+        showNotice("Added 0/\(bulkTotal)", ok: true, sticky: true)
         for w in items { download(w) }
     }
 
-    private func openPage(_ w: WHWallpaper) {
-        guard let u = URL(string: w.pageURL), (try? validateWHURL(w.pageURL)) != nil else { return }
-        NSWorkspace.shared.open(u)
+    private func finishBulk() {
+        let failed = bulkFailedCount
+        let added = bulkDoneCount - failed
+        bulkTotal = 0
+        clearSelection()
+        if failed == 0 {
+            showNotice("Added \(added)", ok: true)
+        } else {
+            showNotice("Added \(added), \(failed) failed", ok: false)
+        }
     }
 
-    private func showToast(_ msg: String, ok: Bool) {
-        toast = msg
-        toastOK = ok
+    private func clearSelection() {
+        selected.removeAll()
+        grid.selected = selected
+        updateBulkButton()
+        grid.needsDisplay = true
+        needsDisplay = true
+    }
+
+    // A sticky notice stays until replaced (its message updates in place);
+    // a normal one clears itself after a moment.
+    private func showNotice(_ msg: String, ok: Bool, sticky: Bool = false) {
         toastToken += 1
         let token = toastToken
-        needsDisplay = true
+        toastView.ok = ok
+        toastView.message = msg
+        if !msg.isEmpty { bulkButton.isHidden = true }
+        guard !sticky else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak self] in
             guard let self, self.toastToken == token else { return }
-            self.toast = ""
-            self.needsDisplay = true
+            self.toastView.message = ""
+            self.updateBulkButton()
         }
     }
 
@@ -9393,10 +9544,23 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         scroll.frame = NSRect(x: 0, y: 16, width: max(0, W - scrollerW - 14), height: scrollH)
         scroller.frame = NSRect(x: W - scrollerW, y: 16, width: scrollerW, height: scrollH)
         scroller.refresh()
+        // the notification shares the bulk button's slot in the header
+        toastView.frame = frameFor(top: row3Top, x: 138, w: 200, h: row3H)
+
         let gridW = scroll.contentSize.width
         if gridW > 0, abs(grid.frame.width - gridW) > 0.5 {
             grid.frame.size.width = gridW
             grid.rebuild()
+        }
+        // keep the short-list padding in step with the viewport
+        let clipH = scroll.contentSize.height
+        if clipH > 0, abs(grid.minContentHeight - clipH) > 0.5 {
+            grid.minContentHeight = clipH
+            grid.rebuild()
+        }
+        if pendingTopScroll {
+            pendingTopScroll = false
+            scrollToTop()
         }
         grid.loadVisible(scroll.documentVisibleRect)
         needsDisplay = true
@@ -9467,17 +9631,6 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
             drawMidLeft(countText, f, ink,
                         x: moreButton.frame.minX - 12 - advance(countText, f),
                         midTop: row3Top + row3H / 2, height: bounds.height)
-        }
-
-        // toast
-        if !toast.isEmpty {
-            let f = nerdFont("Bold", 11)
-            let w = advance(toast, f) + 24
-            let r = NSRect(x: bounds.midX - w / 2, y: 2, width: w, height: 24)
-            let p = NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6)
-            (toastOK ? NSColor.systemGreen : NSColor.systemRed).withAlphaComponent(0.92).setFill()
-            p.fill()
-            drawMidCenter(toast, f, .white, centerX: r.midX, midTop: bounds.height - r.midY, height: bounds.height)
         }
     }
 
@@ -10030,6 +10183,27 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-do
 }
 
 let app = NSApplication.shared
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wh-icon-debug" {
+    let size = NSSize(width: 420, height: 120)
+    let img = NSImage(size: size)
+    img.lockFocus()
+    NSColor.black.setFill(); NSRect(origin: .zero, size: size).fill()
+    let glyphs = ["\u{f02e}", "\u{f096}", "\u{f00c}", "\u{f019}"]
+    for (i, g) in glyphs.enumerated() {
+        let box = NSRect(x: 10 + CGFloat(i) * 100, y: 15, width: 90, height: 90)
+        let p = NSBezierPath(roundedRect: box, xRadius: 12, yRadius: 12)
+        NSColor(white: 0.1, alpha: 1).setFill(); p.fill()
+        NSColor.white.withAlphaComponent(0.2).setStroke(); p.lineWidth = 2; p.stroke()
+        whDrawGlyphCentered(g, in: box, color: .white, size: 48)
+    }
+    img.unlockFocus()
+    if let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+       let png = rep.representation(using: .png, properties: [:]) {
+        try? png.write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+        print("wrote \(CommandLine.arguments[2])")
+    }
+    exit(0)
+}
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-shot" {
     // Off-screen render of the Wallpapers tab for layout review. Never
     // ordered front, so it cannot steal focus from a running dashboard.
@@ -10056,6 +10230,14 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-sh
     if CommandLine.arguments.contains("hover"),
        let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
         tab.debugPreviewStates()
+    }
+    if CommandLine.arguments.contains("toast"),
+       let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
+        tab.debugToast()
+    }
+    if CommandLine.arguments.contains("bookmarks"),
+       let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
+        tab.debugShowBookmarks(2)
     }
     root.layoutSubtreeIfNeeded()
     guard let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { exit(1) }
