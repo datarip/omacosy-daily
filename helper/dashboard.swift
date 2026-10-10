@@ -7879,16 +7879,1677 @@ protocol RefreshableTab: AnyObject {
 extension OptionsTabView: RefreshableTab {}
 extension WorkspacesTabView: RefreshableTab {}
 extension ThemesTabView: RefreshableTab {}
+// --- wallhaven (Phase 7) ---------------------------------------------------
+//
+// The wallhaven.cc browsing logic, ported from Aether's internal/wallhaven
+// package (github.com/omacom/aether, MIT) but kept in this file: install.sh
+// builds one source file per binary, and the dashboard is the only caller.
+// Everything here is Foundation-only and offline-testable; the UI lives in
+// WallpapersTabView below.
+
+enum WHError: Error, LocalizedError {
+    case badURL(String)
+    case insecure
+    case privateHost
+    case http(Int)
+    case network(String)
+    case decode
+    case tooLarge
+    case rateLimited(Double?)
+    case noContent
+
+    var errorDescription: String? {
+        switch self {
+        case .badURL(let m): return "That URL is not usable (\(m))."
+        case .insecure: return "Only https:// links are allowed."
+        case .privateHost: return "That host is not public."
+        case .http(let c): return "Wallhaven answered \(c)."
+        case .network(let m): return "Network problem: \(m)"
+        case .decode: return "Wallhaven's reply could not be read."
+        case .tooLarge: return "The file is larger than the allowed limit."
+        case .rateLimited(let after):
+            if let a = after { return "Wallhaven is rate-limiting. Try again in \(Int(a))s." }
+            return "Wallhaven is rate-limiting. Try again shortly."
+        case .noContent: return "That link has no image."
+        }
+    }
+}
+
+// --- URL guard -------------------------------------------------------------
+
+// Rejects anything that is not a plain https link to a public host, so a
+// crafted wallhaven reply (or a redirect) can never make the dashboard
+// fetch http://, localhost, or a LAN address. This is the Swift port of
+// Aether's ValidateRemoteURL plus its blocked-prefix table.
+func whHost(_ raw: String) -> String? {
+    guard let u = URLComponents(string: raw), let host = u.host else { return nil }
+    var h = host.lowercased()
+    if h.hasPrefix("["), h.hasSuffix("]") { h = String(h.dropFirst().dropLast()) }
+    if h.hasSuffix(".") { h.removeLast() }
+    return h
+}
+
+func whParseIPv4(_ s: String) -> [UInt8]? {
+    let parts = s.split(separator: ".", omittingEmptySubsequences: false)
+    guard parts.count == 4 else { return nil }
+    var out: [UInt8] = []
+    for p in parts {
+        guard !p.isEmpty, p.count <= 3, p.allSatisfy({ $0.isNumber }),
+              let v = UInt8(p) else { return nil }
+        out.append(v)
+    }
+    return out
+}
+
+func whParseIPv6(_ s: String) -> [UInt8]? {
+    var addr = in6_addr()
+    guard s.withCString({ inet_pton(AF_INET6, $0, &addr) }) == 1 else { return nil }
+    return withUnsafeBytes(of: &addr) { Array($0) }
+}
+
+func whIPv4IsPublic(_ b: [UInt8]) -> Bool {
+    let (a, c, d) = (b[0], b[1], b[2])
+    if a == 0 || a == 10 || a == 127 { return false }                    // this-network, private, loopback
+    if a == 100 && (64...127).contains(c) { return false }               // CGNAT 100.64/10
+    if a == 169 && c == 254 { return false }                             // link-local
+    if a == 172 && (16...31).contains(c) { return false }                // private
+    if a == 192 && c == 168 { return false }                             // private
+    if a == 192 && c == 0 && (d == 0 || d == 2) { return false }         // 192.0.0/24, 192.0.2/24
+    if a == 198 && (c == 18 || c == 19) { return false }                 // benchmarking 198.18/15
+    if a == 198 && c == 51 && d == 100 { return false }                  // TEST-NET-2
+    if a == 203 && c == 0 && d == 113 { return false }                   // TEST-NET-3
+    if a >= 224 { return false }                                         // multicast + reserved
+    return true
+}
+
+func whIPv6IsPublic(_ b: [UInt8]) -> Bool {
+    if b.allSatisfy({ $0 == 0 }) { return false }                        // unspecified ::
+    if b[0..<15].allSatisfy({ $0 == 0 }) && b[15] == 1 { return false }  // loopback ::1
+    if (b[0] & 0xfe) == 0xfc { return false }                            // unique-local fc00::/7
+    if b[0] == 0xfe && (b[1] & 0xc0) == 0x80 { return false }            // link-local fe80::/10
+    if b[0] == 0xff { return false }                                     // multicast ff00::/8
+    if b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8 { return false } // docs 2001:db8::/32
+    return true
+}
+
+func validateWHURL(_ raw: String) throws {
+    guard let u = URLComponents(string: raw), let scheme = u.scheme?.lowercased() else {
+        throw WHError.badURL("invalid")
+    }
+    guard scheme == "https" else { throw WHError.insecure }
+    guard let g = whHost(raw), !g.isEmpty else { throw WHError.badURL("no host") }
+    if u.user != nil || u.password != nil { throw WHError.badURL("credentials are not allowed") }
+    if g == "localhost" || g.hasSuffix(".localhost") || g.hasSuffix(".local") ||
+       g.hasSuffix(".internal") || g == "home.arpa" || g.hasSuffix(".home.arpa") {
+        throw WHError.privateHost
+    }
+    if let v4 = whParseIPv4(g), !whIPv4IsPublic(v4) { throw WHError.privateHost }
+    if let v6 = whParseIPv6(g), !whIPv6IsPublic(v6) { throw WHError.privateHost }
+}
+
+// --- search types ----------------------------------------------------------
+
+struct WHParams {
+    var query = ""
+    var categories = "111"
+    var purity = "100"
+    var sorting = "date_added"
+    var order = "desc"
+    var page = 1
+    var atleast = ""
+    var colors = ""
+    var ratios = ""
+}
+
+struct WHWallpaper {
+    let id: String
+    let pageURL: String
+    let imageURL: String
+    let resolution: String
+    let fileSize: Int64
+    let category: String
+    let purity: String
+    let thumbs: [String: String]
+
+    init?(json: [String: Any]) {
+        guard let id = json["id"] as? String,
+              let path = json["path"] as? String, !path.isEmpty else { return nil }
+        self.id = id
+        self.imageURL = path
+        self.pageURL = json["url"] as? String ?? "https://wallhaven.cc/w/\(id)"
+        self.resolution = json["resolution"] as? String ?? ""
+        self.fileSize = (json["file_size"] as? NSNumber)?.int64Value ?? 0
+        self.category = json["category"] as? String ?? ""
+        self.purity = json["purity"] as? String ?? ""
+        self.thumbs = json["thumbs"] as? [String: String] ?? [:]
+    }
+
+    // The card shows the large thumb; the bookmark stores it so a restart
+    // can redraw the grid without a search.
+    var thumbURL: String { thumbs["large"] ?? thumbs["original"] ?? thumbs["small"] ?? "" }
+    var smallThumbURL: String { thumbs["small"] ?? thumbURL }
+}
+
+struct WHMeta {
+    var currentPage = 1
+    var lastPage = 0
+    var total = 0
+}
+
+struct WHResult {
+    var data: [WHWallpaper]
+    var meta: WHMeta
+}
+
+// --- filename sanitising ---------------------------------------------------
+
+// The image basename, made safe to write: reserved path characters dropped,
+// an extension forced, and a leading dot never allowed. A collision is
+// resolved by the caller with a -2 suffix.
+func whDownloadFilename(_ imageURL: String) -> String {
+    guard let u = URL(string: imageURL) else { return "wallhaven.jpg" }
+    let raw = (u.path as NSString).lastPathComponent
+    var safe = ""
+    for ch in raw.unicodeScalars {
+        let v = ch.value
+        if (48...57).contains(v) || (65...90).contains(v) || (97...122).contains(v) ||
+           ch == "." || ch == "_" || ch == "-" {
+            safe.unicodeScalars.append(ch)
+        } else {
+            safe.append("-")
+        }
+    }
+    while safe.hasPrefix(".") || safe.hasPrefix("-") { safe.removeFirst() }
+    if safe.isEmpty || !safe.contains(where: { $0.isLetter || $0.isNumber }) {
+        safe = "wallhaven.jpg"
+    }
+    if (safe as NSString).pathExtension.isEmpty { safe += ".jpg" }
+    return safe
+}
+
+// A free path in `dir` for `name`: the name itself, or name-2, name-3, …
+func whUniquePath(_ dir: String, _ name: String) -> String {
+    let fm = FileManager.default
+    let base = (name as NSString).deletingPathExtension
+    let ext = (name as NSString).pathExtension
+    var dest = dir + "/" + name
+    var n = 2
+    while fm.fileExists(atPath: dest) {
+        dest = dir + "/\(base)-\(n)" + (ext.isEmpty ? "" : ".\(ext)")
+        n += 1
+    }
+    return dest
+}
+
+// --- search preferences + bookmarks ----------------------------------------
+
+func whConfigPath() -> String { HOME + "/.config/omacosy/wallhaven.json" }
+func whBookmarksPath() -> String { HOME + "/.config/omacosy/wallpaper-bookmarks.json" }
+func whThumbsDir() -> String { HOME + "/.local/state/omacosy/studio/wallhaven-thumbs" }
+
+struct WHConfig {
+    var categories = "111"
+    var purity = "100"
+    var sorting = "date_added"
+    var order = "desc"
+    var atleast = ""
+    var colors = ""
+    var ratios = ""
+    var cardSize = "small"          // small | medium | large
+    var bookmarkedOnly = false
+
+    static func load() -> WHConfig {
+        var c = WHConfig()
+        guard let data = FileManager.default.contents(atPath: whConfigPath()),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return c }
+        if let v = obj["categories"] as? String, v.count == 3 { c.categories = v }
+        if let v = obj["purity"] as? String, v.count == 3 { c.purity = v }
+        if let v = obj["sorting"] as? String { c.sorting = v }
+        if let v = obj["order"] as? String { c.order = v }
+        if let v = obj["atleast"] as? String { c.atleast = v }
+        if let v = obj["colors"] as? String { c.colors = v }
+        if let v = obj["ratios"] as? String { c.ratios = v }
+        if let v = obj["cardSize"] as? String, ["small", "medium", "large"].contains(v) {
+            c.cardSize = v
+        }
+        if let v = obj["bookmarkedOnly"] as? Bool { c.bookmarkedOnly = v }
+        return c
+    }
+
+    func save() {
+        let obj: [String: Any] = ["categories": categories, "purity": purity,
+                                  "sorting": sorting, "order": order, "atleast": atleast,
+                                  "colors": colors, "ratios": ratios, "cardSize": cardSize,
+                                  "bookmarkedOnly": bookmarkedOnly]
+        guard let data = try? JSONSerialization.data(withJSONObject: obj,
+                                                     options: [.prettyPrinted, .sortedKeys])
+        else { return }
+        let dir = (whConfigPath() as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? data.write(to: URL(fileURLWithPath: whConfigPath()), options: .atomic)
+    }
+}
+
+struct WHBookmark {
+    let id: String
+    var imageURL: String
+    var pageURL: String
+    var thumbURL: String
+    var resolution: String
+    var fileSize: Int64
+    var savedAt: Double
+}
+
+// Bookmarks live in one small JSON array keyed by wallhaven id. Kept in
+// memory and rewritten atomically, so a restart shows a full grid from the
+// Bookmarked filter without any network call.
+final class WHBookmarkStore {
+    private var byID: [String: WHBookmark] = [:]
+    private let path: String
+
+    init(path: String = whBookmarksPath()) {
+        self.path = path
+        load()
+    }
+
+    func isBookmarked(_ id: String) -> Bool { byID[id] != nil }
+    var count: Int { byID.count }
+
+    @discardableResult
+    func toggle(_ w: WHWallpaper) -> Bool {
+        if byID[w.id] != nil {
+            byID[w.id] = nil
+            save()
+            return false
+        }
+        byID[w.id] = WHBookmark(id: w.id, imageURL: w.imageURL, pageURL: w.pageURL,
+                                thumbURL: w.smallThumbURL, resolution: w.resolution,
+                                fileSize: w.fileSize, savedAt: Date().timeIntervalSince1970)
+        save()
+        return true
+    }
+
+    func all() -> [WHBookmark] {
+        byID.values.sorted { $0.savedAt > $1.savedAt }
+    }
+
+    private func load() {
+        guard let data = FileManager.default.contents(atPath: path),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return }
+        for o in arr {
+            guard let id = o["id"] as? String else { continue }
+            byID[id] = WHBookmark(id: id,
+                                  imageURL: o["imageURL"] as? String ?? "",
+                                  pageURL: o["pageURL"] as? String ?? "",
+                                  thumbURL: o["thumbURL"] as? String ?? "",
+                                  resolution: o["resolution"] as? String ?? "",
+                                  fileSize: (o["fileSize"] as? NSNumber)?.int64Value ?? 0,
+                                  savedAt: (o["savedAt"] as? NSNumber)?.doubleValue ?? 0)
+        }
+    }
+
+    private func save() {
+        let arr: [[String: Any]] = byID.values.map {
+            ["id": $0.id, "imageURL": $0.imageURL, "pageURL": $0.pageURL,
+             "thumbURL": $0.thumbURL, "resolution": $0.resolution,
+             "fileSize": $0.fileSize, "savedAt": $0.savedAt]
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: arr,
+                                                     options: [.prettyPrinted, .sortedKeys])
+        else { return }
+        let dir = (path as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+}
+
+// --- HTTP client -----------------------------------------------------------
+
+final class WHRedirectGuard: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        if let s = request.url?.absoluteString, (try? validateWHURL(s)) != nil {
+            completionHandler(request)
+        } else {
+            completionHandler(nil)
+        }
+    }
+}
+
+// A small wallhaven.cc API client. Search and info hit api/v1 and are
+// rate-limited; downloads and thumbnails are validated but not throttled
+// (they are on the image CDN, not the API).
+final class WallhavenClient {
+    private let session: URLSession
+    private let lock = NSLock()
+    private var requestTimes: [Date] = []
+    private var lockoutUntil: Date?
+    private var backoff: TimeInterval = 0
+    private let baseURL = "https://wallhaven.cc/api/v1"
+    let anonymousPerMinute = 45
+    let keyedPerMinute = 90
+
+    var apiKey = "" {
+        didSet { apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    init() {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 30
+        cfg.timeoutIntervalForResource = 300
+        cfg.httpAdditionalHeaders = ["User-Agent": "Omacosy-Theme-Studio"]
+        session = URLSession(configuration: cfg, delegate: WHRedirectGuard(), delegateQueue: nil)
+    }
+
+    // Returns 0 when a slot is free (and records it), or the seconds to wait.
+    func reserveRequestSlot() -> TimeInterval {
+        lock.lock(); defer { lock.unlock() }
+        let now = Date()
+        if let until = lockoutUntil, until > now { return until.timeIntervalSince(now) }
+        requestTimes = requestTimes.filter { now.timeIntervalSince($0) < 60 }
+        let cap = apiKey.isEmpty ? anonymousPerMinute : keyedPerMinute
+        if requestTimes.count >= cap {
+            return max(60 - now.timeIntervalSince(requestTimes[0]), 0.05)
+        }
+        requestTimes.append(now)
+        return 0
+    }
+
+    private func throttle() {
+        while true {
+            let wait = reserveRequestSlot()
+            if wait <= 0 { return }
+            Thread.sleep(forTimeInterval: min(wait, 30))
+        }
+    }
+
+    private func noteRateLimit(retryAfter: Double?) {
+        lock.lock(); defer { lock.unlock() }
+        backoff = backoff == 0 ? 60 : min(backoff * 2, 900)
+        let wait = max(retryAfter ?? 0, backoff)
+        lockoutUntil = Date().addingTimeInterval(wait)
+    }
+
+    private func noteSuccess() {
+        lock.lock(); defer { lock.unlock() }
+        backoff = 0
+        lockoutUntil = nil
+    }
+
+    private func getJSON(_ urlString: String) throws -> [String: Any] {
+        try validateWHURL(urlString)
+        guard let url = URL(string: urlString) else { throw WHError.badURL("invalid") }
+        throttle()
+        let sem = DispatchSemaphore(value: 0)
+        var outcome: Result<[String: Any], Error> = .failure(WHError.network("no response"))
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 30
+        let task = session.dataTask(with: req) { data, response, error in
+            defer { sem.signal() }
+            if let error = error { outcome = .failure(WHError.network(error.localizedDescription)); return }
+            guard let http = response as? HTTPURLResponse else { outcome = .failure(WHError.network("no response")); return }
+            if http.statusCode == 429 {
+                let retry = http.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0) }
+                outcome = .failure(WHError.rateLimited(retry)); return
+            }
+            guard http.statusCode == 200 else { outcome = .failure(WHError.http(http.statusCode)); return }
+            guard let data = data else { outcome = .failure(WHError.noContent); return }
+            guard data.count <= (4 << 20) else { outcome = .failure(WHError.tooLarge); return }
+            do {
+                let obj = try JSONSerialization.jsonObject(with: data)
+                guard let dict = obj as? [String: Any] else { throw WHError.decode }
+                outcome = .success(dict)
+            } catch { outcome = .failure(WHError.decode) }
+        }
+        task.resume()
+        sem.wait()
+        switch outcome {
+        case .success(let d): noteSuccess(); return d
+        case .failure(let e):
+            if case WHError.rateLimited(let r) = e { noteRateLimit(retryAfter: r) }
+            throw e
+        }
+    }
+
+    private func searchURL(_ p: WHParams) -> String {
+        var comps = URLComponents(string: baseURL + "/search")!
+        var items: [URLQueryItem] = []
+        if !p.query.isEmpty { items.append(URLQueryItem(name: "q", value: p.query)) }
+        items.append(URLQueryItem(name: "categories", value: p.categories.isEmpty ? "111" : p.categories))
+        items.append(URLQueryItem(name: "purity", value: p.purity.isEmpty ? "100" : p.purity))
+        items.append(URLQueryItem(name: "sorting", value: p.sorting.isEmpty ? "date_added" : p.sorting))
+        items.append(URLQueryItem(name: "order", value: p.order.isEmpty ? "desc" : p.order))
+        items.append(URLQueryItem(name: "page", value: String(max(p.page, 1))))
+        if !p.atleast.isEmpty { items.append(URLQueryItem(name: "atleast", value: p.atleast)) }
+        if !p.colors.isEmpty { items.append(URLQueryItem(name: "colors", value: p.colors)) }
+        if !p.ratios.isEmpty { items.append(URLQueryItem(name: "ratios", value: p.ratios)) }
+        if !apiKey.isEmpty { items.append(URLQueryItem(name: "apikey", value: apiKey)) }
+        comps.queryItems = items
+        return comps.url!.absoluteString
+    }
+
+    func search(_ params: WHParams) throws -> WHResult {
+        let root = try getJSON(searchURL(params))
+        let data = (root["data"] as? [[String: Any]]) ?? []
+        let meta = root["meta"] as? [String: Any] ?? [:]
+        return WHResult(
+            data: data.compactMap { WHWallpaper(json: $0) },
+            meta: WHMeta(currentPage: (meta["current_page"] as? NSNumber)?.intValue ?? 1,
+                         lastPage: (meta["last_page"] as? NSNumber)?.intValue ?? 0,
+                         total: (meta["total"] as? NSNumber)?.intValue ?? 0))
+    }
+
+    // Fetches several consecutive pages at once and merges them, exactly as
+    // Aether does: page 0's failure aborts, later pages are skipped, and the
+    // pagination metadata is normalised to logical (multi-page) numbering.
+    func searchMultiPage(_ params: WHParams, numPages: Int) throws -> WHResult {
+        if numPages <= 1 { return try search(params) }
+        var results = [WHResult?](repeating: nil, count: numPages)
+        var firstError: Error?
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "wallhaven.multipage", attributes: .concurrent)
+        let gate = NSLock()
+        for i in 0..<numPages {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                var p = params
+                p.page = params.page + i
+                do {
+                    let r = try self.search(p)
+                    gate.lock(); results[i] = r; gate.unlock()
+                } catch {
+                    gate.lock(); if i == 0 { firstError = error }; gate.unlock()
+                }
+            }
+        }
+        group.wait()
+        if let e = firstError { throw e }
+        guard var merged = results[0] else { throw WHError.network("wallhaven search failed for first page") }
+        for i in 1..<numPages { if let r = results[i] { merged.data.append(contentsOf: r.data) } }
+        merged.meta.currentPage = (params.page - 1) / numPages + 1
+        merged.meta.lastPage = (merged.meta.lastPage + numPages - 1) / numPages
+        return merged
+    }
+
+    func info(_ id: String) throws -> WHWallpaper {
+        guard id.range(of: "^[A-Za-z0-9]+$", options: .regularExpression) != nil else {
+            throw WHError.badURL("bad id")
+        }
+        var url = baseURL + "/w/" + id
+        if !apiKey.isEmpty { url += "?apikey=" + (apiKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? apiKey) }
+        let root = try getJSON(url)
+        guard let d = root["data"] as? [String: Any], let w = WHWallpaper(json: d) else {
+            throw WHError.decode
+        }
+        return w
+    }
+}
+
+// Streams a remote file straight into its destination, writing a .part file
+// beside it and renaming on success. Every byte lands in the destination
+// directory; nothing is buffered whole in memory and no system temp file is
+// used. Reports progress 0…1 on the main queue.
+final class WHFileDownloader: NSObject, URLSessionDataDelegate {
+    private let destPath: String
+    private let partPath: String
+    private let maxBytes: Int64
+    private let onProgress: (Double) -> Void
+    private let completion: (Result<String, Error>) -> Void
+    private var handle: FileHandle?
+    private var received: Int64 = 0
+    private var expected: Int64 = -1
+    private var session: URLSession?
+    private var finished = false
+
+    init(destPath: String, maxBytes: Int64 = 50 << 20,
+         onProgress: @escaping (Double) -> Void,
+         completion: @escaping (Result<String, Error>) -> Void) {
+        self.destPath = destPath
+        self.partPath = destPath + ".part"
+        self.maxBytes = maxBytes
+        self.onProgress = onProgress
+        self.completion = completion
+    }
+
+    func start(_ urlString: String) {
+        do { try validateWHURL(urlString) } catch { finish(.failure(error)); return }
+        guard let url = URL(string: urlString) else { finish(.failure(WHError.badURL("invalid"))); return }
+        FileManager.default.createFile(atPath: partPath, contents: nil)
+        handle = FileHandle(forWritingAtPath: partPath)
+        guard handle != nil else { finish(.failure(WHError.network("cannot open the destination"))); return }
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 30
+        cfg.timeoutIntervalForResource = 600
+        cfg.httpAdditionalHeaders = ["User-Agent": "Omacosy-Theme-Studio"]
+        let q = OperationQueue(); q.maxConcurrentOperationCount = 1
+        let s = URLSession(configuration: cfg, delegate: self, delegateQueue: q)
+        session = s
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 300
+        s.dataTask(with: req).resume()
+    }
+
+    private func finish(_ result: Result<String, Error>) {
+        if finished { return }
+        finished = true
+        try? handle?.close()
+        handle = nil
+        session?.invalidateAndCancel()
+        session = nil
+        switch result {
+        case .success:
+            do {
+                try? FileManager.default.removeItem(atPath: destPath)
+                try FileManager.default.moveItem(atPath: partPath, toPath: destPath)
+                DispatchQueue.main.async { self.completion(.success(self.destPath)) }
+            } catch {
+                try? FileManager.default.removeItem(atPath: partPath)
+                DispatchQueue.main.async { self.completion(.failure(WHError.network("could not save the file"))) }
+            }
+        case .failure(let e):
+            try? FileManager.default.removeItem(atPath: partPath)
+            DispatchQueue.main.async { self.completion(.failure(e)) }
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            completionHandler(.cancel)
+            finish(.failure(WHError.http((response as? HTTPURLResponse)?.statusCode ?? -1)))
+            return
+        }
+        expected = response.expectedContentLength
+        if expected > maxBytes {
+            completionHandler(.cancel)
+            finish(.failure(WHError.tooLarge))
+            return
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        received += Int64(data.count)
+        if received > maxBytes {
+            dataTask.cancel()
+            finish(.failure(WHError.tooLarge))
+            return
+        }
+        handle?.write(data)
+        let frac = expected > 0 ? min(Double(received) / Double(expected), 1) : 0
+        let report = onProgress
+        DispatchQueue.main.async { report(frac) }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error {
+            finish(.failure(WHError.network(error.localizedDescription)))
+        } else {
+            finish(.success(destPath))
+        }
+    }
+}
+
+// One download at a time from the tab's point of view: the client resolves
+// the destination and hands back a downloader the caller keeps alive.
+func whStartDownload(client: WallhavenClient, wallpaper: WHWallpaper, into dir: String,
+                     onProgress: @escaping (Double) -> Void,
+                     completion: @escaping (Result<String, Error>) -> Void) -> WHFileDownloader {
+    let fm = FileManager.default
+    try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    let dest = whUniquePath(dir, whDownloadFilename(wallpaper.imageURL))
+    let d = WHFileDownloader(destPath: dest, onProgress: onProgress, completion: completion)
+    d.start(wallpaper.imageURL)
+    return d
+}
+
+// A thumbnail cache: studio/wallhaven-thumbs/<hash>.<ext>. Fetched with a
+// plain data task (validated, not throttled — CDN) and written atomically.
+func whThumbCachePath(_ url: String) -> String {
+    let ext = (URL(string: url)?.pathExtension ?? "").lowercased()
+    let e = (ext.count >= 2 && ext.count <= 5) ? ext : "jpg"
+    return whThumbsDir() + "/" + stableHash(url) + "." + e
+}
+
+func whCachedThumb(_ url: String) -> NSImage? {
+    guard !url.isEmpty else { return nil }
+    return NSImage(contentsOfFile: whThumbCachePath(url))
+}
+
+func whFetchThumb(_ url: String, completion: @escaping (NSImage?) -> Void) {
+    guard !url.isEmpty else { completion(nil); return }
+    let cache = whThumbCachePath(url)
+    if let img = NSImage(contentsOfFile: cache) { completion(img); return }
+    guard (try? validateWHURL(url)) != nil, let u = URL(string: url) else { completion(nil); return }
+    let cfg = URLSessionConfiguration.ephemeral
+    cfg.timeoutIntervalForRequest = 20
+    cfg.timeoutIntervalForResource = 60
+    let session = URLSession(configuration: cfg)
+    session.dataTask(with: URLRequest(url: u)) { data, _, _ in
+        defer { session.finishTasksAndInvalidate() }
+        guard let data = data, data.count <= (5 << 20), let img = NSImage(data: data) else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        try? FileManager.default.createDirectory(atPath: whThumbsDir(), withIntermediateDirectories: true)
+        try? data.write(to: URL(fileURLWithPath: cache), options: .atomic)
+        DispatchQueue.main.async { completion(img) }
+    }.resume()
+}
+
 // --- wallpapers tab --------------------------------------------------------
 
 // wallhaven.cc browsing lands here (Phase 7): search row, chips and the
 // results grid. Local files are never previewed in this tab — they are
 // sourced from the Storage tab and appear as Wallpaper #N in Themes.
-final class WallpapersTabView: NSView {}
+
+let whSortLabels = ["Latest", "Relevance", "Random", "Views", "Favorites", "Top List"]
+let whSortValues = ["date_added", "relevance", "random", "views", "favorites", "toplist"]
+let whResLabels = ["Any Resolution", "1920×1080+", "2560×1440+", "3840×2160+"]
+let whResValues = ["", "1920x1080", "2560x1440", "3840x2160"]
+let whRatioLabels = ["Any Ratio", "16:9", "16:10", "4:3", "21:9", "9:16"]
+let whRatioValues = ["", "16x9", "16x10", "4x3", "21x9", "9x16"]
+let whColorPresets: [(hex: String, label: String)] = [
+    ("660000", "Red"), ("cc6633", "Orange"), ("ffcc00", "Yellow"),
+    ("006600", "Green"), ("336699", "Blue"), ("660066", "Purple"),
+    ("000000", "Black"), ("cccccc", "Gray"), ("ffffff", "White"),
+]
+
+func whFormatSize(_ bytes: Int64) -> String {
+    if bytes <= 0 { return "" }
+    let mb = Double(bytes) / 1_048_576
+    if mb >= 0.1 { return String(format: "%.1f MB", mb) }
+    return String(format: "%.0f KB", Double(bytes) / 1024)
+}
+
+func whDrawThumb(_ img: NSImage, in rect: NSRect, radius: CGFloat) {    NSGraphicsContext.saveGraphicsState()
+    NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).addClip()
+    let imgA = img.size.width / max(img.size.height, 1)
+    let rectA = rect.width / max(rect.height, 1)
+    var src = NSRect(origin: .zero, size: img.size)
+    if imgA > rectA {
+        let w = img.size.height * rectA
+        src = NSRect(x: (img.size.width - w) / 2, y: 0, width: w, height: img.size.height)
+    } else {
+        let h = img.size.width / rectA
+        src = NSRect(x: 0, y: (img.size.height - h) / 2, width: img.size.width, height: h)
+    }
+    img.draw(in: rect, from: src, operation: .sourceOver, fraction: 1)
+    NSGraphicsContext.restoreGraphicsState()
+}
+
+// Centres a glyph on its typographic width and cap height. Unlike
+// CTLineGetImageBounds this needs no live context matrix, so it never
+// silently draws nothing inside the dashboard's layer-backed views.
+func whDrawGlyphCentered(_ glyph: String, in r: NSRect, color: NSColor, size: CGFloat) {
+    guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+    let font = nerdFont("Regular", size)
+    let line = textLine(glyph, font, color)
+    let w = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+    ctx.textPosition = CGPoint(x: r.midX - w / 2, y: r.midY - font.capHeight / 2)
+    CTLineDraw(line, ctx)
+}
+
+// A small dropdown in the house style: a rounded box that shows the current
+// choice and pops a native menu. The menu runs its own tracking loop, so
+// the dashboard's Esc/outside-click monitors never see its events.
+final class WHDropdown: NSView {
+    var title = "" { didSet { needsDisplay = true } }
+    var items: [String] = []
+    var selectedIndex = 0 { didSet { needsDisplay = true } }
+    var onPick: ((Int) -> Void)?
+
+    override func draw(_ dirtyRect: NSRect) {
+        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        palette.itemBG.withAlphaComponent(0.35).setFill(); r.fill()
+        palette.muted.withAlphaComponent(0.35).setStroke(); r.lineWidth = 1; r.stroke()
+        let f = nerdFont("Regular", 11)
+        drawMidLeft(truncate(title, f, bounds.width - 26), f, palette.label,
+                    x: 9, midTop: bounds.height / 2, height: bounds.height)
+        drawMidCenter("\u{f078}", nerdFont("Regular", 8), palette.muted,
+                      centerX: bounds.width - 12, midTop: bounds.height / 2, height: bounds.height)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(nil)
+        guard !items.isEmpty else { return }
+        let menu = NSMenu()
+        menu.appearance = NSAppearance(named: .darkAqua)
+        for (i, it) in items.enumerated() {
+            let mi = NSMenuItem(title: it, action: #selector(pickItem(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.tag = i
+            mi.state = i == selectedIndex ? .on : .off
+            menu.addItem(mi)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: bounds.height + 2), in: self)
+    }
+
+    @objc private func pickItem(_ sender: NSMenuItem) {
+        guard sender.tag != selectedIndex else { return }
+        selectedIndex = sender.tag
+        onPick?(sender.tag)
+    }
+    override var acceptsFirstResponder: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+// The scrolling results grid. Cards are laid out in columns whose width
+// follows the S/M/L size; thumbnails are cached on disk and loaded only for
+// the visible rows. All per-card state is keyed by wallhaven id, so a
+// reload (or a bookmark-view swap) never mixes up a decoded image.
+final class WHGridView: NSView {
+    var cards: [WHWallpaper] = []
+    var cardSize = "small"
+    var thumbs: [String: NSImage] = [:]
+    private var pending: Set<String> = []
+    var selected: Set<String> = []
+    var downloaded: Set<String> = []
+    var downloading: [String: Double] = [:]
+    var cellFrames: [Int: NSRect] = [:]
+    var hovered: Int? = nil
+    private var hoverTracking: NSTrackingArea?
+
+    var onBookmark: ((WHWallpaper) -> Void)?
+    var onDownload: ((WHWallpaper) -> Void)?
+    var onToggleSelect: ((WHWallpaper) -> Void)?
+    var onOpen: ((WHWallpaper) -> Void)?
+
+    private let gap: CGFloat = 12
+    private let metaH: CGFloat = 24
+    private let topPad: CGFloat = 2
+    private let bottomPad: CGFloat = 16
+    private let icon: CGFloat = 24
+    private let iconPad: CGFloat = 8
+
+    private func minColWidth() -> CGFloat {
+        switch cardSize {
+        case "large": return 500
+        case "medium": return 340
+        default: return 220
+        }
+    }
+
+    func rebuild() {
+        cellFrames.removeAll()
+        let avail = bounds.width
+        guard avail > 40 else { frame.size = NSSize(width: avail, height: 10); return }
+        let minCol = minColWidth()
+        let cols = max(1, Int((avail + gap) / (minCol + gap)))
+        let cellW = (avail - gap * CGFloat(cols - 1)) / CGFloat(cols)
+        let thumbH = (cellW * 9 / 16).rounded()
+        let cellH = thumbH + metaH
+        let rows = max(1, (cards.count + cols - 1) / cols)
+        let contentH = topPad + CGFloat(rows) * (cellH + gap) - gap + bottomPad
+        var top = topPad
+        var i = 0
+        for _ in 0..<rows {
+            for c in 0..<cols {
+                if i >= cards.count { break }
+                let x = CGFloat(c) * (cellW + gap)
+                cellFrames[i] = NSRect(x: x, y: contentH - top - cellH, width: cellW, height: cellH)
+                i += 1
+            }
+            top += cellH + gap
+        }
+        frame.size = NSSize(width: avail, height: contentH)
+        needsDisplay = true
+    }
+
+    private func thumbRect(_ f: NSRect) -> NSRect {
+        NSRect(x: f.minX, y: f.minY + metaH, width: f.width, height: f.height - metaH)
+    }
+
+    private func hotRects(_ f: NSRect) -> (bookmark: NSRect, check: NSRect, download: NSRect) {
+        let t = thumbRect(f)
+        let bookmark = NSRect(x: t.minX + iconPad, y: t.maxY - iconPad - icon, width: icon, height: icon)
+        let check = NSRect(x: t.maxX - iconPad - icon, y: t.maxY - iconPad - icon, width: icon, height: icon)
+        let download = NSRect(x: t.maxX - iconPad - icon, y: t.minY + iconPad, width: icon, height: icon)
+        return (bookmark, check, download)
+    }
+
+    private func iconButton(_ glyph: String, in r: NSRect, tint: NSColor, fillAlpha: CGFloat) {
+        let box = NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6)
+        NSColor(srgbRed: 0.05, green: 0.05, blue: 0.07, alpha: fillAlpha).setFill()
+        box.fill()
+        NSColor.white.withAlphaComponent(0.14).setStroke(); box.lineWidth = 1; box.stroke()
+        whDrawGlyphCentered(glyph, in: r, color: tint, size: 12)
+    }
+
+    private func drawCard(_ i: Int, _ f: NSRect) {
+        let w = cards[i]
+        let bg = NSBezierPath(roundedRect: f.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+        palette.itemBG.withAlphaComponent(0.35).setFill(); bg.fill()
+        (hovered == i ? palette.accent : palette.muted.withAlphaComponent(0.3)).setStroke()
+        bg.lineWidth = 1; bg.stroke()
+
+        let t = thumbRect(f)
+        if let img = thumbs[w.id] {
+            whDrawThumb(img, in: t, radius: 0)
+        } else {
+            palette.itemBG.withAlphaComponent(0.5).setFill()
+            NSBezierPath(roundedRect: t, xRadius: 0, yRadius: 0).fill()
+            drawMidCenter("…", nerdFont("Regular", 14), palette.muted,
+                          centerX: t.midX, midTop: bounds.height - t.midY, height: bounds.height)
+        }
+
+        // meta row: resolution on the left, size on the right
+        let rf = nerdFont("Regular", 11)
+        let metaMid = bounds.height - (f.minY + metaH / 2)
+        drawMidLeft(w.resolution.replacingOccurrences(of: "x", with: " × "), rf, palette.label,
+                    x: f.minX + 2, midTop: metaMid, height: bounds.height)
+        let sizeText = whFormatSize(w.fileSize)
+        drawMidLeft(sizeText, rf, palette.muted,
+                    x: f.maxX - advance(sizeText, rf) - 2, midTop: metaMid, height: bounds.height)
+
+        let isDownloaded = downloaded.contains(w.id)
+        let isSelected = selected.contains(w.id)
+        let showOverlays = (hovered == i) || isSelected || downloading[w.id] != nil
+
+        if showOverlays {
+            // top + bottom translucent bands so the icons read on any picture
+            NSColor.black.withAlphaComponent(0.34).setFill()
+            NSRect(x: t.minX, y: t.maxY - 30, width: t.width, height: 30).fill()
+            NSColor.black.withAlphaComponent(0.42).setFill()
+            NSRect(x: t.minX, y: t.minY, width: t.width, height: 30).fill()
+            let r = hotRects(f)
+            iconButton("\u{f02e}", in: r.bookmark, tint: isBookmarkedCard(i) ? palette.accent : .white, fillAlpha: 0.5)
+            iconButton(isSelected ? "\u{f00c}" : "\u{f096}", in: r.check,
+                       tint: isSelected ? palette.accent : .white, fillAlpha: 0.5)
+            iconButton("\u{f019}", in: r.download, tint: .white, fillAlpha: 0.5)
+        }
+
+        if isDownloaded {
+            let label = "  Saved"
+            let f = nerdFont("Bold", 10)
+            let pillW = advance(label, f) + 30
+            let pill = NSRect(x: t.minX + iconPad, y: t.minY + iconPad, width: pillW, height: 22)
+            let p = NSBezierPath(roundedRect: pill, xRadius: 6, yRadius: 6)
+            NSColor.systemGreen.withAlphaComponent(0.9).setFill(); p.fill()
+            whDrawGlyphCentered("\u{f00c}" + label, in: NSRect(x: pill.minX + 4, y: pill.minY,
+                                                               width: pillW - 8, height: pill.height),
+                                color: .white, size: 10)
+        }
+
+        if let frac = downloading[w.id] {
+            let bar = NSRect(x: t.minX + 4, y: t.minY + 4, width: t.width - 8, height: 5)
+            let bp = NSBezierPath(roundedRect: bar, xRadius: 2.5, yRadius: 2.5)
+            NSColor.white.withAlphaComponent(0.28).setFill(); bp.fill()
+            let fill = NSRect(x: bar.minX, y: bar.minY, width: max(2, bar.width * CGFloat(frac)), height: bar.height)
+            let fp = NSBezierPath(roundedRect: fill, xRadius: 2.5, yRadius: 2.5)
+            NSColor.systemGreen.setFill(); fp.fill()
+        }
+    }
+
+    // The grid does not own the bookmark store, so the tab injects the
+    // current bookmark id set; this keeps the icon truthful.
+    var bookmarkedIDs: Set<String> = []
+    private func isBookmarkedCard(_ i: Int) -> Bool {
+        i < cards.count && bookmarkedIDs.contains(cards[i].id)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        for (i, f) in cellFrames where f.intersects(dirtyRect) { drawCard(i, f) }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = hoverTracking { removeTrackingArea(t) }
+        let t = NSTrackingArea(rect: .zero,
+                               options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                               owner: self, userInfo: nil)
+        addTrackingArea(t)
+        hoverTracking = t
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        var hit: Int?
+        for (i, f) in cellFrames where f.contains(p) { hit = i; break }
+        if hit != hovered { hovered = hit; needsDisplay = true }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if hovered != nil { hovered = nil; needsDisplay = true }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        for (i, f) in cellFrames where f.contains(p) {
+            guard i < cards.count else { return }
+            let w = cards[i]
+            let r = hotRects(f)
+            if r.check.contains(p) { onToggleSelect?(w); return }
+            if r.bookmark.contains(p) { onBookmark?(w); return }
+            if r.download.contains(p) { onDownload?(w); return }
+            onOpen?(w)
+            return
+        }
+    }
+
+    func loadVisible(_ rect: NSRect) {
+        for (i, f) in cellFrames where f.intersects(rect) {
+            guard i < cards.count else { continue }
+            let w = cards[i]
+            if thumbs[w.id] != nil || pending.contains(w.id) { continue }
+            if let img = whCachedThumb(w.thumbURL) { thumbs[w.id] = img; needsDisplay = true; continue }
+            pending.insert(w.id)
+            whFetchThumb(w.thumbURL) { [weak self] img in
+                guard let self else { return }
+                self.pending.remove(w.id)
+                if let img { self.thumbs[w.id] = img; self.needsDisplay = true }
+            }
+        }
+    }
+}
+
+final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
+    private let scroll = NSScrollView()
+    private let grid = WHGridView()
+    private let scroller = CustomScroller()
+    private let scrollerW: CGFloat = 8
+
+    private let field = NSTextField()
+    private let searchButton = ButtonView()
+    private let orderButton = ButtonView()
+    private let sortButton = WHDropdown()
+    private let resButton = WHDropdown()
+    private let ratioButton = WHDropdown()
+    private let moreButton = ButtonView()
+    private let sizeSeg = SegmentedView()
+    private let bulkButton = ButtonView()
+
+    private let client = WallhavenClient()
+    private var config = WHConfig.load()
+    private let bookmarks = WHBookmarkStore()
+
+    private var results: [WHWallpaper] = []
+    private var selected: Set<String> = []
+    private var downloadedIDs: Set<String> = []
+    private var activeDownloads: [String: WHFileDownloader] = [:]
+
+    private var searchToken = 0
+    private var isSearching = false
+    private var isLoadingMore = false
+    private var hasMore = false
+    private var nextRawPage = 1
+    private var totalResults = 0
+    private var searchError = ""
+    private var hasAPIKey = false
+    private var statusMessage = ""
+    private var toast = ""
+    private var toastOK = true
+    private var toastToken = 0
+    private var didInitialSearch = false
+
+    // header geometry
+    private let hTop: CGFloat = 8
+    private let row1H: CGFloat = 32
+    private let chipH: CGFloat = 24
+    private let row3H: CGFloat = 28
+    private let row4H: CGFloat = 30
+    private let rowGap: CGFloat = 10
+    private let bottomGap: CGFloat = 12
+    private let fieldH: CGFloat = 18
+
+    private var row1Top: CGFloat { hTop }
+    private var row2Top: CGFloat { row1Top + row1H + rowGap }
+    private var row3Top: CGFloat { row2Top + chipH + rowGap }
+    private var row4Top: CGFloat { row3Top + row3H + rowGap }
+    private var showMore = false
+    private var headerHeight: CGFloat {
+        showMore ? row4Top + row4H + bottomGap : row3Top + row3H + bottomGap
+    }
+
+    func refreshColors() {
+        needsDisplay = true
+        grid.needsDisplay = true
+        field.textColor = palette.label
+        field.backgroundColor = palette.itemBG.withAlphaComponent(0.35)
+        for v in [searchButton, orderButton, sortButton, resButton, ratioButton, moreButton, bulkButton, sizeSeg] as [NSView] {
+            v.needsDisplay = true
+        }
+        scroller.refresh()
+    }
+
+    func scrollStep(_ dy: CGFloat) { scrollBy(scroll, dy) }
+
+    // Used by the off-screen layout review; harmless in normal use.
+    func setMoreFilters(_ on: Bool) {
+        showMore = on
+        moreButton.title = on ? "Fewer Filters" : "More Filters"
+        needsLayout = true
+        needsDisplay = true
+    }
+
+    func debugGridInfo() -> String {
+        "results=\(results.count) cards=\(grid.cards.count) frames=\(grid.cellFrames.count) " +
+        "w=\(grid.frame.width) h=\(grid.frame.height) searching=\(isSearching) err=\(searchError)"
+    }
+
+    func debugPreviewStates() {
+        grid.hovered = 0
+        if grid.cards.count > 1 { grid.selected.insert(grid.cards[1].id) }
+        if grid.cards.count > 2 { grid.downloaded.insert(grid.cards[2].id) }
+        if grid.cards.count > 3 { grid.downloading[grid.cards[3].id] = 0.55 }
+        grid.needsDisplay = true
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        scroll.hasVerticalScroller = false
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        addSubview(scroll)
+        scroll.documentView = grid
+        addSubview(scroller)
+        scroller.scrollView = scroll
+
+        field.isBezeled = false
+        field.drawsBackground = true
+        field.backgroundColor = palette.itemBG.withAlphaComponent(0.35)
+        field.textColor = palette.label
+        field.font = nerdFont("Regular", 12)
+        field.focusRingType = .none
+        field.delegate = self
+        field.target = self
+        field.action = #selector(searchNowAction)
+        addSubview(field)
+
+        searchButton.title = "Search"
+        searchButton.fontSize = 12
+        searchButton.onClick = { [weak self] in self?.beginSearch(reset: true) }
+        addSubview(searchButton)
+
+        orderButton.centeredByBounds = false
+        orderButton.fontSize = 15
+        orderButton.toolTip = "Toggle Sort Direction"
+        orderButton.onClick = { [weak self] in self?.toggleOrder() }
+        addSubview(orderButton)
+
+        sortButton.items = whSortLabels
+        sortButton.selectedIndex = whSortValues.firstIndex(of: config.sorting) ?? 0
+        sortButton.title = whSortLabels[sortButton.selectedIndex]
+        sortButton.toolTip = "Sort Order"
+        sortButton.onPick = { [weak self] i in
+            guard let self else { return }
+            self.config.sorting = whSortValues[i]
+            self.sortButton.title = whSortLabels[i]
+            self.config.save()
+            self.beginSearch(reset: true)
+        }
+        addSubview(sortButton)
+
+        resButton.items = whResLabels
+        resButton.selectedIndex = whResValues.firstIndex(of: config.atleast) ?? 0
+        resButton.title = whResLabels[resButton.selectedIndex]
+        resButton.toolTip = "Minimum Resolution"
+        resButton.onPick = { [weak self] i in
+            guard let self else { return }
+            self.config.atleast = whResValues[i]
+            self.resButton.title = whResLabels[i]
+            self.config.save()
+            self.beginSearch(reset: true)
+        }
+        addSubview(resButton)
+
+        ratioButton.items = whRatioLabels
+        ratioButton.selectedIndex = whRatioValues.firstIndex(of: config.ratios) ?? 0
+        ratioButton.title = whRatioLabels[ratioButton.selectedIndex]
+        ratioButton.toolTip = "Aspect Ratio"
+        ratioButton.onPick = { [weak self] i in
+            guard let self else { return }
+            self.config.ratios = whRatioValues[i]
+            self.ratioButton.title = whRatioLabels[i]
+            self.config.save()
+            self.beginSearch(reset: true)
+        }
+        addSubview(ratioButton)
+
+        moreButton.title = "More Filters"
+        moreButton.secondary = true
+        moreButton.fontSize = 11
+        moreButton.onClick = { [weak self] in
+            guard let self else { return }
+            self.showMore.toggle()
+            self.moreButton.title = self.showMore ? "Fewer Filters" : "More Filters"
+            self.needsLayout = true
+            self.needsDisplay = true
+        }
+        addSubview(moreButton)
+
+        sizeSeg.items = ["S", "M", "L"]
+        sizeSeg.index = ["small", "medium", "large"].firstIndex(of: config.cardSize) ?? 0
+        sizeSeg.onChange = { [weak self] i in
+            guard let self else { return }
+            self.config.cardSize = ["small", "medium", "large"][i]
+            self.config.save()
+            self.grid.cardSize = self.config.cardSize
+            self.layoutGrid()
+        }
+        addSubview(sizeSeg)
+
+        bulkButton.title = "Download"
+        bulkButton.fontSize = 11
+        bulkButton.isHidden = true
+        bulkButton.onClick = { [weak self] in self?.downloadSelected() }
+        addSubview(bulkButton)
+
+        orderButton.title = config.order == "desc" ? "\u{f175}" : "\u{f176}"
+
+        grid.onBookmark = { [weak self] w in self?.toggleBookmark(w) }
+        grid.onDownload = { [weak self] w in self?.download(w) }
+        grid.onToggleSelect = { [weak self] w in self?.toggleSelected(w) }
+        grid.onOpen = { [weak self] w in self?.openPage(w) }
+
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(visibleChanged),
+            name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        refreshKeyState()
+        downloadedIDs = whDownloadedIDs(in: wallpapersDir())
+        grid.downloaded = downloadedIDs
+        if !didInitialSearch {
+            didInitialSearch = true
+            if config.bookmarkedOnly { rebuildGrid() } else { beginSearch(reset: true) }
+        }
+    }
+
+    private func refreshKeyState() {
+        hasAPIKey = !readSecret("wallhaven").trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func toggleOrder() {
+        config.order = config.order == "desc" ? "asc" : "desc"
+        orderButton.title = config.order == "desc" ? "\u{f175}" : "\u{f176}"
+        orderButton.toolTip = config.order == "desc" ? "Descending" : "Ascending"
+        config.save()
+        beginSearch(reset: true)
+    }
+
+    private func currentParams() -> WHParams {
+        var p = WHParams()
+        p.query = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        p.categories = config.categories
+        p.purity = config.purity
+        p.sorting = config.sorting
+        p.order = config.order
+        p.atleast = config.atleast
+        p.colors = config.colors
+        p.ratios = config.ratios
+        return p
+    }
+
+    // 400 ms debounce: one search once typing pauses, never one per keystroke
+    func controlTextDidChange(_ obj: Notification) {
+        needsDisplay = true
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(debouncedSearch), object: nil)
+        perform(#selector(debouncedSearch), with: nil, afterDelay: 0.4)
+    }
+
+    @objc private func debouncedSearch() {
+        if config.bookmarkedOnly { return }
+        beginSearch(reset: true)
+    }
+
+    @objc private func searchNowAction() { beginSearch(reset: true) }
+
+    private func beginSearch(reset: Bool) {
+        guard !config.bookmarkedOnly else { return }
+        refreshKeyState()
+        client.apiKey = readSecret("wallhaven")
+        searchError = ""
+        if reset {
+            searchToken += 1
+            results = []
+            selected.removeAll()
+            nextRawPage = 1
+            totalResults = 0
+            hasMore = false
+            isLoadingMore = false
+            isSearching = true
+            grid.thumbs.removeAll()
+            rebuildGrid()
+        } else {
+            guard hasMore, !isLoadingMore, !isSearching else { return }
+            isLoadingMore = true
+        }
+        let token = searchToken
+        var p = currentParams()
+        p.page = nextRawPage
+        let pages = 3
+        needsDisplay = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                let r = try self.client.searchMultiPage(p, numPages: pages)
+                DispatchQueue.main.async {
+                    guard token == self.searchToken else { return }
+                    let seen = Set(self.results.map { $0.id })
+                    let fresh = r.data.filter { !seen.contains($0.id) }
+                    self.results.append(contentsOf: fresh)
+                    self.totalResults = r.meta.total
+                    self.nextRawPage += pages
+                    self.isSearching = false
+                    self.isLoadingMore = false
+                    self.hasMore = self.results.count < self.totalResults && !fresh.isEmpty
+                    let oldH = self.grid.frame.height
+                    self.rebuildGrid()
+                    if reset {
+                        self.scrollToTop()
+                    } else {
+                        // the document is non-flipped, so appended rows move
+                        // the existing content up; nudge the origin by the
+                        // same amount so the view does not jump
+                        let delta = self.grid.frame.height - oldH
+                        if delta > 0.5 {
+                            let maxY = max(0, self.grid.frame.height - self.scroll.contentSize.height)
+                            let y = min(maxY, self.scroll.contentView.bounds.origin.y + delta)
+                            self.scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                            self.scroll.reflectScrolledClipView(self.scroll.contentView)
+                        }
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard token == self.searchToken else { return }
+                    self.isSearching = false
+                    self.isLoadingMore = false
+                    self.searchError = error.localizedDescription
+                    self.needsDisplay = true
+                }
+            }
+        }
+    }
+
+    private func loadMore() {
+        guard !config.bookmarkedOnly, !isSearching, !isLoadingMore, hasMore else { return }
+        beginSearch(reset: false)
+    }
+
+    private func rebuildGrid() {
+        let cards: [WHWallpaper]
+        if config.bookmarkedOnly {
+            cards = bookmarks.all().compactMap { b in
+                WHWallpaper(json: ["id": b.id, "path": b.imageURL, "url": b.pageURL,
+                                   "resolution": b.resolution,
+                                   "file_size": NSNumber(value: b.fileSize),
+                                   "thumbs": ["small": b.thumbURL]])
+            }
+        } else {
+            cards = results
+        }
+        grid.cards = cards
+        grid.cardSize = config.cardSize
+        grid.selected = selected
+        grid.downloaded = downloadedIDs
+        grid.bookmarkedIDs = Set(bookmarks.all().map { $0.id })
+        let avail = bounds.width - scrollerW - 14
+        if avail > 40 { grid.frame.size.width = avail }
+        grid.rebuild()
+        needsLayout = true
+        needsDisplay = true
+    }
+
+    private func layoutGrid() {
+        let avail = bounds.width - scrollerW - 14
+        if avail > 40, abs(grid.frame.width - avail) > 0.5 {
+            grid.frame.size.width = avail
+            grid.rebuild()
+        }
+    }
+
+    // --- actions ---
+
+    private func toggleBookmark(_ w: WHWallpaper) {
+        bookmarks.toggle(w)
+        grid.bookmarkedIDs = Set(bookmarks.all().map { $0.id })
+        if config.bookmarkedOnly { rebuildGrid() } else { grid.needsDisplay = true }
+    }
+
+    private func toggleSelected(_ w: WHWallpaper) {
+        if selected.contains(w.id) { selected.remove(w.id) } else { selected.insert(w.id) }
+        grid.selected = selected
+        grid.needsDisplay = true
+        updateBulkButton()
+    }
+
+    private func updateBulkButton() {
+        let n = selected.count
+        bulkButton.isHidden = n == 0 || config.bookmarkedOnly
+        bulkButton.title = n == 1 ? "Download 1" : "Download \(n)"
+        needsLayout = true
+    }
+
+    private func download(_ w: WHWallpaper) {
+        guard activeDownloads[w.id] == nil, !downloadedIDs.contains(w.id) else { return }
+        let dir = wallpapersDir()
+        grid.downloading[w.id] = 0
+        grid.needsDisplay = true
+        let d = whStartDownload(client: client, wallpaper: w, into: dir,
+                                onProgress: { [weak self] frac in
+            self?.grid.downloading[w.id] = frac
+            self?.grid.needsDisplay = true
+        }, completion: { [weak self] res in
+            guard let self else { return }
+            self.activeDownloads[w.id] = nil
+            self.grid.downloading[w.id] = nil
+            switch res {
+            case .success:
+                self.downloadedIDs.insert(w.id)
+                self.grid.downloaded = self.downloadedIDs
+                self.showToast("Saved \(w.id)", ok: true)
+            case .failure(let e):
+                self.showToast("Failed \(w.id): \(e.localizedDescription)", ok: false)
+            }
+            self.grid.needsDisplay = true
+        })
+        activeDownloads[w.id] = d
+    }
+
+    private func downloadSelected() {
+        let items = grid.cards.filter { selected.contains($0.id) }
+        for w in items { download(w) }
+    }
+
+    private func openPage(_ w: WHWallpaper) {
+        guard let u = URL(string: w.pageURL), (try? validateWHURL(w.pageURL)) != nil else { return }
+        NSWorkspace.shared.open(u)
+    }
+
+    private func showToast(_ msg: String, ok: Bool) {
+        toast = msg
+        toastOK = ok
+        toastToken += 1
+        let token = toastToken
+        needsDisplay = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak self] in
+            guard let self, self.toastToken == token else { return }
+            self.toast = ""
+            self.needsDisplay = true
+        }
+    }
+
+    @objc private func visibleChanged() {
+        let vis = scroll.documentVisibleRect
+        grid.loadVisible(vis)
+        scroller.refresh()
+        // the document is non-flipped, so later results sit at lower y:
+        // reaching the end means the viewport's bottom edge nears origin 0
+        if vis.minY < 600 { loadMore() }
+    }
+
+    private func scrollToTop() {
+        let maxY = max(0, grid.frame.height - scroll.contentSize.height)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: maxY))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        scroller.refresh()
+    }
+
+    // --- header geometry ---
+
+    private func frameFor(top: CGFloat, x: CGFloat, w: CGFloat, h: CGFloat) -> NSRect {
+        NSRect(x: x, y: bounds.height - top - h, width: w, height: h)
+    }
+
+    private func categoryRects() -> [NSRect] {
+        let labels = ["General", "Anime", "People"]
+        let f = nerdFont("Regular", 11)
+        var x: CGFloat = 0
+        var out: [NSRect] = []
+        for l in labels {
+            let w = advance(l, f) + 20
+            out.append(frameFor(top: row2Top, x: x, w: w, h: chipH))
+            x += w + 6
+        }
+        return out
+    }
+
+    private func purityRects() -> [NSRect] {
+        let labels = ["SFW", "Sketchy", "NSFW"]
+        let f = nerdFont("Regular", 11)
+        var x = categoryRects().last.map { $0.maxX + 16 } ?? 0
+        var out: [NSRect] = []
+        for l in labels {
+            let w = advance(l, f) + 20
+            out.append(frameFor(top: row2Top, x: x, w: w, h: chipH))
+            x += w + 6
+        }
+        return out
+    }
+
+    private func bookmarkChipRect() -> NSRect {
+        let x = purityRects().last.map { $0.maxX + 16 } ?? 0
+        let w = advance("Bookmarked", nerdFont("Regular", 11)) + 20
+        return frameFor(top: row2Top, x: x, w: w, h: chipH)
+    }
+
+    private func colorSwatchRects() -> [NSRect] {
+        let labelW = advance("Color", nerdFont("Regular", 11)) + 10
+        var x = labelW
+        var out: [NSRect] = []
+        for _ in whColorPresets {
+            out.append(frameFor(top: row4Top + 5, x: x, w: 20, h: 20))
+            x += 26
+        }
+        return out
+    }
+
+    private func chip(_ r: NSRect, _ label: String, on: Bool, tint: NSColor, enabled: Bool = true) {
+        let path = NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6)
+        if on && enabled {
+            tint.withAlphaComponent(0.16).setFill(); path.fill()
+            tint.setStroke(); path.lineWidth = 1; path.stroke()
+        } else {
+            palette.itemBG.withAlphaComponent(0.35).setFill(); path.fill()
+            (enabled ? palette.muted.withAlphaComponent(0.35) : palette.muted.withAlphaComponent(0.2)).setStroke()
+            path.lineWidth = 1; path.stroke()
+        }
+        let ink = !enabled ? palette.muted.withAlphaComponent(0.6) : (on ? tint : palette.label)
+        drawMidCenter(label, nerdFont("Regular", 11), ink,
+                      centerX: r.midX, midTop: bounds.height - r.midY, height: bounds.height)
+    }
+
+    override func layout() {
+        super.layout()
+        let W = bounds.width
+        let g: CGFloat = 8
+        let sortW: CGFloat = 118
+        let orderW: CGFloat = 34
+        let searchW: CGFloat = 76
+        let queryW = max(160, W - sortW - orderW - searchW - g * 3)
+        field.frame = frameFor(top: row1Top + (row1H - fieldH) / 2, x: 30, w: queryW - 40, h: fieldH)
+        sortButton.frame = frameFor(top: row1Top + 1, x: queryW + g, w: sortW, h: row1H - 2)
+        orderButton.frame = frameFor(top: row1Top + 1, x: queryW + g + sortW + g, w: orderW, h: row1H - 2)
+        searchButton.frame = frameFor(top: row1Top + 1, x: queryW + g + sortW + g + orderW + g, w: searchW, h: row1H - 2)
+
+        resButton.frame = frameFor(top: row3Top, x: 0, w: 130, h: row3H)
+        let bulkW: CGFloat = bulkButton.isHidden ? 0 : 104
+        bulkButton.frame = frameFor(top: row3Top, x: 138, w: bulkW, h: row3H)
+        let segSize = sizeSeg.sizeThatFits()
+        sizeSeg.frame = frameFor(top: row3Top - 1, x: W - segSize.width, w: segSize.width, h: segSize.height)
+        let moreW: CGFloat = 100
+        moreButton.frame = frameFor(top: row3Top, x: W - segSize.width - g - moreW, w: moreW, h: row3H)
+        updateBulkButton()
+
+        if showMore {
+            ratioButton.frame = frameFor(top: row4Top, x: W - 130, w: 130, h: row4H - 2)
+        }
+
+        let scrollTop = headerHeight
+        let scrollH = max(0, bounds.height - scrollTop - 16)
+        scroll.frame = NSRect(x: 0, y: 16, width: max(0, W - scrollerW - 14), height: scrollH)
+        scroller.frame = NSRect(x: W - scrollerW, y: 16, width: scrollerW, height: scrollH)
+        scroller.refresh()
+        let gridW = scroll.contentSize.width
+        if gridW > 0, abs(grid.frame.width - gridW) > 0.5 {
+            grid.frame.size.width = gridW
+            grid.rebuild()
+        }
+        grid.loadVisible(scroll.documentVisibleRect)
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // search box
+        let W = bounds.width
+        let g: CGFloat = 8
+        let sortW: CGFloat = 118, orderW: CGFloat = 34, searchW: CGFloat = 76
+        let queryW = max(160, W - sortW - orderW - searchW - g * 3)
+        let box = frameFor(top: row1Top, x: 0, w: queryW, h: row1H)
+        let path = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        palette.itemBG.withAlphaComponent(0.35).setFill(); path.fill()
+        palette.muted.withAlphaComponent(0.35).setStroke(); path.lineWidth = 1; path.stroke()
+        drawMidCenter("\u{f002}", nerdFont("Regular", 12), palette.muted,
+                      centerX: 16, midTop: bounds.height - box.midY, height: bounds.height)
+        if field.stringValue.isEmpty {
+            drawMidLeft("Search for wallpapers on wallhaven.cc", nerdFont("Regular", 12), palette.muted,
+                        x: 30, midTop: bounds.height - box.midY, height: bounds.height)
+        }
+
+        // chips
+        let catRects = categoryRects()
+        for (i, r) in catRects.enumerated() {
+            chip(r, ["General", "Anime", "People"][i], on: config.categories[config.categories.index(config.categories.startIndex, offsetBy: i)] == "1",
+                 tint: palette.accent)
+        }
+        let purRects = purityRects()
+        let purTints = [NSColor.systemGreen, NSColor.systemYellow, NSColor.systemRed]
+        for (i, r) in purRects.enumerated() {
+            let locked = i == 2 && !hasAPIKey
+            chip(r, ["SFW", "Sketchy", "NSFW"][i],
+                 on: config.purity[config.purity.index(config.purity.startIndex, offsetBy: i)] == "1",
+                 tint: purTints[i], enabled: !locked)
+        }
+        let bookmarkRect = bookmarkChipRect()
+        chip(bookmarkRect, "Bookmarked", on: config.bookmarkedOnly, tint: palette.accent)
+
+        // colour swatches (More Filters)
+        if showMore {
+            drawMidLeft("Color", nerdFont("Regular", 11), palette.muted,
+                        x: 0, midTop: row4Top + row4H / 2, height: bounds.height)
+            for (i, r) in colorSwatchRects().enumerated() {
+                let p = whColorPresets[i]
+                let sq = NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4)
+                (hexColor(p.hex) ?? palette.muted).setFill(); sq.fill()
+                let selected = config.colors == p.hex
+                (selected ? palette.accent : palette.muted.withAlphaComponent(0.5)).setStroke()
+                sq.lineWidth = selected ? 2 : 1; sq.stroke()
+            }
+        }
+
+        // results count / search state, right-aligned before More Filters
+        var countText = ""
+        if isSearching {
+            countText = "Searching…"
+        } else if !searchError.isEmpty {
+            countText = searchError
+        } else if config.bookmarkedOnly {
+            countText = "\(bookmarks.count) bookmarked"
+        } else if totalResults > 0 {
+            countText = "\(totalResults) results"
+        }
+        if !countText.isEmpty {
+            let ink = searchError.isEmpty ? palette.muted : NSColor.systemRed
+            let f = nerdFont("Regular", 11)
+            drawMidLeft(countText, f, ink,
+                        x: moreButton.frame.minX - 12 - advance(countText, f),
+                        midTop: row3Top + row3H / 2, height: bounds.height)
+        }
+
+        // toast
+        if !toast.isEmpty {
+            let f = nerdFont("Bold", 11)
+            let w = advance(toast, f) + 24
+            let r = NSRect(x: bounds.midX - w / 2, y: 2, width: w, height: 24)
+            let p = NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6)
+            (toastOK ? NSColor.systemGreen : NSColor.systemRed).withAlphaComponent(0.92).setFill()
+            p.fill()
+            drawMidCenter(toast, f, .white, centerX: r.midX, midTop: bounds.height - r.midY, height: bounds.height)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        let catRects = categoryRects()
+        for (i, r) in catRects.enumerated() where r.contains(p) {
+            toggleMask(&config.categories, i)
+            config.save()
+            beginSearch(reset: true)
+            return
+        }
+        let purRects = purityRects()
+        for (i, r) in purRects.enumerated() where r.contains(p) {
+            if i == 2 && !hasAPIKey { return }
+            toggleMask(&config.purity, i)
+            config.save()
+            beginSearch(reset: true)
+            return
+        }
+        if bookmarkChipRect().contains(p) {
+            config.bookmarkedOnly.toggle()
+            config.save()
+            if config.bookmarkedOnly {
+                searchToken += 1
+                isSearching = false
+                rebuildGrid()
+            } else {
+                beginSearch(reset: true)
+            }
+            updateBulkButton()
+            return
+        }
+        if showMore {
+            for (i, r) in colorSwatchRects().enumerated() where r.contains(p) {
+                let hex = whColorPresets[i].hex
+                config.colors = config.colors == hex ? "" : hex
+                config.save()
+                beginSearch(reset: true)
+                return
+            }
+        }
+    }
+
+    // A 3-bit mask string; the last on bit cannot be turned off, so a search
+    // never asks for zero categories or zero purity.
+    private func toggleMask(_ mask: inout String, _ index: Int) {
+        var chars = Array(mask)
+        guard index < chars.count else { return }
+        chars[index] = chars[index] == "1" ? "0" : "1"
+        if chars.allSatisfy({ $0 == "0" }) { return }
+        mask = String(chars)
+    }
+}
+
+// The download-folder scan that marks a card "Saved": a downloaded file is
+// named wallhaven-<id>.<ext>, so its id is recoverable without a manifest.
+func whDownloadedIDs(in dir: String) -> Set<String> {
+    var out: Set<String> = []
+    let entries = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+    for e in entries where e.hasPrefix("wallhaven-") {
+        let rest = e.dropFirst("wallhaven-".count)
+        let id = rest.split(separator: ".").first.map(String.init) ?? ""
+        if !id.isEmpty { out.insert(id) }
+    }
+    return out
+}
 
 extension StorageTabView: RefreshableTab {}
 extension APIKeysTabView: RefreshableTab {}
 extension UpdateTabView: RefreshableTab {}
+extension WallpapersTabView: RefreshableTab {}
 
 final class RootView: NSView {
     let tabs = ["Options", "Workspaces", "Themes", "Wallpapers", "Storage", "API Keys", "Update"]
@@ -8207,7 +9868,203 @@ func watch(_ path: String, create: Bool = false, _ handler: @escaping () -> Void
     src.resume()
 }
 
+// Hidden entry points for the Phase 7 acceptance tests. They run before the
+// window ever opens, so `omacosy-dashboard-bin --wallhaven-…` is a plain CLI.
+func whRunSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    func expectOK(_ url: String) {
+        check("guard accepts \(url)", (try? validateWHURL(url)) != nil)
+    }
+    func expectReject(_ url: String) {
+        if (try? validateWHURL(url)) != nil {
+            check("guard rejects \(url)", false)
+        } else {
+            check("guard rejects \(url)", true)
+        }
+    }
+
+    expectOK("https://wallhaven.cc/api/v1/search")
+    expectOK("https://w.wallhaven.cc/full/j3/wallhaven-j3qv85.jpg")
+    expectOK("https://thumbs.wallhaven.cc/0x/example.jpg")
+    expectReject("http://wallhaven.cc/api/v1/search")
+    expectReject("https://localhost/x")
+    expectReject("https://foo.localhost/x")
+    expectReject("https://foo.local/x")
+    expectReject("https://foo.internal/x")
+    expectReject("https://127.0.0.1/x")
+    expectReject("https://10.0.0.5/x")
+    expectReject("https://192.168.1.1/x")
+    expectReject("https://172.16.0.1/x")
+    expectReject("https://169.254.1.1/x")
+    expectReject("https://100.64.0.1/x")
+    expectReject("https://[::1]/x")
+    expectReject("https://[fe80::1]/x")
+    expectReject("https://user:pass@wallhaven.cc/x")
+
+    check("filename keeps a safe basename",
+          whDownloadFilename("https://w.wallhaven.cc/full/j3/wallhaven-j3qv85.jpg") == "wallhaven-j3qv85.jpg")
+    check("filename strips traversal",
+          whDownloadFilename("https://evil/../../etc/passwd") == "passwd.jpg")
+    check("filename forces an extension",
+          whDownloadFilename("https://evil/wall") == "wall.jpg")
+    check("filename survives an empty path",
+          whDownloadFilename("https://evil/") == "wallhaven.jpg")
+    check("filename replaces odd characters",
+          !whDownloadFilename("https://evil/a b?c.jpg").contains(" "))
+
+    let fm = FileManager.default
+    let tmp = NSTemporaryDirectory() + "wh-selftest-\(ProcessInfo.processInfo.processIdentifier)"
+    try? fm.removeItem(atPath: tmp)
+    try? fm.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(atPath: tmp) }
+    check("unique path uses the name when free", whUniquePath(tmp, "a.jpg") == tmp + "/a.jpg")
+    fm.createFile(atPath: tmp + "/a.jpg", contents: Data("x".utf8))
+    check("unique path adds -2 on collision", whUniquePath(tmp, "a.jpg") == tmp + "/a-2.jpg")
+
+    let bpath = tmp + "/bookmarks.json"
+    let store = WHBookmarkStore(path: bpath)
+    let sample = WHWallpaper(json: ["id": "abc123",
+                                    "path": "https://w.wallhaven.cc/full/ab/wallhaven-abc123.jpg",
+                                    "thumbs": ["small": "https://thumbs/abc.jpg"],
+                                    "resolution": "3840x2160"])!
+    check("bookmark starts empty", !store.isBookmarked("abc123"))
+    check("bookmark toggles on", store.toggle(sample))
+    check("bookmark is remembered", store.isBookmarked("abc123"))
+    let reloaded = WHBookmarkStore(path: bpath)
+    check("bookmark survives a reload", reloaded.isBookmarked("abc123"))
+    check("bookmark toggles off", reloaded.toggle(sample) == false)
+    check("bookmark removal persists", !WHBookmarkStore(path: bpath).isBookmarked("abc123"))
+
+    let anon = WallhavenClient()
+    var immediate = 0
+    for _ in 0..<(anon.anonymousPerMinute + 1) {
+        if anon.reserveRequestSlot() <= 0 { immediate += 1 }
+    }
+    check("rate limiter allows \(anon.anonymousPerMinute)/min anonymous",
+          immediate == anon.anonymousPerMinute)
+    let keyed = WallhavenClient()
+    keyed.apiKey = "abc"
+    var keyedImmediate = 0
+    for _ in 0..<(keyed.keyedPerMinute + 1) {
+        if keyed.reserveRequestSlot() <= 0 { keyedImmediate += 1 }
+    }
+    check("rate limiter allows \(keyed.keyedPerMinute)/min with a key",
+          keyedImmediate == keyed.keyedPerMinute)
+
+    print(failures == 0 ? "wallhaven selftest: all checks passed"
+                        : "wallhaven selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-guard" {
+    do {
+        try validateWHURL(CommandLine.arguments[2])
+        print("OK")
+        exit(0)
+    } catch {
+        print("REJECT \(error.localizedDescription)")
+        exit(1)
+    }
+}
+if CommandLine.arguments.contains("--wallhaven-selftest") {
+    exit(whRunSelfTest() == 0 ? 0 : 1)
+}
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-search" {
+    let client = WallhavenClient()
+    var p = WHParams()
+    p.query = CommandLine.arguments[2]
+    p.atleast = "1920x1080"
+    do {
+        let r = try client.search(p)
+        print("total=\(r.meta.total) lastPage=\(r.meta.lastPage) got=\(r.data.count)")
+        for w in r.data.prefix(3) {
+            print("  \(w.id)  \(w.resolution)  \(w.fileSize)B  \(w.thumbURL)")
+        }
+        exit(0)
+    } catch {
+        print("search failed: \(error.localizedDescription)")
+        exit(1)
+    }
+}
+if CommandLine.arguments.count >= 4, CommandLine.arguments[1] == "--wallhaven-multipage" {
+    let client = WallhavenClient()
+    var p = WHParams(); p.query = CommandLine.arguments[2]
+    let n = Int(CommandLine.arguments[3]) ?? 3
+    do {
+        let r = try client.searchMultiPage(p, numPages: n)
+        print("pages=\(n) got=\(r.data.count) logicalLastPage=\(r.meta.lastPage) currentPage=\(r.meta.currentPage)")
+        exit(0)
+    } catch { print("multipage failed: \(error.localizedDescription)"); exit(1) }
+}
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-download" {
+    let client = WallhavenClient()
+    do {
+        let w = try client.info(CommandLine.arguments[2])
+        print("resolved \(w.imageURL)")
+        let dir = CommandLine.arguments.count >= 4 ? CommandLine.arguments[3] : NSTemporaryDirectory() + "wh-dl"
+        var done = false
+        var rc: Int32 = 1
+        _ = whStartDownload(client: client, wallpaper: w, into: dir, onProgress: { _ in },
+                            completion: { res in
+            switch res {
+            case .success(let path):
+                let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+                let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+                print("saved \(path) (\(size) bytes)")
+                rc = 0
+            case .failure(let e):
+                print("download failed: \(e.localizedDescription)")
+            }
+            done = true
+        })
+        let deadline = Date().addingTimeInterval(60)
+        while !done && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+        }
+        exit(rc)
+    } catch { print("download failed: \(error.localizedDescription)"); exit(1) }
+}
+
 let app = NSApplication.shared
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-shot" {
+    // Off-screen render of the Wallpapers tab for layout review. Never
+    // ordered front, so it cannot steal focus from a running dashboard.
+    app.setActivationPolicy(.accessory)
+    let root = RootView(frame: NSRect(x: 0, y: 0, width: 860, height: 720))
+    let win = NSWindow(contentRect: root.frame, styleMask: .borderless,
+                       backing: .buffered, defer: false)
+    win.contentView = root
+    root.showTab(3)
+    if CommandLine.arguments.contains("more"),
+       let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
+        tab.setMoreFilters(true)
+    }
+    root.layoutSubtreeIfNeeded()
+    // wait for the first search to land, then let thumbnails settle a moment
+    let deadline = Date().addingTimeInterval(15)
+    while Date() < deadline {
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+        if let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first,
+           !tab.debugGridInfo().contains("searching=true") { break }
+    }
+    let settle = Date().addingTimeInterval(1.5)
+    while Date() < settle { RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1)) }
+    if CommandLine.arguments.contains("hover"),
+       let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
+        tab.debugPreviewStates()
+    }
+    root.layoutSubtreeIfNeeded()
+    guard let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { exit(1) }
+    root.cacheDisplay(in: root.bounds, to: rep)
+    guard let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
+    try? png.write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+    print("wrote \(CommandLine.arguments[2])")
+    exit(0)
+}
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
