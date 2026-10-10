@@ -2913,7 +2913,7 @@ final class PaletteModel {
 
     // --- seeding ------------------------------------------------------------
 
-    func seedDraft(image: String, colors: [String], resolved: String) {
+    func seedDraft(image: String, colors: [String], accent: String?, resolved: String) {
         imagePath = image
         method = "magic"
         sourceIsPreset = false
@@ -2921,9 +2921,10 @@ final class PaletteModel {
         resolvedMode = resolved == "light" ? "light" : "dark"
         baseColors = colors
         // Aether's setPalette at extraction: the UI colours derive from the
-        // new palette (accent = the palette's orange), they are not the
-        // wallpaper's own
-        extendedHex = defaultExtended(colors, accent: nil)
+        // new palette. For Magic the accent is the wallpaper's own role
+        // accent (`palette magic --roles`) so the draft and the raw theme
+        // stay one theme; without it the palette's orange stands in.
+        extendedHex = defaultExtended(colors, accent: accent)
         adjustments = EditorAdjustments()
         curve = []
         locked.removeAll()
@@ -3403,6 +3404,17 @@ final class PaletteModel {
                let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                 colors = obj["colors"] as? [String] ?? []
             }
+            // A magic re-extraction is the wallpaper's own theme again: the
+            // accent returns to the picture's role accent (so the edition
+            // matches the raw Wallpaper cell), not the palette's orange.
+            var magicAccent: String? = nil
+            if m == "magic" {
+                let (rc, ro) = self.themecore("palette magic \(q) --roles --json")
+                if rc == 0, let d = ro.data(using: .utf8),
+                   let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
+                    magicAccent = obj["accent"] as? String
+                }
+            }
             guard colors.count == 16 else { return }
             DispatchQueue.main.async {
                 guard self.paletteGeneration == gen else { return }
@@ -3414,6 +3426,7 @@ final class PaletteModel {
                 self.curve = []
                 self.adjustments = EditorAdjustments()
                 self.resetExtended(next)
+                if let magicAccent { self.extendedHex["accent"] = magicAccent }
                 self.update()
                 self.refreshRender()
             }
@@ -3554,14 +3567,15 @@ final class PaletteModel {
     }
 
     // The mini palette strips the Method picker shows. The Magic strip is
-    // the seed itself and appears at once; the 24 mode strips run in small
+    // the seed itself and appears at once; the mode strips run in small
     // parallel batches shortly after the first paint, so the picker is
-    // populated by the time it is opened.
+    // populated by the time it is opened. Magic runs with them: an edition
+    // seeds no strip of its own, and without it the Magic row stayed empty.
     private func loadStrips() {
         guard !imagePath.isEmpty else { return }
         stripGeneration += 1
         let gen = stripGeneration
-        let values = modeGroups.flatMap { $0.modes.map { $0.value } }
+        let values = ["magic"] + modeGroups.flatMap { $0.modes.map { $0.value } }
         let q = shellQuote(imagePath)
         let light = resolvedMode == "light"
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -6207,6 +6221,7 @@ final class ThemeEditor {
                         + "omacosy-editor-seed-\(ProcessInfo.processInfo.processIdentifier).env"
                     let (tc, _) = shell("\(HOME)/.local/bin/omacosy-term-palette \(shellQuote(dir)) \(shellQuote(envFile)) >/dev/null 2>&1")
                     var byIndex: [Int: String] = [:]
+                    var accent: String? = nil
                     var resolved = "dark"
                     if tc == 0, let text = try? String(contentsOfFile: envFile, encoding: .utf8) {
                         for line in text.split(separator: "\n") {
@@ -6215,6 +6230,8 @@ final class ThemeEditor {
                             let value = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
                             if parts[0].hasPrefix("OMACOSY_P"), let i = Int(parts[0].dropFirst(9)) {
                                 byIndex[i] = value
+                            } else if parts[0] == "OMACOSY_ACCENT" {
+                                accent = value
                             } else if parts[0] == "OMACOSY_IS_DARK" {
                                 resolved = value == "1" ? "dark" : "light"
                             }
@@ -6225,7 +6242,7 @@ final class ThemeEditor {
                     if colors.count == 16 {
                         DispatchQueue.main.async {
                             self.model.seedDraft(image: wallpaper, colors: colors,
-                                                 resolved: resolved)
+                                                 accent: accent, resolved: resolved)
                         }
                         return
                     }
@@ -6256,12 +6273,13 @@ final class ThemeEditor {
                 group.wait()
                 lock.lock()
                 let finalColors = colors
+                let accent = roles["accent"] as? String
                 let resolved = (roles["ladder"] as? String) == "light" ? "light" : "dark"
                 lock.unlock()
                 DispatchQueue.main.async {
                     guard finalColors.count == 16 else { return }
                     self.model.seedDraft(image: wallpaper, colors: finalColors,
-                                         resolved: resolved)
+                                         accent: accent, resolved: resolved)
                 }
             }
         }
