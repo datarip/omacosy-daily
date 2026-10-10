@@ -343,7 +343,8 @@ file loads `~/.zshrc.local`.
 with seven tabs:
 
 - **Options** — the window manager (AeroSpace or OmniWM), window corners,
-  menu-bar mode, fullscreen, and terminal auto-theme.
+  menu-bar mode, fullscreen, terminal auto-theme, and a global **Hide NSFW
+  Content** switch.
 - **Workspaces** — which apps open on which workspace, per display, with a
   searchable picker. **Save** writes `~/.config/omacosy/settings.conf`, runs
   `omacosy-settings`, and drops any app rule you removed (under OmniWM that
@@ -353,11 +354,20 @@ with seven tabs:
   each saved variation gets a named card of its own, and its picture
   carries a `· N variation(s)` badge. Hovering a card shows its pill —
   **Edit** reopens a saved variation, **Customize** starts a new one from
-  a wallpaper in the Theme Editor.
-- **Wallpapers** — wallhaven.cc browsing; the tab is the shell until its
-  Phase 7 lands.
-- **Storage** — the local wallpapers folder: where it is, a button that opens
-  it, **Add Images** and **Set Folder**.
+  a wallpaper in the Theme Editor — and a small **trash**. The trash asks
+  before removing: the wallpaper **file goes to the Finder Trash**, and its
+  saved variations can be deleted at the same time.
+- **Wallpapers** — browses **wallhaven.cc**: a search row (query, sorting,
+  order), category and purity chips, a resolution dropdown, **More Filters**
+  (colour and ratio), S/M/L cards and a results count. It fetches three pages
+  at once as you scroll, caching thumbnails on disk, and shows each picture's
+  resolution and size. Hover a card for **save**, **bookmark**,
+  **bulk-select** and **download**; downloads land in the wallpaper folder as
+  the next `Wallpaper #N`, with a green check when they arrive and nothing
+  switching on its own. A **Bookmarked** filter shows saved pictures.
+- **Storage** — the local wallpapers folder (where it is, a button that opens
+  it, **Add Images**, **Set Folder**) and a **Thumbnail Cache** row with its
+  size, a **Clear Cache** button and a button that opens the cache folder.
 - **API Keys** — the wallhaven.cc API key, masked, stored locally.
 - **Update** — `omacosy-update --check`, with the install button behind it.
 
