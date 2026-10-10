@@ -700,6 +700,10 @@ final class OptionsDocView: NSView {
                         x: 0, midTop: rowMid, height: bounds.height)
             drawMidLeft(row.desc, nerdFont("Regular", 11), palette.muted,
                         x: 0, midTop: rowMid + 18, height: bounds.height)
+            if let slider = row.slider {
+                drawMidLeft(slider.value.map { "\($0)%" } ?? "—", nerdFont("Bold", 11),
+                            palette.label, x: bounds.width - 264, midTop: rowMid, height: bounds.height)
+            }
             top += rowH
             palette.muted.withAlphaComponent(0.25).setFill()
             NSRect(x: 0, y: bounds.height - top - 0.5, width: bounds.width, height: 1).fill()
@@ -768,6 +772,7 @@ final class OptionsTabView: NSView, ScrollStepTab {
 
         let opacitySlider = OpacitySliderView()
         opacitySlider.value = readGlobalToolOpacity() ?? readTerminalOpacity() ?? 100
+        opacitySlider.onChange = { [weak self] _ in self?.doc.needsDisplay = true }
 
         rows = [
             OptionRow(category: "Window Manager", title: "Window Manager",
