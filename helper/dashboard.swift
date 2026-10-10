@@ -2978,13 +2978,296 @@ final class EditorWindow: NSWindow {
     override var canBecomeKey: Bool { true }
 }
 
-// One column of the editor card. The shell draws the header and leaves the
-// body to the panel that will own it.
-final class EditorColumnView: NSView {
-    var title = "" { didSet { needsDisplay = true } }
+// The wallpaper editor's four slider groups, in Aether's categories. Ranges
+// follow FilterControls.svelte (the real Aether UI, and the scale the engine's
+// /4 blur expects); the docs' §Filter Categories ranges differ for blur
+// (0-5px) and brightness/contrast (50-150), which do not fit the engine.
+enum EditorFilterFields {
+    static let basic: [SliderField] = [
+        SliderField(key: "blur", label: "Blur", min: 0, max: 100, step: 1, def: 0),
+        SliderField(key: "brightness", label: "Brightness", min: 0, max: 200, step: 1, def: 100),
+        SliderField(key: "contrast", label: "Contrast", min: 0, max: 200, step: 1, def: 100),
+        SliderField(key: "saturation", label: "Saturation", min: 0, max: 200, step: 1, def: 100),
+        SliderField(key: "hueRotate", label: "Hue Shift", min: 0, max: 360, step: 1, def: 0),
+    ]
+    static let effects: [SliderField] = [
+        SliderField(key: "sepia", label: "Sepia", min: 0, max: 100, step: 1, def: 0),
+        SliderField(key: "invert", label: "Invert", min: 0, max: 100, step: 1, def: 0),
+    ]
+    static let advanced: [SliderField] = [
+        SliderField(key: "exposure", label: "Exposure", min: -100, max: 100, step: 1, def: 0),
+        SliderField(key: "sharpen", label: "Sharpen", min: 0, max: 100, step: 1, def: 0),
+        SliderField(key: "vignette", label: "Vignette", min: 0, max: 100, step: 1, def: 0),
+        SliderField(key: "grain", label: "Grain", min: 0, max: 10, step: 1, def: 0),
+        SliderField(key: "shadows", label: "Shadows", min: -100, max: 100, step: 1, def: 0),
+        SliderField(key: "highlights", label: "Highlights", min: -100, max: 100, step: 1, def: 0),
+    ]
+    static let colourTone: [SliderField] = [
+        SliderField(key: "temperature", label: "Temperature", min: -100, max: 100, step: 1, def: 0),
+        SliderField(key: "tint", label: "Tint", min: -100, max: 100, step: 1, def: 0),
+    ]
+    static let groups: [(title: String, fields: [SliderField])] = [
+        ("Basic", basic), ("Effects", effects), ("Advanced", advanced), ("Colour Tone", colourTone),
+    ]
+}
+
+// The picture, drawn aspect-fit inside the editor column. A press-and-hold
+// compare (the original) is wired in a later session; the hook is here.
+final class EditorPreviewView: NSView {
+    var image: CGImage? { didSet { needsDisplay = true } }
+    var original: CGImage?
+    var showingOriginal = false { didSet { needsDisplay = true } }
+    private let inset: CGFloat = 8
 
     override func draw(_ dirtyRect: NSRect) {
-        drawMidLeft(title, nerdFont("Bold", 13), palette.accent,
+        let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                               xRadius: 6, yRadius: 6)
+        palette.itemBG.withAlphaComponent(0.35).setFill()
+        box.fill()
+        palette.muted.withAlphaComponent(0.3).setStroke()
+        box.lineWidth = 1
+        box.stroke()
+        guard let img = showingOriginal ? (original ?? image) : image else {
+            drawMidCenter("No picture", nerdFont("Regular", 11), palette.muted,
+                          centerX: bounds.midX, midTop: bounds.midY, height: bounds.height)
+            return
+        }
+        let avail = bounds.insetBy(dx: inset, dy: inset)
+        let iw = CGFloat(img.width), ih = CGFloat(img.height)
+        let scale = min(avail.width / iw, avail.height / ih)
+        let w = iw * scale, h = ih * scale
+        let rect = NSRect(x: avail.midX - w / 2, y: avail.midY - h / 2, width: w, height: h)
+        NSGraphicsContext.current?.cgContext.draw(img, in: rect)
+    }
+}
+
+// The scrollable editor body: the preview, then the four slider groups, then
+// the picture history's own Undo / Redo / Reset (separate from the palette's).
+final class EditorPanelDoc: NSView {
+    let preview = EditorPreviewView()
+    let undoButton = ButtonView()
+    let redoButton = ButtonView()
+    let resetButton = ButtonView()
+    var onSlider: ((String, Double) -> Void)?
+    var onUndo: (() -> Void)?
+    var onRedo: (() -> Void)?
+    var onReset: (() -> Void)?
+    private(set) var sliders: [AdjustmentSliderView] = []
+
+    private let insetL: CGFloat = 12
+    private let insetR: CGFloat = 12
+    static let previewH: CGFloat = 150
+    private var groupTops: [(title: String, top: CGFloat)] = []
+    private var buttonsTop: CGFloat = 0
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        addSubview(preview)
+        for group in EditorFilterFields.groups {
+            for f in group.fields {
+                let s = AdjustmentSliderView(spec: f)
+                s.onChange = { [weak self] v in self?.onSlider?(f.key, v) }
+                sliders.append(s)
+                addSubview(s)
+            }
+        }
+        undoButton.title = "\u{f0e2}"
+        redoButton.title = "\u{f01e}"
+        for b in [undoButton, redoButton] {
+            b.centeredByBounds = true
+            b.fontSize = 12
+        }
+        undoButton.toolTip = "Undo Picture Edit"
+        redoButton.toolTip = "Redo Picture Edit"
+        resetButton.title = "Reset"
+        undoButton.onClick = { [weak self] in self?.onUndo?() }
+        redoButton.onClick = { [weak self] in self?.onRedo?() }
+        resetButton.onClick = { [weak self] in self?.onReset?() }
+        addSubview(undoButton)
+        addSubview(redoButton)
+        addSubview(resetButton)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    private var contentW: CGFloat { max(0, bounds.width - insetL - insetR) }
+
+    func contentHeight() -> CGFloat {
+        var h: CGFloat = 10
+        h += EditorPanelDoc.previewH + 16
+        for group in EditorFilterFields.groups {
+            h += 30
+            h += CGFloat(group.fields.count) * AdjustmentSliderView.rowHeight
+            h += 10
+        }
+        h += 34 + 10
+        return h
+    }
+
+    private func rect(top: CGFloat, h: CGFloat, x: CGFloat, w: CGFloat) -> NSRect {
+        NSRect(x: x, y: bounds.height - top - h, width: w, height: h)
+    }
+
+    override func layout() {
+        super.layout()
+        var top: CGFloat = 10
+        preview.frame = rect(top: top, h: EditorPanelDoc.previewH, x: insetL, w: contentW)
+        top += EditorPanelDoc.previewH + 16
+        groupTops.removeAll()
+        var i = 0
+        for group in EditorFilterFields.groups {
+            groupTops.append((group.title, top))
+            top += 30
+            for _ in group.fields {
+                sliders[i].frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
+                                        x: insetL, w: contentW)
+                top += AdjustmentSliderView.rowHeight
+                i += 1
+            }
+            top += 10
+        }
+        buttonsTop = top
+        undoButton.frame = rect(top: top + 4, h: 24, x: insetL, w: 24)
+        redoButton.frame = rect(top: top + 4, h: 24, x: insetL + 28, w: 24)
+        resetButton.frame = rect(top: top + 4, h: 24, x: insetL + 60, w: 64)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        for (title, top) in groupTops {
+            drawTopLeft(title, nerdFont("Bold", 12), palette.accent,
+                        x: insetL, top: top, height: bounds.height)
+        }
+        palette.muted.withAlphaComponent(0.25).setFill()
+        NSRect(x: insetL, y: bounds.height - buttonsTop, width: contentW, height: 1).fill()
+    }
+}
+
+// The right column: the scroll host for EditorPanelDoc, with its own preview
+// render. The source is decoded once; each edit re-runs the CoreImage chain at
+// <=960 px on a 75 ms debounce, so a slider drag stays smooth.
+final class EditorColumnView: NSView {
+    var state: EditorState? { didSet { wire() } }
+    var imagePath = "" { didSet { if imagePath != oldValue { loadSource() } } }
+
+    let doc = EditorPanelDoc()
+    private let scroll = NSScrollView()
+    private let scroller = CustomScroller()
+    private var base: CIImage?
+    private var baseGeneration = 0
+    private var renderWork: DispatchWorkItem?
+    private let scrollerW: CGFloat = 8
+
+    static let previewMaxSize = 960
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        scroll.hasVerticalScroller = false
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        addSubview(scroll)
+        scroll.documentView = doc
+        addSubview(scroller)
+        scroller.scrollView = scroll
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(scrolled),
+            name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func scrolled() { scroller.refresh() }
+
+    func refreshColors() {
+        needsDisplay = true
+        markTree(doc)
+    }
+
+    private func markTree(_ view: NSView) {
+        view.needsDisplay = true
+        for sub in view.subviews { markTree(sub) }
+    }
+
+    private func wire() {
+        guard let state else { return }
+        state.onChange = { [weak self] in self?.schedulePreview() }
+        doc.onSlider = { [weak state] key, value in state?.set(key, value) }
+        doc.onUndo = { [weak state] in state?.undo() }
+        doc.onRedo = { [weak state] in state?.redo() }
+        doc.onReset = { [weak state] in state?.reset() }
+        syncFromState()
+    }
+
+    private func syncFromState() {
+        guard let state else { return }
+        for s in doc.sliders { s.setValue(state.filters[s.spec.key], notify: false) }
+    }
+
+    func loadSource() {
+        guard !imagePath.isEmpty else {
+            base = nil
+            doc.preview.image = nil
+            doc.preview.original = nil
+            return
+        }
+        baseGeneration += 1
+        let gen = baseGeneration
+        let path = imagePath
+        DispatchQueue.global().async { [weak self] in
+            let cg = editorSourceCGImage(URL(fileURLWithPath: path))
+            let ci = cg.map { CIImage(cgImage: $0) }
+            DispatchQueue.main.async {
+                guard let self, self.baseGeneration == gen else { return }
+                self.base = ci
+                self.doc.preview.original = cg
+                self.schedulePreview()
+            }
+        }
+    }
+
+    private func schedulePreview() {
+        renderWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.renderPreview() }
+        renderWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.075, execute: work)
+    }
+
+    private func renderPreview() {
+        guard let base else { return }
+        let filters = state?.filters ?? EditorFilters()
+        let gen = baseGeneration
+        DispatchQueue.global().async { [weak self] in
+            let cg = editorPreviewRender(base, raw: filters, maxSize: EditorColumnView.previewMaxSize)
+            DispatchQueue.main.async {
+                guard let self, self.baseGeneration == gen else { return }
+                self.doc.preview.image = cg
+            }
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        let headerH: CGFloat = 40
+        let h = max(0, bounds.height - headerH)
+        let scrollW = max(0, bounds.width - scrollerW - 12)
+        scroll.frame = NSRect(x: 0, y: 0, width: scrollW, height: h)
+        scroller.frame = NSRect(x: bounds.width - scrollerW, y: 0, width: scrollerW, height: h)
+        scroller.refresh()
+        let w = scroll.contentSize.width
+        let clipH = scroll.contentSize.height
+        let targetH = max(doc.contentHeight(), clipH)
+        if w > 0, (abs(doc.frame.width - w) > 0.5 || abs(doc.frame.height - targetH) > 0.5) {
+            let first = doc.frame.width == 0
+            doc.frame = NSRect(origin: .zero, size: NSSize(width: w, height: targetH))
+            doc.needsLayout = true
+            doc.layoutSubtreeIfNeeded()
+            let clip = scroll.contentView
+            let maxY = max(0, targetH - clipH)
+            if first { clip.scroll(to: NSPoint(x: 0, y: maxY)); scroll.reflectScrolledClipView(clip) }
+            scroller.refresh()
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        drawMidLeft("Wallpaper Editor", nerdFont("Bold", 13), palette.accent,
                     x: 16, midTop: 18, height: bounds.height)
     }
 }
@@ -3360,11 +3643,27 @@ private func ciCurveCube(_ image: CIImage, lut: [Double], size: Int = 32) -> CII
     return f.outputImage ?? image
 }
 
+// Decode the source once to a CGImage; the editor column caches it and wraps
+// it per edit, so a slider drag never re-decodes the file.
+func editorSourceCGImage(_ url: URL) -> CGImage? {
+    guard let input = CIImage(contentsOf: url, options: [.applyOrientationProperty: true]) else {
+        return nil
+    }
+    return editorCIContext.createCGImage(input, from: input.extent)
+}
+
+// Source-taking wrapper for the door: decode and render in one call.
 func imagePreviewCGImage(source: URL, raw: EditorFilters, maxSize: Int = 960) -> CGImage? {
-    let f = raw.strengthScaled()
     guard let input = CIImage(contentsOf: source, options: [.applyOrientationProperty: true]) else {
         return nil
     }
+    return editorPreviewRender(input, raw: raw, maxSize: maxSize)
+}
+
+// The render itself — crop, resize, the long-side cap, then the colour chain
+// and the transforms — on an already-loaded image.
+func editorPreviewRender(_ input: CIImage, raw: EditorFilters, maxSize: Int) -> CGImage? {
+    let f = raw.strengthScaled()
     let natW = input.extent.width, natH = input.extent.height
     guard natW >= 1, natH >= 1 else { return nil }
 
@@ -5090,8 +5389,26 @@ final class MethodPickerList: NSView {
 // square thumb in the middle, the value on the right. Drag sets the value
 // (snapped to the range's step), double-click resets it, and the value can be
 // typed.
+// A labelled slider row: drag to change with snapping, double-click to reset,
+// type a value and press Return to commit. Shared by the palette builder's 12
+// adjustments and the wallpaper editor's filter groups.
+struct SliderField {
+    let key: String
+    let label: String
+    let min: Double
+    let max: Double
+    let step: Double
+    let def: Double
+}
+
+extension EditorAdjustments.Field {
+    var spec: SliderField {
+        SliderField(key: key, label: label, min: min, max: max, step: step, def: def)
+    }
+}
+
 final class AdjustmentSliderView: NSView, NSTextFieldDelegate {
-    let field: EditorAdjustments.Field
+    let spec: SliderField
     var value: Double = 0 { didSet { needsDisplay = true } }
     var onChange: ((Double) -> Void)?
     private let valueField = NSTextField()
@@ -5099,10 +5416,10 @@ final class AdjustmentSliderView: NSView, NSTextFieldDelegate {
 
     static let rowHeight: CGFloat = 26
 
-    init(field: EditorAdjustments.Field) {
-        self.field = field
+    init(spec: SliderField) {
+        self.spec = spec
         super.init(frame: .zero)
-        value = field.def
+        value = spec.def
         valueField.isBezeled = false
         valueField.drawsBackground = false
         valueField.textColor = palette.label
@@ -5130,12 +5447,12 @@ final class AdjustmentSliderView: NSView, NSTextFieldDelegate {
 
     private func syncField() {
         guard valueField.currentEditor() == nil else { return }
-        valueField.stringValue = EditorAdjustments.format(value, field.step)
+        valueField.stringValue = EditorAdjustments.format(value, spec.step)
     }
 
     private func snap(_ v: Double) -> Double {
-        let steps = ((v - field.min) / field.step).rounded()
-        return min(field.max, max(field.min, field.min + steps * field.step))
+        let steps = ((v - spec.min) / spec.step).rounded()
+        return min(spec.max, max(spec.min, spec.min + steps * spec.step))
     }
 
     @objc private func fieldReturn() { commitField() }
@@ -5163,14 +5480,14 @@ final class AdjustmentSliderView: NSView, NSTextFieldDelegate {
     private func updateValue(from p: NSPoint) {
         let (x0, x1) = track
         let t = min(1, max(0, (p.x - x0) / max(1, x1 - x0)))
-        setValue(snap(field.min + Double(t) * (field.max - field.min)), notify: true)
+        setValue(snap(spec.min + Double(t) * (spec.max - spec.min)), notify: true)
     }
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         guard p.x >= labelW - 4, p.x <= bounds.width, p.y >= 4, p.y <= bounds.height - 4 else { return }
         if event.clickCount == 2 {
-            setValue(field.def, notify: true)
+            setValue(spec.def, notify: true)
             return
         }
         dragging = true
@@ -5186,14 +5503,14 @@ final class AdjustmentSliderView: NSView, NSTextFieldDelegate {
 
     override func draw(_ dirtyRect: NSRect) {
         let mid = bounds.height / 2
-        drawMidLeft(field.label, nerdFont("Regular", 11), palette.label,
+        drawMidLeft(spec.label, nerdFont("Regular", 11), palette.label,
                     x: 0, midTop: mid, height: bounds.height)
         let (x0, x1) = track
         palette.muted.withAlphaComponent(0.35).setFill()
         NSRect(x: x0, y: mid - 1, width: x1 - x0, height: 2).fill()
-        let t = (value - field.min) / max(1e-9, field.max - field.min)
+        let t = (value - spec.min) / max(1e-9, spec.max - spec.min)
         let cx = x0 + CGFloat(t) * (x1 - x0)
-        let atDefault = abs(value - field.def) < 1e-9
+        let atDefault = abs(value - spec.def) < 1e-9
         let thumb = NSBezierPath(roundedRect: NSRect(x: cx - 4.5, y: mid - 4.5, width: 9, height: 9),
                                  xRadius: 2, yRadius: 2)
         (atDefault ? palette.muted : palette.accent).setFill()
@@ -6417,7 +6734,7 @@ final class PaletteBuilderView: NSView {
         doc.inspector.onColor = { [weak self] hex in self?.model?.writeEditTarget(hex) }
         doc.curveView.onChange = { [weak self] points in self?.model?.setCurve(points) }
         for slider in doc.sliders {
-            let key = slider.field.key
+            let key = slider.spec.key
             slider.onChange = { [weak self] v in self?.model?.setAdjustment(key, v) }
         }
         doc.resetButton.onClick = { [weak self] in self?.model?.resetAdjustments() }
@@ -6443,7 +6760,7 @@ final class PaletteBuilderView: NSView {
         doc.curveView.points = model.curve
         doc.curveView.histogram = model.histogram
         for slider in doc.sliders {
-            slider.setValue(model.adjustments[slider.field.key], notify: false)
+            slider.setValue(model.adjustments[slider.spec.key], notify: false)
         }
         let editing = model.editTarget != nil
         if doc.editorVisible != editing {
@@ -6569,7 +6886,7 @@ final class PaletteBuilderDoc: NSView {
         addSubview(inspector)
         addSubview(curveView)
         for f in EditorAdjustments.fields {
-            let s = AdjustmentSliderView(field: f)
+            let s = AdjustmentSliderView(spec: f.spec)
             sliders.append(s)
             addSubview(s)
         }
@@ -7686,7 +8003,6 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wallpaperEditor.title = "Wallpaper Editor"
         nameField.isBezeled = false
         nameField.drawsBackground = true
         nameField.backgroundColor = palette.itemBG.withAlphaComponent(0.25)
@@ -7858,6 +8174,8 @@ final class ThemeEditor {
     private let root: ThemeEditorView
     private let subject: EditorSubject
     private let model = PaletteModel()
+    // the picture editor's own state and history, separate from the palette's
+    private let editorState = EditorState()
     private let status: ((String) -> Void)?
     private var keyMonitor: Any?
     private var messageWork: DispatchWorkItem?
@@ -7883,10 +8201,19 @@ final class ThemeEditor {
         }
         root.paletteBuilder.model = model
         root.paletteCanvas.model = model
+        root.wallpaperEditor.state = editorState
+        editorState.onChange = { [weak self] in
+            guard let self else { return }
+            self.dirty = true
+            self.root.dirty = true
+        }
         model.onUpdate = { [weak self] in
             guard let self else { return }
             self.root.paletteBuilder.sync()
             self.root.paletteCanvas.sync()
+            // the picture the previews and palette see (an edition's media or
+            // a draft's wallpaper); the panel decodes it and renders the edit
+            self.root.wallpaperEditor.imagePath = self.model.imagePath
         }
         model.onUserEdit = { [weak self] in
             guard let self else { return }
@@ -7990,6 +8317,7 @@ final class ThemeEditor {
         for v in e.root.subviews { v.needsDisplay = true }
         e.root.paletteBuilder.refreshColors()
         e.root.paletteCanvas.refreshColors()
+        e.root.wallpaperEditor.refreshColors()
     }
 
     // Esc on the dashboard while the editor is up means "close the editor,
@@ -11302,6 +11630,51 @@ if CommandLine.arguments.count >= 5, CommandLine.arguments[1] == "--image-previe
 }
 
 let app = NSApplication.shared
+// Off-screen render of the wallpaper editor for layout review, like
+// --wallhaven-shot. Never ordered front. An optional 4th argument is a recipe
+// JSON, so a specific edit can be captured.
+if CommandLine.arguments.count >= 4, CommandLine.arguments[1] == "--editor-shot" {
+    app.setActivationPolicy(.accessory)
+    let src = CommandLine.arguments[2]
+    let out = CommandLine.arguments[3]
+    let root = ThemeEditorView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700))
+    root.wantsLayer = true
+    let win = NSWindow(contentRect: root.frame, styleMask: .borderless,
+                       backing: .buffered, defer: false)
+    win.contentView = root
+    let state = EditorState()
+    root.wallpaperEditor.state = state
+    root.wallpaperEditor.imagePath = src
+    if CommandLine.arguments.count >= 5, let obj = editorFiltersJSON(CommandLine.arguments[4]) {
+        let f = EditorFilters(json: obj)
+        state.edit(nil) { $0 = f }
+    }
+    root.layoutSubtreeIfNeeded()
+    let deadline = Date().addingTimeInterval(2.5)
+    while Date() < deadline {
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+        root.layoutSubtreeIfNeeded()
+    }
+    let w = Int(root.bounds.width), h = Int(root.bounds.height)
+    guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                              bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
+    if let layer = root.layer {
+        layer.render(in: ctx)
+    } else {
+        let nsctx = NSGraphicsContext(cgContext: ctx, flipped: false)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = nsctx
+        root.displayIgnoringOpacity(root.bounds, in: nsctx)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+    guard let cg = ctx.makeImage() else { exit(1) }
+    let rep = NSBitmapImageRep(cgImage: cg)
+    guard let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
+    try? png.write(to: URL(fileURLWithPath: out))
+    print("wrote \(out)")
+    exit(0)
+}
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wh-icon-debug" {
     let size = NSSize(width: 420, height: 120)
     let img = NSImage(size: size)
