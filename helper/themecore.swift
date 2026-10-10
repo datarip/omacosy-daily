@@ -3559,6 +3559,7 @@ struct Theme {
     var wallpaper = ThemeWallpaper()
     var palette: Palette16
     var appOverrides: [String: [String: String]] = [:]
+    var toolBackground: String?   // nil = follow the machine default
     var terminals = Theme.defaultTerminals
     var favorite = false
     var raw: [String: Any] = [:]
@@ -3818,6 +3819,14 @@ extension Theme {
             }
         }
 
+        var toolBackground: String? = nil
+        if let value = top["toolBackground"], !(value is NSNull) {
+            guard let s = JSONField.string(value), s == "transparent" || s == "theme" else {
+                try bad("\"toolBackground\" must be \"transparent\" or \"theme\"")
+            }
+            toolBackground = s
+        }
+
         var terminals = Theme.defaultTerminals
         if let value = top["terminals"] {
             guard let arr = JSONField.array(value) else { try bad("\"terminals\" must be an array of names") }
@@ -3850,7 +3859,8 @@ extension Theme {
                      palette: Palette16(method: method, mode: mode, resolvedMode: resolvedMode,
                                            colors: colors, extended: extended, locked: locked,
                                            adjustments: adjustments, curve: curve),
-                     appOverrides: appOverrides, terminals: terminals, favorite: favorite, raw: top)
+                     appOverrides: appOverrides, toolBackground: toolBackground,
+                     terminals: terminals, favorite: favorite, raw: top)
     }
 }
 
@@ -3925,6 +3935,7 @@ extension Theme {
         out["favorite"] = favorite
         out["terminals"] = terminals
         out["appOverrides"] = appOverrides
+        if let toolBackground { out["toolBackground"] = toolBackground } else { out.removeValue(forKey: "toolBackground") }
 
         var wall = JSONField.dict(raw["wallpaper"]) ?? [:]
         wall["path"] = jsonOrNull(wallpaper.path)
@@ -4347,6 +4358,7 @@ enum Materialise {
         parts.append(theme.wallpaper.media ?? "")
         parts.append(theme.wallpaper.blur ? "1" : "0")
         parts.append(theme.wallpaper.edited ? "1" : "0")
+        parts.append(theme.toolBackground ?? "-")
         for app in theme.appOverrides.keys.sorted() {
             let roles = theme.appOverrides[app]!
             parts.append(app + ":" + roles.keys.sorted().map { "\($0)=\(roles[$0]!)" }.joined(separator: ","))
@@ -4475,6 +4487,9 @@ enum Materialise {
         // terminal appliers source it (only when terminal = on) and consult it
         // role by role; an edition with none writes nothing.
         var overrides = ""
+        if let tb = theme.toolBackground {
+            overrides += "OMACOSY_TOOL_BACKGROUND='\(tb)'\n"
+        }
         for app in theme.appOverrides.keys.sorted() {
             let roles = theme.appOverrides[app]!
             for role in roles.keys.sorted() {

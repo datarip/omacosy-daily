@@ -161,7 +161,10 @@ ovr() {
 # through. transparent (the default) keeps Ghostty's opacity visible in btop;
 # theme restores Aether's opaque {background}.
 tools_background() {
-  [ "$(read_key "$CONF" tools_background)" = theme ] && printf 'theme' || printf 'transparent'
+  local v="${OMACOSY_TOOL_BACKGROUND:-}"
+  [ -n "$v" ] || v="$(read_key "$CONF" tools_background)"
+  v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"
+  case "$v" in theme | opaque) printf 'theme' ;; *) printf 'transparent' ;; esac
 }
 
 # Ghostty reads this file through an OPTIONAL include in omacosy's config
