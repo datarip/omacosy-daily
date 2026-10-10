@@ -40,6 +40,10 @@
 //   omacosy-themecore wallpaper scan [--dir DIR] [--json]                        (test support)
 //   omacosy-themecore image info <path> [--json]
 //   omacosy-themecore image histogram <path> [--json]
+//   omacosy-themecore image render <path> [--filters JSON|@FILE] [--preset NAME]
+//                                           [--out FILE] [--max N] [--quality Q] [--json]
+//   omacosy-themecore image auto levels|contrast|white-balance <path> [--json]
+//   omacosy-themecore image presets [--json]
 //   omacosy-themecore version [--json]
 //
 // Every verb takes --json and then prints one JSON value on stdout.
@@ -3503,6 +3507,777 @@ func imageHistogram(url: URL, maxWidth: Int = 512) throws -> [Int] {
     return histogram
 }
 
+// MARK: - Image filters (Phase 8a)
+
+// Ported from Aether's frontend `canvas-filters.ts` (v4.32.0). The filter
+// fields, the strength scaling, the per-pixel pass, the box blur, the
+// sharpen pass, the vignette and the transform order follow that file
+// operation for operation; the slider ranges come from
+// docs/wallpaper-editor.md. The engine is the single implementation of
+// record for export; the dashboard draws a best-effort CoreImage preview of
+// the same recipe (ImageFilters there mirrors these fields).
+//
+// Six fields of Aether's Filters are out of Omacosy's scope
+// (docs/wallpaper-editor.md does not list them): oilPaint, pixelate, fade,
+// clarity, posterize and colour noise. A recipe carrying them decodes and
+// re-encodes them untouched in `extra`, but the engine ignores them.
+
+// ECMAScript ToUint8Clamp: round half to even, then clamp to 0...255. The
+// canvas pixel stores in Aether go through a Uint8ClampedArray, not
+// Math.round, so a %.5 tie lands on the even byte there and must land on the
+// same byte here or the fixtures disagree by one.
+func toUint8Clamp(_ v: Double) -> UInt8 {
+    if v.isNaN { return 0 }
+    if v <= 0 { return 0 }
+    if v >= 255 { return 255 }
+    return UInt8(v.rounded(.toNearestOrEven))
+}
+
+// HSL with h, s, l all in 0...1, the palette-grade LUT's own primitive
+// (color.ts `rgbToHsl01` / `hslToRgb01`).
+func rgbToHSL01(_ r: Double, _ g: Double, _ b: Double) -> (h: Double, s: Double, l: Double) {
+    let rn = r / 255, gn = g / 255, bn = b / 255
+    let maxV = max(rn, max(gn, bn)), minV = min(rn, min(gn, bn))
+    let l = (maxV + minV) / 2
+    var h = 0.0, s = 0.0
+    if maxV != minV {
+        let d = maxV - minV
+        s = l > 0.5 ? d / (2 - maxV - minV) : d / (maxV + minV)
+        if maxV == rn {
+            h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6
+        } else if maxV == gn {
+            h = ((bn - rn) / d + 2) / 6
+        } else {
+            h = ((rn - gn) / d + 4) / 6
+        }
+    }
+    return (h, s, l)
+}
+
+func hslToRGB01(_ h: Double, _ s: Double, _ l: Double) -> (r: Double, g: Double, b: Double) {
+    if s == 0 { return (l, l, l) }
+    let q = l < 0.5 ? l * (1 + s) : l + s - l * s
+    let p = 2 * l - q
+    func hue2rgb(_ p: Double, _ q: Double, _ t0: Double) -> Double {
+        var t = t0
+        if t < 0 { t += 1 }
+        if t > 1 { t -= 1 }
+        if t < 1.0 / 6.0 { return p + (q - p) * 6 * t }
+        if t < 1.0 / 2.0 { return q }
+        if t < 2.0 / 3.0 { return p + (q - p) * (2.0 / 3.0 - t) * 6 }
+        return p
+    }
+    return (hue2rgb(p, q, h + 1.0 / 3.0), hue2rgb(p, q, h), hue2rgb(p, q, h - 1.0 / 3.0))
+}
+
+// Hue (0...1) interpolated along the shortest arc (canvas-filters `lerpHue`).
+func lerpHue(_ a: Double, _ b: Double, _ t: Double) -> Double {
+    var d = b - a
+    if d > 0.5 { d -= 1 } else if d < -0.5 { d += 1 }
+    var h = a + d * t
+    if h < 0 { h += 1 }
+    if h >= 1 { h -= 1 }
+    return h
+}
+
+// 256*3 RGB LUT from ordered palette hex stops (Aether `buildPaletteLUT`).
+// Hue and saturation are interpolated between stops at position Y/255;
+// lightness IS Y/255 itself, so original brightness survives the grade.
+// Stops are sorted by lightness, so the picker's click order never matters.
+// nil for fewer than two stops, or any invalid stop (Aether's rule: an
+// unparsable hex yields (0,0,0), which it rejects unless it really is
+// #000000).
+func buildPaletteLUT(_ stops: [String]) -> [UInt8]? {
+    if stops.count < 2 { return nil }
+    var hsl: [(h: Double, s: Double, l: Double)] = []
+    for hex in stops {
+        guard hex.count >= 7, let rgb = ColorMath.hexUInt32(hex) else { return nil }
+        let r = Double((rgb >> 16) & 0xff), g = Double((rgb >> 8) & 0xff), b = Double(rgb & 0xff)
+        if r == 0 && g == 0 && b == 0 && hex.lowercased() != "#000000" { return nil }
+        hsl.append(rgbToHSL01(r, g, b))
+    }
+    hsl.sort { $0.l < $1.l }
+    let segs = hsl.count - 1
+    var lut = [UInt8](repeating: 0, count: 256 * 3)
+    for y in 0..<256 {
+        let t = Double(y) / 255
+        let pos = t * Double(segs)
+        let i0 = min(segs - 1, Int(pos.rounded(.down)))
+        let f = pos - Double(i0)
+        let a = hsl[i0], b = hsl[i0 + 1]
+        let out = hslToRGB01(lerpHue(a.h, b.h, f), a.s * (1 - f) + b.s * f, t)
+        lut[y * 3] = UInt8(max(0, min(255, (out.r * 255).rounded())))
+        lut[y * 3 + 1] = UInt8(max(0, min(255, (out.g * 255).rounded())))
+        lut[y * 3 + 2] = UInt8(max(0, min(255, (out.b * 255).rounded())))
+    }
+    return lut
+}
+
+struct ImageFilters {
+    var blur = 0.0
+    var brightness = 100.0
+    var contrast = 100.0
+    var saturation = 100.0
+    var hueRotate = 0.0
+    var sepia = 0.0
+    var invert = 0.0
+    var exposure = 0.0
+    var vignette = 0.0
+    var sharpen = 0.0
+    var grain = 0.0
+    var shadows = 0.0
+    var highlights = 0.0
+    var temperature = 0.0
+    var tint = 0.0
+    var curvePoints: [[Double]] = []
+    var paletteStops: [String] = []
+    var paletteStrength = 70.0
+    var cropX = 0.0
+    var cropY = 0.0
+    var cropW = 1.0
+    var cropH = 1.0
+    var resizeW = 0.0
+    var resizeH = 0.0
+    var rotate = 0.0
+    var flipH = false
+    var flipV = false
+    var strength = 100.0
+    var extra: [String: Any] = [:]
+
+    init() {}
+
+    // "auto levels|contrast|white-balance" returns a fragment, not a full set.
+    init(json: [String: Any]) {
+        self.init()
+        let known: Set<String> = ["blur", "brightness", "contrast", "saturation", "hueRotate",
+            "hue_rotate", "sepia", "invert", "exposure", "vignette", "sharpen", "grain",
+            "shadows", "highlights", "temperature", "tint", "curvePoints", "curve_points",
+            "paletteStops", "palette_stops", "paletteStrength", "palette_strength",
+            "cropX", "cropY", "cropW", "cropH", "crop_x", "crop_y", "crop_w", "crop_h",
+            "resizeW", "resizeH", "resize_w", "resize_h", "rotate", "flipH", "flipV",
+            "flip_h", "flip_v", "strength"]
+        for (key, value) in json {
+            let canon: String
+            switch key {
+            case "hue_rotate": canon = "hueRotate"
+            case "curve_points": canon = "curvePoints"
+            case "palette_stops": canon = "paletteStops"
+            case "palette_strength": canon = "paletteStrength"
+            case "crop_x": canon = "cropX"
+            case "crop_y": canon = "cropY"
+            case "crop_w": canon = "cropW"
+            case "crop_h": canon = "cropH"
+            case "resize_w": canon = "resizeW"
+            case "resize_h": canon = "resizeH"
+            case "flip_h": canon = "flipH"
+            case "flip_v": canon = "flipV"
+            default: canon = key
+            }
+            guard known.contains(key) else { extra[key] = value; continue }
+            switch canon {
+            case "blur": blur = num(value)
+            case "brightness": brightness = num(value)
+            case "contrast": contrast = num(value)
+            case "saturation": saturation = num(value)
+            case "hueRotate": hueRotate = num(value)
+            case "sepia": sepia = num(value)
+            case "invert": invert = num(value)
+            case "exposure": exposure = num(value)
+            case "vignette": vignette = num(value)
+            case "sharpen": sharpen = num(value)
+            case "grain": grain = num(value)
+            case "shadows": shadows = num(value)
+            case "highlights": highlights = num(value)
+            case "temperature": temperature = num(value)
+            case "tint": tint = num(value)
+            case "paletteStrength": paletteStrength = num(value)
+            case "cropX": cropX = num(value)
+            case "cropY": cropY = num(value)
+            case "cropW": cropW = num(value)
+            case "cropH": cropH = num(value)
+            case "resizeW": resizeW = num(value)
+            case "resizeH": resizeH = num(value)
+            case "rotate": rotate = num(value)
+            case "strength": strength = num(value)
+            case "flipH": flipH = bool(value)
+            case "flipV": flipV = bool(value)
+            case "curvePoints":
+                if let outer = value as? [Any] {
+                    var pts: [[Double]] = []
+                    for row in outer {
+                        if let pair = row as? [Any], pair.count == 2,
+                           let x = (pair[0] as? NSNumber)?.doubleValue,
+                           let y = (pair[1] as? NSNumber)?.doubleValue {
+                            pts.append([x, y])
+                        }
+                    }
+                    curvePoints = pts
+                }
+            case "paletteStops":
+                if let list = value as? [String] { paletteStops = list }
+            default: break
+            }
+        }
+    }
+
+    private func num(_ value: Any) -> Double {
+        if let n = value as? NSNumber { return n.doubleValue }
+        if let n = value as? Double { return n }
+        if let n = value as? Int { return Double(n) }
+        return 0
+    }
+    private func bool(_ value: Any) -> Bool {
+        if let b = value as? Bool { return b }
+        if let n = value as? NSNumber { return n.boolValue }
+        return false
+    }
+
+    // Aether's applyStrength: 100 leaves every value alone; 0 returns the
+    // neutral recipe. Structural fields (crop, resize, rotate, flip, palette
+    // stops) are NOT scaled — strength dials stylistic intensity only. Curve
+    // control points move toward the y=x identity line.
+    func strengthScaled() -> ImageFilters {
+        let s = strength / 100
+        if s == 1 { return self }
+        var f = self
+        func lerp(_ v: Double, _ def: Double) -> Double { def + (v - def) * s }
+        f.brightness = lerp(brightness, 100)
+        f.contrast = lerp(contrast, 100)
+        f.saturation = lerp(saturation, 100)
+        f.exposure = lerp(exposure, 0)
+        f.shadows = lerp(shadows, 0)
+        f.highlights = lerp(highlights, 0)
+        f.temperature = lerp(temperature, 0)
+        f.tint = lerp(tint, 0)
+        f.hueRotate = hueRotate * s
+        f.sepia = sepia * s
+        f.invert = invert * s
+        f.vignette = vignette * s
+        f.sharpen = sharpen * s
+        f.grain = grain * s
+        f.blur = blur * s
+        f.paletteStrength = paletteStrength * s
+        f.curvePoints = curvePoints.map { [$0[0], $0[0] + ($0[1] - $0[0]) * s] }
+        return f
+    }
+
+    var isIdentity: Bool {
+        curvePoints.isEmpty && paletteStops.count < 2 && blur == 0 && brightness == 100
+            && contrast == 100 && saturation == 100 && hueRotate == 0 && sepia == 0 && invert == 0
+            && exposure == 0 && vignette == 0 && sharpen == 0 && grain == 0 && shadows == 0
+            && highlights == 0 && temperature == 0 && tint == 0 && rotate == 0 && !flipH && !flipV
+            && cropX == 0 && cropY == 0 && cropW == 1 && cropH == 1 && resizeW == 0 && resizeH == 0
+    }
+}
+
+// The 12 quick presets of docs/wallpaper-editor.md, verbatim from Aether's
+// FilterControls.svelte. Each is a delta applied over the current state, so
+// absent fields keep whatever the user already chose (Aether's applyPreset).
+struct ImagePreset {
+    let name: String
+    let values: [String: Any]
+}
+
+enum ImagePresets {
+    static let all: [ImagePreset] = [
+        ImagePreset(name: "Muted", values: ["brightness": 95, "contrast": 85, "saturation": 60, "exposure": -10]),
+        ImagePreset(name: "Dramatic", values: ["brightness": 90, "contrast": 130, "saturation": 110]),
+        ImagePreset(name: "Soft", values: ["brightness": 105, "contrast": 90, "saturation": 95, "exposure": 10]),
+        ImagePreset(name: "Vintage", values: ["brightness": 95, "contrast": 110, "saturation": 70, "sepia": 30]),
+        ImagePreset(name: "Vibrant", values: ["brightness": 105, "contrast": 115, "saturation": 140, "exposure": 10]),
+        ImagePreset(name: "Faded", values: ["brightness": 110, "contrast": 75, "saturation": 65, "exposure": 20]),
+        ImagePreset(name: "Cool", values: ["contrast": 105, "saturation": 95, "hueRotate": 200]),
+        ImagePreset(name: "Warm", values: ["contrast": 105, "saturation": 95, "hueRotate": 20]),
+        ImagePreset(name: "Cinematic", values: ["contrast": 120, "saturation": 85, "shadows": 20, "highlights": -15, "vignette": 35]),
+        ImagePreset(name: "Film", values: ["contrast": 95, "saturation": 90, "grain": 3, "sepia": 15, "vignette": 20]),
+        ImagePreset(name: "Crisp", values: ["contrast": 110, "saturation": 105, "sharpen": 40, "exposure": 5]),
+        ImagePreset(name: "Portrait", values: ["brightness": 102, "contrast": 95, "saturation": 92, "shadows": 15, "vignette": 25]),
+    ]
+    static func named(_ name: String) -> ImagePreset? {
+        all.first { $0.name.lowercased() == name.lowercased() }
+    }
+}
+
+// 8-bit non-premultiplied RGBA, row-major. The whole pipeline works on this.
+struct RGBAImage {
+    var width: Int
+    var height: Int
+    var pixels: [UInt8]   // width * height * 4
+
+    init(width: Int, height: Int, pixels: [UInt8]) {
+        self.width = width
+        self.height = height
+        self.pixels = pixels
+    }
+}
+
+enum ImagePipeline {
+    // Decode at full resolution into sRGB, straight (non-premultiplied)
+    // RGBA. Same profile discipline as sampleImage: an sRGB bitmap context
+    // converts an embedded profile rather than reading it raw.
+    static func decode(_ url: URL) throws -> RGBAImage {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int,
+              let height = props[kCGImagePropertyPixelHeight] as? Int else {
+            throw ThemeError(message: "cannot read image: \(url.path)")
+        }
+        guard width > 0, height > 0,
+              width <= Extract.maxImageDimension, height <= Extract.maxImageDimension,
+              width * height <= Extract.maxImagePixels else {
+            throw ThemeError(message: "unsafe image dimensions \(width)x\(height)")
+        }
+        guard let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw ThemeError(message: "cannot decode image: \(url.path)")
+        }
+        let bytesPerRow = width * 4
+        var buffer = [UInt8](repeating: 0, count: bytesPerRow * height)
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else {
+            throw ThemeError(message: "cannot create the sRGB colour space")
+        }
+        buffer.withUnsafeMutableBytes { raw in
+            guard let context = CGContext(data: raw.baseAddress, width: width, height: height,
+                                          bitsPerComponent: 8, bytesPerRow: bytesPerRow, space: space,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+            context.interpolationQuality = .high
+            context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        // Un-premultiply so the filter maths sees straight 0...255 channels.
+        for i in stride(from: 0, to: buffer.count, by: 4) {
+            let a = buffer[i + 3]
+            if a == 255 || a == 0 { continue }
+            let af = Double(a) / 255
+            buffer[i] = toUint8Clamp(Double(buffer[i]) / af)
+            buffer[i + 1] = toUint8Clamp(Double(buffer[i + 1]) / af)
+            buffer[i + 2] = toUint8Clamp(Double(buffer[i + 2]) / af)
+        }
+        return RGBAImage(width: width, height: height, pixels: buffer)
+    }
+
+    static func encode(_ image: RGBAImage, to url: URL, jpegQuality: Double = 0.92) throws {
+        // Test-support: a ".rgba" target is the raw width*height*4 bytes, so
+        // the fixture harness can compare pixels without a PNG decoder.
+        if url.pathExtension.lowercased() == "rgba" {
+            try Data(image.pixels).write(to: url)
+            return
+        }
+        let bytesPerRow = image.width * 4
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+        var buffer = image.pixels
+        let cg: CGImage? = buffer.withUnsafeMutableBytes { raw -> CGImage? in
+            guard let ctx = CGContext(data: raw.baseAddress, width: image.width, height: image.height,
+                                      bitsPerComponent: 8, bytesPerRow: bytesPerRow, space: colorSpace,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            return ctx.makeImage()
+        }
+        guard let cg else { throw ThemeError(message: "cannot make an image buffer") }
+        let isJPEG = url.pathExtension.lowercased() == "jpg" || url.pathExtension.lowercased() == "jpeg"
+        let type = isJPEG ? "public.jpeg" : "public.png"
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, type as CFString, 1, nil) else {
+            throw ThemeError(message: "cannot write \(url.path)")
+        }
+        let options: [CFString: Any] = isJPEG ? [kCGImageDestinationLossyCompressionQuality: jpegQuality] : [:]
+        CGImageDestinationAddImage(dest, cg, options as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else {
+            throw ThemeError(message: "cannot write \(url.path)")
+        }
+    }
+
+    // Crop a sub-rectangle (caller has already rounded/clamped it).
+    static func crop(_ image: RGBAImage, x: Int, y: Int, w: Int, h: Int) -> RGBAImage {
+        if x == 0 && y == 0 && w == image.width && h == image.height { return image }
+        var out = [UInt8](repeating: 0, count: w * h * 4)
+        for row in 0..<h {
+            let src = ((y + row) * image.width + x) * 4
+            let dst = row * w * 4
+            out[dst..<(dst + w * 4)] = image.pixels[src..<(src + w * 4)]
+        }
+        return RGBAImage(width: w, height: h, pixels: out)
+    }
+
+    // Resample with the system resampler. Aether's is the browser's (a
+    // CatmullRom-like) and can never be matched byte for byte; the engine is
+    // the record, so the exact pixels are whatever this produces.
+    static func resample(_ image: RGBAImage, toW w: Int, toH h: Int) throws -> RGBAImage {
+        if w == image.width && h == image.height { return image }
+        var src = image.pixels
+        let srcCG: CGImage? = src.withUnsafeMutableBytes { raw -> CGImage? in
+            guard let ctx = CGContext(data: raw.baseAddress, width: image.width, height: image.height,
+                                      bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            return ctx.makeImage()
+        }
+        guard let srcCG else { throw ThemeError(message: "cannot prepare a resize") }
+        var out = [UInt8](repeating: 0, count: w * h * 4)
+        out.withUnsafeMutableBytes { raw in
+            guard let ctx = CGContext(data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8,
+                                      bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+            ctx.interpolationQuality = .high
+            ctx.draw(srcCG, in: CGRect(x: 0, y: 0, width: w, height: h))
+        }
+        return RGBAImage(width: w, height: h, pixels: out)
+    }
+
+    // Aether's renderInternal, in its exact order: strength, crop, resize,
+    // maxSize cap, blur, the per-pixel pass, sharpen, vignette, rotate/flip.
+    static func render(url: URL, filters rawFilters: ImageFilters, maxSize: Int = 0) throws -> RGBAImage {
+        let f = rawFilters.strengthScaled()
+        let source = try decode(url)
+        let natW = source.width, natH = source.height
+
+        let srcX = Int((f.cropX * Double(natW)).rounded())
+        let srcY = Int((f.cropY * Double(natH)).rounded())
+        let srcW = max(1, Int((f.cropW * Double(natW)).rounded()))
+        let srcH = max(1, Int((f.cropH * Double(natH)).rounded()))
+        let cx = min(max(0, srcX), max(0, natW - 1))
+        let cy = min(max(0, srcY), max(0, natH - 1))
+        let cw = min(srcW, natW - cx)
+        let ch = min(srcH, natH - cy)
+
+        var outW = cw, outH = ch
+        if f.resizeW > 0 && f.resizeH > 0 {
+            outW = Int(f.resizeW); outH = Int(f.resizeH)
+        } else if f.resizeW > 0 {
+            outW = Int(f.resizeW); outH = Int((Double(ch) * (Double(outW) / Double(cw))).rounded())
+        } else if f.resizeH > 0 {
+            outH = Int(f.resizeH); outW = Int((Double(cw) * (Double(outH) / Double(ch))).rounded())
+        }
+        let fullLong = max(outW, outH)
+        if maxSize > 0 && (outW > maxSize || outH > maxSize) {
+            let scale = Double(maxSize) / Double(max(outW, outH))
+            outW = Int((Double(outW) * scale).rounded())
+            outH = Int((Double(outH) * scale).rounded())
+        }
+        let spatialScale = fullLong > 0 ? Double(max(outW, outH)) / Double(fullLong) : 1
+
+        var image = crop(source, x: cx, y: cy, w: cw, h: ch)
+        image = try resample(image, toW: outW, toH: outH)
+
+        if f.blur > 0 {
+            boxBlur(&image, radius: max(1, Int(((f.blur / 4) * spatialScale).rounded())))
+        }
+
+        let curveLUT: [UInt8]? = f.curvePoints.isEmpty ? nil : ToneCurve.lut(f.curvePoints)
+        let paletteLUT: [UInt8]? = (f.paletteStops.count >= 2 && f.paletteStrength > 0)
+            ? buildPaletteLUT(f.paletteStops) : nil
+        applyPixelPass(&image, f, curveLUT: curveLUT, paletteLUT: paletteLUT)
+        if f.sharpen > 0 { sharpen(&image, amount: f.sharpen / 100) }
+        if f.vignette > 0 { vignette(&image, strength: f.vignette / 100) }
+        if f.rotate.truncatingRemainder(dividingBy: 360) != 0 || f.flipH || f.flipV {
+            image = transform(image, rotate: f.rotate, flipH: f.flipH, flipV: f.flipV)
+        }
+        return image
+    }
+
+    // The single-pass per-pixel adjustments (canvas-filters.ts:508-690).
+    // Values stay floating point from one step to the next; only the store
+    // rounds, through ToUint8Clamp.
+    static func applyPixelPass(_ image: inout RGBAImage, _ f: ImageFilters,
+                               curveLUT: [UInt8]?, paletteLUT: [UInt8]?) {
+        let needsPixel = curveLUT != nil || paletteLUT != nil || f.brightness != 100
+            || f.contrast != 100 || f.saturation != 100 || f.hueRotate != 0 || f.sepia > 0
+            || f.invert > 0 || f.exposure != 0 || f.shadows != 0 || f.highlights != 0 || f.grain > 0
+            || f.temperature != 0 || f.tint != 0
+        if !needsPixel { return }
+
+        let bri = f.brightness / 100
+        let conFactor = f.contrast / 100
+        let sat = f.saturation / 100
+        let sepiaAmt = f.sepia / 100
+        let invertAmt = f.invert / 100
+        let gamma: Double = f.exposure != 0
+            ? (f.exposure > 0 ? 1 / (1 + f.exposure / 100) : 1 + abs(f.exposure) / 100) : 1
+        let shadowAdj = f.shadows / 200
+        let highlightAdj = f.highlights / 200
+        let paletteBlend = paletteLUT != nil ? f.paletteStrength / 100 : 0
+        let grainInt = f.grain * 8
+        let tempWarm = f.temperature / 100
+        let tintShift = f.tint / 100
+        let hueRad = f.hueRotate * Double.pi / 180
+        let cosH = cos(hueRad), sinH = sin(hueRad)
+
+        var d = image.pixels
+        for i in stride(from: 0, to: d.count, by: 4) {
+            var r = Double(d[i]), g = Double(d[i + 1]), b = Double(d[i + 2])
+
+            if let lut = curveLUT {
+                r = Double(lut[min(255, max(0, Int(r)))])
+                g = Double(lut[min(255, max(0, Int(g)))])
+                b = Double(lut[min(255, max(0, Int(b)))])
+            }
+            if invertAmt > 0 {
+                r += (255 - 2 * r) * invertAmt
+                g += (255 - 2 * g) * invertAmt
+                b += (255 - 2 * b) * invertAmt
+            }
+            r *= bri; g *= bri; b *= bri
+            r = 128 + (r - 128) * conFactor
+            g = 128 + (g - 128) * conFactor
+            b = 128 + (b - 128) * conFactor
+            if sat != 1 {
+                let gray = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                r = gray + (r - gray) * sat
+                g = gray + (g - gray) * sat
+                b = gray + (b - gray) * sat
+            }
+            if f.hueRotate != 0 {
+                let l = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                let u = -0.09991 * r - 0.33609 * g + 0.436 * b
+                let v = 0.615 * r - 0.55861 * g - 0.05639 * b
+                let u2 = u * cosH - v * sinH
+                let v2 = u * sinH + v * cosH
+                r = l + 1.28033 * v2
+                g = l - 0.21482 * u2 - 0.38059 * v2
+                b = l + 2.12798 * u2
+            }
+            if sepiaAmt > 0 {
+                let sr = 0.393 * r + 0.769 * g + 0.189 * b
+                let sg = 0.349 * r + 0.686 * g + 0.168 * b
+                let sb = 0.272 * r + 0.534 * g + 0.131 * b
+                r += (sr - r) * sepiaAmt
+                g += (sg - g) * sepiaAmt
+                b += (sb - b) * sepiaAmt
+            }
+            if gamma != 1 {
+                r = pow(max(0, r) / 255, gamma) * 255
+                g = pow(max(0, g) / 255, gamma) * 255
+                b = pow(max(0, b) / 255, gamma) * 255
+            }
+            if shadowAdj != 0 {
+                let rv = r / 255, gv = g / 255, bv = b / 255
+                if rv < 0.5 { r = (rv + shadowAdj * (1 - rv / 0.5)) * 255 }
+                if gv < 0.5 { g = (gv + shadowAdj * (1 - gv / 0.5)) * 255 }
+                if bv < 0.5 { b = (bv + shadowAdj * (1 - bv / 0.5)) * 255 }
+            }
+            if highlightAdj != 0 {
+                let rv = r / 255, gv = g / 255, bv = b / 255
+                if rv > 0.5 { r = (rv + highlightAdj * ((rv - 0.5) / 0.5)) * 255 }
+                if gv > 0.5 { g = (gv + highlightAdj * ((gv - 0.5) / 0.5)) * 255 }
+                if bv > 0.5 { b = (bv + highlightAdj * ((bv - 0.5) / 0.5)) * 255 }
+            }
+            if tempWarm != 0 { r += tempWarm * 30; b -= tempWarm * 30 }
+            if tintShift != 0 { g -= tintShift * 20; r += tintShift * 10; b += tintShift * 10 }
+            if let lut = paletteLUT {
+                let cMax = max(r, max(g, b)), cMin = min(r, min(g, b))
+                let y = Int((cMax + cMin) / 2)
+                let yi = y < 0 ? 0 : (y > 255 ? 255 : y)
+                let base = yi * 3
+                let t = paletteBlend, inv = 1 - t
+                r = r * inv + Double(lut[base]) * t
+                g = g * inv + Double(lut[base + 1]) * t
+                b = b * inv + Double(lut[base + 2]) * t
+            }
+            if grainInt > 0 {
+                let noise = (Double.random(in: 0..<1) - 0.5) * grainInt
+                r += noise; g += noise; b += noise
+            }
+            d[i] = toUint8Clamp(r)
+            d[i + 1] = toUint8Clamp(g)
+            d[i + 2] = toUint8Clamp(b)
+        }
+        image.pixels = d
+    }
+
+    // Aether's boxBlur: a naive two-pass (horizontal then vertical) average
+    // with clamped edges, every store through ToUint8Clamp. Kept naive for
+    // byte-exactness; the blur radius the UI can reach is small.
+    static func boxBlur(_ image: inout RGBAImage, radius: Int) {
+        let w = image.width, h = image.height
+        let src = image.pixels
+        var dst = src
+        for y in 0..<h {
+            for x in 0..<w {
+                var rS = 0.0, gS = 0.0, bS = 0.0, cnt = 0.0
+                for dx in -radius...radius {
+                    let nx = min(w - 1, max(0, x + dx))
+                    let j = (y * w + nx) * 4
+                    rS += Double(src[j]); gS += Double(src[j + 1]); bS += Double(src[j + 2]); cnt += 1
+                }
+                let j = (y * w + x) * 4
+                dst[j] = toUint8Clamp(rS / cnt)
+                dst[j + 1] = toUint8Clamp(gS / cnt)
+                dst[j + 2] = toUint8Clamp(bS / cnt)
+            }
+        }
+        let mid = dst
+        for y in 0..<h {
+            for x in 0..<w {
+                var rS = 0.0, gS = 0.0, bS = 0.0, cnt = 0.0
+                for dy in -radius...radius {
+                    let ny = min(h - 1, max(0, y + dy))
+                    let j = (ny * w + x) * 4
+                    rS += Double(mid[j]); gS += Double(mid[j + 1]); bS += Double(mid[j + 2]); cnt += 1
+                }
+                let j = (y * w + x) * 4
+                dst[j] = toUint8Clamp(rS / cnt)
+                dst[j + 1] = toUint8Clamp(gS / cnt)
+                dst[j + 2] = toUint8Clamp(bS / cnt)
+            }
+        }
+        image.pixels = dst
+    }
+
+    // Aether's sharpen: a 5-centre-minus-neighbours kernel, edges untouched.
+    static func sharpen(_ image: inout RGBAImage, amount: Double) {
+        let w = image.width, h = image.height
+        let src = image.pixels
+        var d = src
+        if w < 3 || h < 3 { return }
+        for y in 1..<(h - 1) {
+            for x in 1..<(w - 1) {
+                let idx = (y * w + x) * 4
+                for c in 0..<3 {
+                    let center = Double(src[idx + c]) * 5
+                    let n = Double(src[((y - 1) * w + x) * 4 + c])
+                        + Double(src[((y + 1) * w + x) * 4 + c])
+                        + Double(src[(y * w + x - 1) * 4 + c])
+                        + Double(src[(y * w + x + 1) * 4 + c])
+                    d[idx + c] = toUint8Clamp(Double(src[idx + c]) + (center - n) * amount * 0.25)
+                }
+            }
+        }
+        image.pixels = d
+    }
+
+    // Aether's vignette: a radial black gradient from 0 at 0.3 of the corner
+    // radius to strength*0.8 at 0.85, composited source-over (out = src*(1-a)).
+    static func vignette(_ image: inout RGBAImage, strength: Double) {
+        let w = image.width, h = image.height
+        let cx = Double(w) / 2, cy = Double(h) / 2
+        let maxR = (cx * cx + cy * cy).squareRoot()
+        let r0 = maxR * 0.3, r1 = maxR * 0.85
+        let maxA = strength * 0.8
+        var d = image.pixels
+        for y in 0..<h {
+            for x in 0..<w {
+                // Pixel centres, as the canvas gradient samples them.
+                let dx = Double(x) + 0.5 - cx, dy = Double(y) + 0.5 - cy
+                let r = (dx * dx + dy * dy).squareRoot()
+                var t = (r - r0) / (r1 - r0)
+                if t < 0 { t = 0 }; if t > 1 { t = 1 }
+                let a = t * maxA
+                if a <= 0 { continue }
+                let j = (y * w + x) * 4
+                let inv = 1 - a
+                d[j] = toUint8Clamp(Double(d[j]) * inv)
+                d[j + 1] = toUint8Clamp(Double(d[j + 1]) * inv)
+                d[j + 2] = toUint8Clamp(Double(d[j + 2]) * inv)
+            }
+        }
+        image.pixels = d
+    }
+
+    // Rotate (clockwise) and flip about the centre, in Aether's order:
+    // flip first, then rotate. Implemented as an inverse nearest-neighbour
+    // map, which is exact for the 90-degree steps the UI allows.
+    static func transform(_ image: RGBAImage, rotate: Double, flipH: Bool, flipV: Bool) -> RGBAImage {
+        let w = image.width, h = image.height
+        let rot = ((rotate.truncatingRemainder(dividingBy: 360)) + 360)
+            .truncatingRemainder(dividingBy: 360)
+        let swap = rot == 90 || rot == 270
+        let outW = swap ? h : w, outH = swap ? w : h
+        let theta = rot * Double.pi / 180
+        let cosT = cos(theta), sinT = sin(theta)
+        let sx = flipH ? -1.0 : 1.0
+        let sy = flipV ? -1.0 : 1.0
+        var out = [UInt8](repeating: 0, count: outW * outH * 4)
+        // Inverse transform, in pixel-CENTRE coordinates: a destination
+        // pixel centre maps back through undo-rotate and undo-flip to a
+        // source pixel centre; the containing source pixel is its floor.
+        // Pixel centres (not corners) are what makes this agree with the
+        // browser's rasterizer and with the recorder's canvas shim.
+        for oy in 0..<outH {
+            for ox in 0..<outW {
+                let ux = Double(ox) + 0.5 - Double(outW) / 2
+                let uy = Double(oy) + 0.5 - Double(outH) / 2
+                // Forward order is flip then rotate, so the inverse undoes
+                // the flip first, then the rotation.
+                let fx = ux / sx, fy = uy / sy
+                let rx = fx * cosT + fy * sinT
+                let ry = -fx * sinT + fy * cosT
+                let su = rx + Double(w) / 2
+                let sv = ry + Double(h) / 2
+                let srcX = Int(su.rounded(.down))
+                let srcY = Int(sv.rounded(.down))
+                guard srcX >= 0, srcX < w, srcY >= 0, srcY < h else { continue }
+                let s = (srcY * w + srcX) * 4
+                let o = (oy * outW + ox) * 4
+                out[o] = image.pixels[s]
+                out[o + 1] = image.pixels[s + 1]
+                out[o + 2] = image.pixels[s + 2]
+                out[o + 3] = image.pixels[s + 3]
+            }
+        }
+        return RGBAImage(width: outW, height: outH, pixels: out)
+    }
+}
+
+// MARK: Auto-correct fragments (canvas-filters.ts)
+
+func percentileIndex(_ hist: [Int], _ pct: Double) -> Int {
+    let total = hist.reduce(0, +)
+    let target = Double(total) * pct
+    var cum = 0.0
+    for i in 0..<256 {
+        cum += Double(hist[i])
+        if cum >= target { return i }
+    }
+    return 255
+}
+
+// Auto Levels: stretch the 0.5-99.5 percentile luminance range to 0..1.
+func autoLevelsCurve(_ hist: [Int]) -> [[Double]] {
+    let lo = percentileIndex(hist, 0.005)
+    let hi = percentileIndex(hist, 0.995)
+    if hi - lo < 10 { return [] }
+    var points: [[Double]] = []
+    if lo > 2 { points.append([Double(lo) / 255, 0.02]) }
+    if hi < 253 { points.append([Double(hi) / 255, 0.98]) }
+    return points
+}
+
+func autoContrastCurve() -> [[Double]] {
+    [[0.25, 0.18], [0.75, 0.82]]
+}
+
+func channelMean(_ hist: [Int]) -> Double {
+    var sum = 0.0, count = 0.0
+    for i in 0..<256 { sum += Double(hist[i]) * Double(i); count += Double(hist[i]) }
+    return count > 0 ? sum / count : 128
+}
+
+// Auto White Balance via the grey-world assumption: temperature and tint
+// that push the channel means toward equality.
+func autoWhiteBalance(r: [Int], g: [Int], b: [Int]) -> (temperature: Double, tint: Double) {
+    let mR = channelMean(r), mG = channelMean(g), mB = channelMean(b)
+    let temp = max(-100, min(100, ((mB - mR) * 100) / 60))
+    let tint = max(-100, min(100, (mG - (mR + mB) / 2) * 5))
+    return (temp.rounded(), tint.rounded())
+}
+
+// R, G, B histograms of a downsampled sRGB image, for Auto White Balance.
+func channelHistograms(url: URL, maxWidth: Int = 512) throws -> (r: [Int], g: [Int], b: [Int]) {
+    let image = try ImagePipeline.decode(url)
+    let dw = min(image.width, maxWidth)
+    let dh = max(1, Int((Double(image.height) * Double(dw) / Double(image.width)).rounded()))
+    var r = [Int](repeating: 0, count: 256)
+    var g = [Int](repeating: 0, count: 256)
+    var b = [Int](repeating: 0, count: 256)
+    for y in 0..<dh {
+        let sy = min(image.height - 1, Int(Double(y) * Double(image.height) / Double(dh)))
+        for x in 0..<dw {
+            let sx = min(image.width - 1, Int(Double(x) * Double(image.width) / Double(dw)))
+            let j = (sy * image.width + sx) * 4
+            r[Int(image.pixels[j])] += 1
+            g[Int(image.pixels[j + 1])] += 1
+            b[Int(image.pixels[j + 2])] += 1
+        }
+    }
+    return (r, g, b)
+}
+
 // MARK: - Theme records (schema v1)
 
 // One JSON file per theme under ~/.config/omacosy/themes/. The typed fields
@@ -4874,7 +5649,7 @@ func themeError(_ error: Error) -> Never {
 
 // MARK: - CLI
 
-let themecoreVersion = "0.6.0"
+let themecoreVersion = "0.7.0"
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write("omacosy-themecore: \(message)\n".data(using: .utf8)!)
@@ -4929,6 +5704,10 @@ func usage() -> Never {
            omacosy-themecore palette analyze <op> ...
            omacosy-themecore image info <path> [--json]
            omacosy-themecore image histogram <path> [--json]
+           omacosy-themecore image render <path> [--filters JSON|@FILE] [--preset NAME]
+                                           [--out FILE] [--max N] [--quality Q] [--json]
+           omacosy-themecore image auto levels|contrast|white-balance <path> [--json]
+           omacosy-themecore image presets [--json]
            omacosy-themecore version [--json]
 
     """.data(using: .utf8)!)
@@ -5043,6 +5822,67 @@ func curvePointsArgument(_ raw: String) -> [[Double]] {
         out.append([x, y])
     }
     return out
+}
+
+// `image render --filters`: an inline JSON object or @path to one.
+func imageFiltersJSON(_ raw: String) -> [String: Any] {
+    let text: String
+    if raw.hasPrefix("@") {
+        let path = Wallpapers.resolved(String(raw.dropFirst()))
+        guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
+            fail("cannot read \(path)")
+        }
+        text = contents
+    } else {
+        text = raw
+    }
+    guard let data = text.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        fail("--filters must be a JSON object or @file")
+    }
+    return object
+}
+
+// The individual image-filter flags, layered over --preset / --filters. Kept
+// beside the other CLI parsing so the dashboard and the CLI speak one
+// vocabulary.
+func takeImageFilterFlags(_ f: inout ImageFilters) {
+    if let v = takeNumber("--blur") { f.blur = v }
+    if let v = takeNumber("--brightness") { f.brightness = v }
+    if let v = takeNumber("--contrast") { f.contrast = v }
+    if let v = takeNumber("--saturation") { f.saturation = v }
+    if let v = takeNumber("--hue-rotate") { f.hueRotate = v }
+    if let v = takeNumber("--sepia") { f.sepia = v }
+    if let v = takeNumber("--invert") { f.invert = v }
+    if let v = takeNumber("--exposure") { f.exposure = v }
+    if let v = takeNumber("--vignette") { f.vignette = v }
+    if let v = takeNumber("--sharpen") { f.sharpen = v }
+    if let v = takeNumber("--grain") { f.grain = v }
+    if let v = takeNumber("--shadows") { f.shadows = v }
+    if let v = takeNumber("--highlights") { f.highlights = v }
+    if let v = takeNumber("--temperature") { f.temperature = v }
+    if let v = takeNumber("--tint") { f.tint = v }
+    if let v = takeNumber("--palette-strength") { f.paletteStrength = v }
+    if let v = takeNumber("--rotate") { f.rotate = v }
+    if let v = takeNumber("--strength") { f.strength = v }
+    if let v = takeFlag("--curve") { f.curvePoints = curvePointsArgument(v) }
+    if let v = takeFlag("--palette") { f.paletteStops = hexListArgument(v) }
+    if let v = takeFlag("--crop") {
+        let parts = v.split(separator: ",").map { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard parts.count == 4, parts.allSatisfy({ $0 != nil }) else {
+            fail("--crop must be \"x,y,w,h\"")
+        }
+        f.cropX = parts[0]!; f.cropY = parts[1]!; f.cropW = parts[2]!; f.cropH = parts[3]!
+    }
+    if let v = takeFlag("--resize") {
+        let parts = v.lowercased().split(separator: "x").map { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard parts.count == 2, parts.allSatisfy({ $0 != nil && $0! > 0 }) else {
+            fail("--resize must be \"WxH\"")
+        }
+        f.resizeW = parts[0]!; f.resizeH = parts[1]!
+    }
+    if takeBool("--flip-h") { f.flipH = true }
+    if takeBool("--flip-v") { f.flipV = true }
 }
 
 func noExtraArguments() {
@@ -6160,6 +7000,99 @@ case "image":
             bins.forEach { print($0) }
             exit(0)
         } catch { themeError(error) }
+
+    // The export verb: one full-resolution render through the engine, the
+    // single implementation of record. --max caps the long side (the
+    // dashboard's 960 px preview door); --out is required so nothing is ever
+    // written beside the source by accident.
+    case "render":
+        do {
+            guard let raw = args.first else { throw ThemeError(message: "image render needs a path") }
+            args.removeFirst()
+            let presetName = takeFlag("--preset")
+            let filtersRaw = takeFlag("--filters")
+            let maxRaw = takeFlag("--max")
+            let outRaw = takeFlag("--out")
+            let quality = takeNumber("--quality") ?? 0.92
+            var filters = ImageFilters()
+            if let presetName {
+                guard let preset = ImagePresets.named(presetName) else {
+                    throw ThemeError(message: "unknown preset: \(presetName)")
+                }
+                filters = ImageFilters(json: preset.values)
+            }
+            if let filtersRaw {
+                filters = ImageFilters(json: imageFiltersJSON(filtersRaw))
+            }
+            takeImageFilterFlags(&filters)
+            noExtraArguments()
+            guard let outRaw else { throw ThemeError(message: "image render needs --out FILE") }
+            let path = Wallpapers.resolved(raw)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {
+                throw ThemeError(message: "no such image: \(path)")
+            }
+            let maxSize = maxRaw.flatMap { Int($0) } ?? 0
+            let image = try ImagePipeline.render(url: URL(fileURLWithPath: path), filters: filters, maxSize: maxSize)
+            let out = Wallpapers.resolved(outRaw)
+            try ImagePipeline.encode(image, to: URL(fileURLWithPath: out), jpegQuality: quality)
+            if jsonOut {
+                printJSON(["source": path, "out": out, "width": image.width, "height": image.height,
+                           "bytes": (try? FileManager.default.attributesOfItem(atPath: out)[.size] as? Int) ?? 0])
+            }
+            print(out)
+            exit(0)
+        } catch { themeError(error) }
+
+    // The histogram's three one-click corrections, as filter fragments.
+    case "auto":
+        do {
+            guard let op = args.first else { throw ThemeError(message: "image auto needs levels|contrast|white-balance") }
+            args.removeFirst()
+            guard let raw = args.first else { throw ThemeError(message: "image auto \(op) needs a path") }
+            args.removeFirst()
+            noExtraArguments()
+            let path = Wallpapers.resolved(raw)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {
+                throw ThemeError(message: "no such image: \(path)")
+            }
+            let url = URL(fileURLWithPath: path)
+            switch op {
+            case "levels":
+                let points = autoLevelsCurve(try imageHistogram(url: url))
+                if jsonOut { printJSON(["path": path, "curvePoints": points]) }
+                for p in points { print("\(p[0]),\(p[1])") }
+                exit(0)
+            case "contrast":
+                let points = autoContrastCurve()
+                if jsonOut { printJSON(["path": path, "curvePoints": points]) }
+                for p in points { print("\(p[0]),\(p[1])") }
+                exit(0)
+            case "white-balance":
+                let h = try channelHistograms(url: url)
+                let wb = autoWhiteBalance(r: h.r, g: h.g, b: h.b)
+                if jsonOut { printJSON(["path": path, "temperature": wb.temperature, "tint": wb.tint]) }
+                print("temperature \(Int(wb.temperature))")
+                print("tint \(Int(wb.tint))")
+                exit(0)
+            default:
+                throw ThemeError(message: "image auto op must be levels|contrast|white-balance, not \(op)")
+            }
+        } catch { themeError(error) }
+
+    case "presets":
+        noExtraArguments()
+        if jsonOut {
+            printJSON(ImagePresets.all.map { ["name": $0.name, "values": $0.values] })
+        }
+        for preset in ImagePresets.all {
+            print(preset.name)
+            for key in preset.values.keys.sorted() {
+                print("  \(key) \(preset.values[key]!)")
+            }
+        }
+        exit(0)
 
     default:
         usage()
