@@ -4197,6 +4197,49 @@ enum Templates {
         for i in 0..<16 {
             ghostty.append(.init(key: "palette_\(i)", label: "Palette \(i)", source: "p\(i)"))
         }
+        // Neovim: the named palette plus the base16 table its colourscheme builds.
+        let nvimBase: [String] = ["bg", "bg", "sel_bg", "muted", "muted", "fg", "fg", "fg",
+                                  "red", "peach", "yellow", "green", "cyan", "accent",
+                                  "magenta", "magenta"]
+        let nvimBaseLabels = ["Base 00", "Base 01", "Base 02", "Base 03", "Base 04", "Base 05",
+                              "Base 06", "Base 07", "Base 08", "Base 09", "Base 0A", "Base 0B",
+                              "Base 0C", "Base 0D", "Base 0E", "Base 0F"]
+        var nvim: [TemplateRole] = [
+            .init(key: "bg", label: "Background", source: "bg"),
+            .init(key: "fg", label: "Foreground", source: "fg"),
+            .init(key: "accent", label: "Accent", source: "accent"),
+            .init(key: "alt", label: "Alternate", source: "magenta"),
+            .init(key: "ok", label: "OK", source: "green"),
+            .init(key: "warn", label: "Warn", source: "yellow"),
+            .init(key: "err", label: "Error", source: "red"),
+            .init(key: "info", label: "Info", source: "cyan"),
+            .init(key: "peach", label: "Peach", source: "peach"),
+            .init(key: "muted", label: "Muted", source: "muted"),
+        ]
+        for i in 0..<16 {
+            nvim.append(.init(key: String(format: "base%02X", i),
+                              label: nvimBaseLabels[i], source: nvimBase[i]))
+        }
+        // starship: the named roles and the sixteen ANSI names.
+        var starship: [TemplateRole] = [
+            .init(key: "bg", label: "Background", source: "bg"),
+            .init(key: "fg", label: "Foreground", source: "fg"),
+            .init(key: "accent", label: "Accent", source: "accent"),
+            .init(key: "ok", label: "OK", source: "green"),
+            .init(key: "warn", label: "Warn", source: "yellow"),
+            .init(key: "err", label: "Error", source: "red"),
+            .init(key: "info", label: "Info", source: "cyan"),
+            .init(key: "peach", label: "Peach", source: "peach"),
+            .init(key: "muted", label: "Muted", source: "muted"),
+        ]
+        let ansi = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"]
+        for i in 0..<8 {
+            starship.append(.init(key: ansi[i], label: ansi[i].capitalized, source: "p\(i)"))
+        }
+        for i in 0..<8 {
+            starship.append(.init(key: "bright_\(ansi[i])",
+                                  label: "Bright \(ansi[i].capitalized)", source: "p\(i + 8)"))
+        }
         return [
             TemplateApp(id: "btop", name: "btop", roles: [
                 .init(key: "main_bg", label: "Main Background", source: "bg"),
@@ -4233,6 +4276,8 @@ enum Templates {
                 .init(key: "unstagedChangesColor", label: "Unstaged Changes", source: "err"),
                 .init(key: "defaultFgColor", label: "Default Foreground", source: "fg"),
             ]),
+            TemplateApp(id: "nvim", name: "Neovim", roles: nvim),
+            TemplateApp(id: "starship", name: "starship", roles: starship),
         ]
     }()
 }
