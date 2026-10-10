@@ -3011,14 +3011,70 @@ enum EditorFilterFields {
     ]
 }
 
-// The scrollable editor body: the four slider groups, then the picture
-// history's own Undo / Redo / Reset (separate from the palette's). The edited
-// picture is shown in the central pane, not here.
+// The editor's histogram: the luminance as a filled backdrop, R/G/B as
+// coloured traces, each series normalised to its own peak.
+final class HistogramView: NSView {
+    var lum: [Int] = [] { didSet { needsDisplay = true } }
+    var r: [Int] = [] { didSet { needsDisplay = true } }
+    var g: [Int] = [] { didSet { needsDisplay = true } }
+    var b: [Int] = [] { didSet { needsDisplay = true } }
+
+    static let viewHeight: CGFloat = 72
+
+    override func draw(_ dirtyRect: NSRect) {
+        let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                               xRadius: 6, yRadius: 6)
+        palette.itemBG.withAlphaComponent(0.35).setFill()
+        box.fill()
+        palette.muted.withAlphaComponent(0.3).setStroke()
+        box.lineWidth = 1
+        box.stroke()
+        guard lum.count == 256 else {
+            drawMidCenter("Histogram", nerdFont("Regular", 11), palette.muted,
+                          centerX: bounds.midX, midTop: bounds.midY, height: bounds.height)
+            return
+        }
+        let inner = bounds.insetBy(dx: 6, dy: 6)
+        func point(_ i: Int, _ v: Int, _ maxV: Int) -> NSPoint {
+            NSPoint(x: inner.minX + inner.width * CGFloat(i) / 255,
+                    y: inner.minY + inner.height * CGFloat(Double(v) / Double(maxV)))
+        }
+        if let maxP = lum.max(), maxP > 0 {
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: inner.minX, y: inner.minY))
+            for i in 0..<256 { path.line(to: point(i, lum[i], maxP)) }
+            path.line(to: NSPoint(x: inner.maxX, y: inner.minY))
+            path.close()
+            palette.muted.withAlphaComponent(0.35).setFill()
+            path.fill()
+        }
+        for (bins, color) in [(r, NSColor.systemRed), (g, .systemGreen), (b, .systemBlue)] {
+            guard let maxP = bins.max(), maxP > 0 else { continue }
+            let path = NSBezierPath()
+            for i in 0..<256 {
+                if i == 0 { path.move(to: point(i, bins[i], maxP)) }
+                else { path.line(to: point(i, bins[i], maxP)) }
+            }
+            color.withAlphaComponent(0.85).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+    }
+}
+
+// The scrollable editor body: the histogram and its Auto buttons, the four
+// slider groups, then the picture history's own Undo / Redo / Reset (separate
+// from the palette's). The edited picture is shown in the central pane.
 final class EditorPanelDoc: NSView {
+    let histogram = HistogramView()
     let undoButton = ButtonView()
     let redoButton = ButtonView()
     let resetButton = ButtonView()
+    let autoLevelsButton = ButtonView()
+    let autoContrastButton = ButtonView()
+    let autoWBButton = ButtonView()
     var onSlider: ((String, Double) -> Void)?
+    var onAuto: ((String) -> Void)?
     var onUndo: (() -> Void)?
     var onRedo: (() -> Void)?
     var onReset: (() -> Void)?
@@ -3031,6 +3087,15 @@ final class EditorPanelDoc: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        addSubview(histogram)
+        for (b, title, op) in [(autoLevelsButton, "Auto Levels", "levels"),
+                               (autoContrastButton, "Auto Contrast", "contrast"),
+                               (autoWBButton, "Auto White Balance", "white-balance")] {
+            b.title = title
+            b.fontSize = 10
+            b.onClick = { [weak self] in self?.onAuto?(op) }
+            addSubview(b)
+        }
         for group in EditorFilterFields.groups {
             for f in group.fields {
                 let s = AdjustmentSliderView(spec: f)
@@ -3061,6 +3126,8 @@ final class EditorPanelDoc: NSView {
 
     func contentHeight() -> CGFloat {
         var h: CGFloat = 10
+        h += HistogramView.viewHeight + 6
+        h += 26 * 3 + 12
         for group in EditorFilterFields.groups {
             h += 30
             h += CGFloat(group.fields.count) * AdjustmentSliderView.rowHeight
@@ -3070,6 +3137,13 @@ final class EditorPanelDoc: NSView {
         return h
     }
 
+    func setHistogram(_ lum: [Int], _ r: [Int], _ g: [Int], _ b: [Int]) {
+        histogram.lum = lum
+        histogram.r = r
+        histogram.g = g
+        histogram.b = b
+    }
+
     private func rect(top: CGFloat, h: CGFloat, x: CGFloat, w: CGFloat) -> NSRect {
         NSRect(x: x, y: bounds.height - top - h, width: w, height: h)
     }
@@ -3077,6 +3151,13 @@ final class EditorPanelDoc: NSView {
     override func layout() {
         super.layout()
         var top: CGFloat = 10
+        histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
+        top += HistogramView.viewHeight + 6
+        for b in [autoLevelsButton, autoContrastButton, autoWBButton] {
+            b.frame = rect(top: top, h: 22, x: insetL, w: contentW)
+            top += 26
+        }
+        top += 12
         groupTops.removeAll()
         var i = 0
         for group in EditorFilterFields.groups {
@@ -3111,6 +3192,9 @@ final class EditorPanelDoc: NSView {
 // picture history's Undo / Redo / Reset).
 final class EditorColumnView: NSView {
     var state: EditorState? { didSet { wire() } }
+    // The Auto buttons call out to the editor, which owns the picture path and
+    // the engine.
+    var onAuto: ((String) -> Void)? { didSet { doc.onAuto = onAuto } }
 
     let doc = EditorPanelDoc()
     private let scroll = NSScrollView()
@@ -3153,6 +3237,7 @@ final class EditorColumnView: NSView {
         doc.onUndo = { [weak state] in state?.undo() }
         doc.onRedo = { [weak state] in state?.redo() }
         doc.onReset = { [weak state] in state?.reset() }
+        doc.onAuto = onAuto
         syncFromState()
     }
 
@@ -3161,6 +3246,11 @@ final class EditorColumnView: NSView {
     func syncFromState() {
         guard let state else { return }
         for s in doc.sliders { s.setValue(state.filters[s.spec.key], notify: false) }
+    }
+
+    // The editor hands the source's histograms here once it has decoded it.
+    func setHistogram(_ lum: [Int], _ r: [Int], _ g: [Int], _ b: [Int]) {
+        doc.setHistogram(lum, r, g, b)
     }
 
     override func layout() {
@@ -3572,6 +3662,44 @@ func editorSourceCGImage(_ url: URL) -> CGImage? {
     return editorCIContext.createCGImage(input, from: input.extent)
 }
 
+// The luminance + R/G/B histograms of a decoded picture, matching themecore's
+// imageHistogram()/channelHistograms(): a <=512 px sRGB draw, unpremultiplied,
+// luminance = (77r + 150g + 29b) >> 8. The dashboard already holds the picture,
+// so no engine round-trip is needed for the backdrop.
+func editorHistograms(from cg: CGImage, maxWidth: Int = 512)
+    -> (lum: [Int], r: [Int], g: [Int], b: [Int]) {
+    let empty = [Int](repeating: 0, count: 256)
+    let width = cg.width, height = cg.height
+    guard width > 0, height > 0 else { return (empty, empty, empty, empty) }
+    let dw = min(width, maxWidth)
+    let dh = max(1, Int((Double(height) * Double(dw) / Double(width)).rounded()))
+    let bytesPerRow = dw * 4
+    var buffer = [UInt8](repeating: 0, count: bytesPerRow * dh)
+    buffer.withUnsafeMutableBytes { raw in
+        guard let ctx = CGContext(data: raw.baseAddress, width: dw, height: dh, bitsPerComponent: 8,
+                                  bytesPerRow: bytesPerRow,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        ctx.interpolationQuality = .high
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: dw, height: dh))
+    }
+    var lum = empty, r = empty, g = empty, b = empty
+    for i in stride(from: 0, to: buffer.count, by: 4) {
+        let alpha = Int(buffer[i + 3])
+        if alpha < 128 { continue }
+        var rr = Int(buffer[i]), gg = Int(buffer[i + 1]), bb = Int(buffer[i + 2])
+        if alpha != 255 {
+            let a = Double(alpha) / 255
+            rr = min(255, Int((Double(rr) / a).rounded()))
+            gg = min(255, Int((Double(gg) / a).rounded()))
+            bb = min(255, Int((Double(bb) / a).rounded()))
+        }
+        lum[min(255, max(0, (rr * 77 + gg * 150 + bb * 29) >> 8))] += 1
+        r[rr] += 1; g[gg] += 1; b[bb] += 1
+    }
+    return (lum, r, g, b)
+}
+
 // Source-taking wrapper for the door: decode and render in one call.
 func imagePreviewCGImage(source: URL, raw: EditorFilters, maxSize: Int = 960) -> CGImage? {
     guard let input = CIImage(contentsOf: source, options: [.applyOrientationProperty: true]) else {
@@ -3629,6 +3757,11 @@ func editorPreviewRender(_ input: CIImage, raw: EditorFilters, maxSize: Int) -> 
     }
 
     // Per-pixel chain, in the engine's order as far as CoreImage allows.
+    // The tone curve runs first; one LUT on every channel until the per-channel
+    // selector lands.
+    if !f.curvePoints.isEmpty, let lut = dashboardToneCurveLUT(f.curvePoints) {
+        ci = ciCurveCube(ci, lut: lut.map { Double($0) / 255 })
+    }
     if f.invert > 0 {
         let a = f.invert / 100
         let s = 1 - 2 * a
@@ -8140,6 +8273,7 @@ final class ThemeEditor {
         root.paletteBuilder.model = model
         root.paletteCanvas.model = model
         root.wallpaperEditor.state = editorState
+        root.wallpaperEditor.onAuto = { [weak self] op in self?.runAuto(op) }
         editorState.onChange = { [weak self] in
             guard let self else { return }
             self.dirty = true
@@ -8195,14 +8329,51 @@ final class ThemeEditor {
         let gen = editBaseGeneration
         editBase = nil
         root.paletteCanvas.setEditedImage(nil)
+        root.wallpaperEditor.setHistogram([], [], [], [])
         guard !path.isEmpty else { return }
         DispatchQueue.global().async { [weak self] in
             let cg = editorSourceCGImage(URL(fileURLWithPath: path))
             let ci = cg.map { CIImage(cgImage: $0) }
+            let hist = cg.map { editorHistograms(from: $0) }
             DispatchQueue.main.async {
                 guard let self, self.editBaseGeneration == gen else { return }
                 self.editBase = ci
+                if let hist {
+                    self.root.wallpaperEditor.setHistogram(hist.lum, hist.r, hist.g, hist.b)
+                }
                 self.refreshEditedPreview()
+            }
+        }
+    }
+
+    // The histogram's one-click corrections: the engine computes them on the
+    // source picture and returns a filter fragment (curve points, or the WB
+    // temperature/tint).
+    private func runAuto(_ op: String) {
+        let path = model.imagePath
+        guard !path.isEmpty else { return }
+        let q = shellQuote(path)
+        DispatchQueue.global().async { [weak self] in
+            let command = "\(themecoreBin()) image auto \(op) \(q) --json 2>/dev/null"
+            let (code, out) = shell(command)
+            guard code == 0, let data = out.data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if op == "white-balance" {
+                    let temp = (obj["temperature"] as? NSNumber)?.doubleValue ?? 0
+                    let tint = (obj["tint"] as? NSNumber)?.doubleValue ?? 0
+                    self.editorState.edit("white-balance") { $0.temperature = temp; $0.tint = tint }
+                } else {
+                    guard let rows = obj["curvePoints"] as? [[Any]] else { return }
+                    var pts: [[Double]] = []
+                    for row in rows where row.count == 2 {
+                        if let x = (row[0] as? NSNumber)?.doubleValue,
+                           let y = (row[1] as? NSNumber)?.doubleValue { pts.append([x, y]) }
+                    }
+                    guard !pts.isEmpty else { return }
+                    self.editorState.edit("curve") { $0.curvePoints = pts }
+                }
             }
         }
     }
