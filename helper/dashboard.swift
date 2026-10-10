@@ -5644,14 +5644,18 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
 
     // -14 centres the cell-drawn text on the header's mid line — NSTextField
     // lays text out from the frame top, not on cap height. The pen and the
-    // close ride this field's centre line, not the header's.
+    // close ride this field's centre line, not the header's. The field's y
+    // is the single source for that line: the three rects must stay a chain
+    // (name → pen → close), never a cycle, or evaluating one recurses.
+    private var nameTop: CGFloat { bounds.height - headerH / 2 - 14 }
+
     private var nameRect: NSRect {
-        NSRect(x: 20, y: bounds.height - headerH / 2 - 14,
+        NSRect(x: 20, y: nameTop,
                width: max(120, penRect.minX - 14 - 20), height: 22)
     }
 
     private var closeRect: NSRect {
-        NSRect(x: bounds.width - closeSize - 16, y: nameRect.midY - closeSize / 2,
+        NSRect(x: bounds.width - closeSize - 16, y: nameTop + 11 - closeSize / 2,
                width: closeSize, height: closeSize)
     }
 
@@ -5660,7 +5664,7 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
     private var penMonitor: Any?
 
     private var penRect: NSRect {
-        NSRect(x: closeRect.minX - closeSize - 8, y: nameRect.midY - closeSize / 2,
+        NSRect(x: closeRect.minX - closeSize - 8, y: closeRect.minY,
                width: closeSize, height: closeSize)
     }
 
