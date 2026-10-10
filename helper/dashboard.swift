@@ -4854,7 +4854,8 @@ final class TemplateOverrideSectionView: NSView {
     private var resetRect: NSRect? {
         guard canReset else { return nil }
         let w = advance("Reset override", nerdFont("Regular", 11)) + 8
-        return NSRect(x: bounds.width - w, y: bounds.height - headerH - 20, width: w, height: 18)
+        // in the header row (the top), not beside the opacity slider
+        return NSRect(x: bounds.width - w, y: bounds.height - 22, width: w, height: 18)
     }
 
     override func draw(_ dirtyRect: NSRect) {
