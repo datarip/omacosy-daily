@@ -4278,6 +4278,25 @@ enum Templates {
             ]),
             TemplateApp(id: "nvim", name: "Neovim", roles: nvim),
             TemplateApp(id: "starship", name: "starship", roles: starship),
+            TemplateApp(id: "yazi", name: "yazi", roles: [
+                .init(key: "accent", label: "Accent", source: "accent"),
+                .init(key: "bg", label: "Background", source: "bg"),
+                .init(key: "fg", label: "Foreground", source: "fg"),
+                .init(key: "muted", label: "Muted", source: "muted"),
+                .init(key: "warn", label: "Warn", source: "warn"),
+                .init(key: "alt", label: "Alternate", source: "magenta"),
+                .init(key: "ok", label: "OK", source: "green"),
+                .init(key: "err", label: "Error", source: "red"),
+                .init(key: "info", label: "Info", source: "cyan"),
+            ]),
+            TemplateApp(id: "delta", name: "delta", roles: [
+                .init(key: "bg", label: "Background", source: "bg"),
+                .init(key: "ok", label: "Added Lines", source: "green"),
+                .init(key: "err", label: "Removed Lines", source: "red"),
+            ]),
+            TemplateApp(id: "tmux", name: "tmux", roles: [
+                .init(key: "bg", label: "Status Background", source: "bg"),
+            ]),
         ]
     }()
 }

@@ -4653,9 +4653,9 @@ final class TemplateOverrideSectionView: NSView {
         let font = nerdFont("Regular", 11)
         var x: CGFloat = 0
         for name in apps {
-            let w = advance(name, font) + 20
+            let w = advance(name, font) + 14
             out.append(NSRect(x: x, y: bounds.height - headerH - chipsH + 4, width: w, height: 24))
-            x += w + 6
+            x += w + 5
         }
         return out
     }
