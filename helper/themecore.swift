@@ -4200,13 +4200,14 @@ enum Templates {
         var ghostty: [TemplateRole] = [
             .init(key: "background", label: "Background", source: "bg"),
             .init(key: "foreground", label: "Foreground", source: "fg"),
-            .init(key: "cursor_color", label: "Cursor", source: "cursor"),
-            .init(key: "cursor_text", label: "Cursor Text", source: "bg"),
-            .init(key: "selection_background", label: "Selection Background", source: "sel_bg"),
-            .init(key: "selection_foreground", label: "Selection Foreground", source: "sel_fg"),
         ]
-        for i in 0..<16 {
-            ghostty.append(.init(key: "palette_\(i)", label: "Palette \(i)", source: "p\(i)"))
+        let ansiNames = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"]
+        for i in 0..<8 {
+            ghostty.append(.init(key: ansiNames[i], label: ansiNames[i].capitalized, source: "p\(i)"))
+        }
+        for i in 0..<8 {
+            ghostty.append(.init(key: "bright_\(ansiNames[i])",
+                                 label: "Bright \(ansiNames[i].capitalized)", source: "p\(i + 8)"))
         }
         // Neovim: the named palette plus the base16 table its colourscheme builds.
         let nvimBase: [String] = ["bg", "bg", "sel_bg", "muted", "muted", "fg", "fg", "fg",

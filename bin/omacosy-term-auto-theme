@@ -170,6 +170,15 @@ tool_opacity() {
 
 # Ghostty reads this file through an OPTIONAL include in omacosy's config
 # (`config-file = ?...`), so a machine that never switches a theme is fine.
+# The ANSI slot's name, matching Aether's ghostty template roles.
+ghostty_ansi_name() {
+  case "$1" in
+    0 | 8) printf 'black' ;; 1 | 9) printf 'red' ;; 2 | 10) printf 'green' ;;
+    3 | 11) printf 'yellow' ;; 4 | 12) printf 'blue' ;; 5 | 13) printf 'magenta' ;;
+    6 | 14) printf 'cyan' ;; 7 | 15) printf 'white' ;; *) printf 'black' ;;
+  esac
+}
+
 write_ghostty() {
   local i
   {
@@ -177,12 +186,15 @@ write_ghostty() {
     printf '# Edit nothing here; run `omacosy-term-auto-theme off` to stop it.\n'
     printf 'background = %s\n' "$(ovr ghostty background "$(val OMACOSY_BG)")"
     printf 'foreground = %s\n' "$(ovr ghostty foreground "$(val OMACOSY_FG)")"
-    printf 'cursor-color = %s\n' "$(ovr ghostty cursor_color "$(val OMACOSY_CURSOR)")"
-    printf 'cursor-text = %s\n' "$(ovr ghostty cursor_text "$(val OMACOSY_CURSOR_TEXT)")"
-    printf 'selection-background = %s\n' "$(ovr ghostty selection_background "$(val OMACOSY_SEL_BG)")"
-    printf 'selection-foreground = %s\n' "$(ovr ghostty selection_foreground "$(val OMACOSY_SEL_FG)")"
+    printf 'cursor-color = %s\n' "$(val OMACOSY_CURSOR)"
+    printf 'cursor-text = %s\n' "$(val OMACOSY_CURSOR_TEXT)"
+    printf 'selection-background = %s\n' "$(val OMACOSY_SEL_BG)"
+    printf 'selection-foreground = %s\n' "$(val OMACOSY_SEL_FG)"
+    local i role
     for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-      printf 'palette = %d=%s\n' "$i" "$(ovr "ghostty" "palette_$i" "$(val "OMACOSY_P$i")")"
+      role="$(ghostty_ansi_name "$i")"
+      [ "$i" -ge 8 ] && role="bright_$role"
+      printf 'palette = %d=%s\n' "$i" "$(ovr ghostty "$role" "$(val "OMACOSY_P$i")")"
     done
     local op; op="$(tool_opacity)"
     if [ -n "$op" ]; then
