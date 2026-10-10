@@ -37,8 +37,17 @@ local function apply()
     transparent = true,
     styles = { sidebars = "transparent", floats = "transparent" },
     colors = colors,
+    on_highlights = function(hl, c)
+      -- the LazyVim dashboard logo is the header; Aether links it to Title,
+      -- so it wore blue while the desktop accent is orange. Name it directly.
+      hl.SnacksDashboardHeader = { fg = c.accent }
+      hl.SnacksDashboardFooter = { fg = c.accent }
+    end,
   })
   vim.cmd.colorscheme("aether")
+  -- after the colorscheme, so Snacks cannot relink it to Title
+  vim.api.nvim_set_hl(0, "SnacksDashboardHeader", { fg = colors.accent })
+  vim.api.nvim_set_hl(0, "SnacksDashboardFooter", { fg = colors.accent })
 end
 
 return {
