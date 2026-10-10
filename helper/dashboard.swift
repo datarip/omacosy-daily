@@ -5548,39 +5548,50 @@ final class PreviewPaneView: NSView {
     // real picture. Same pill vocabulary as bar.swift, same roles.
     private func drawMenuBar(in screen: NSRect) {
         let r = resolvedRoles()
+        // Same numbers as bar.swift: the workspace chip is a 20x20 SQUARE
+        // inside a bracket, not a stretched slot, and the pills derive from
+        // the bar height rather than from a hand-tuned rectangle.
         let h: CGFloat = 34
-        let bar = NSRect(x: screen.minX, y: screen.maxY - h, width: screen.width, height: h)
+        let baseY = screen.maxY - h
         let pillH = h - 8
-        let radius: CGFloat = 5
-        let pad: CGFloat = 5
-        let gap: CGFloat = 6
+        let chipBox: CGFloat = 20
+        let chipPad: CGFloat = 2
+        let chipPillH = min(chipBox, pillH - 2)
+        let chipRadius = chipPillH * 0.28
+        let radius: CGFloat = 4
+        let padLeft: CGFloat = 10
+        let gap: CGFloat = 14
         let chipFont = nerdFont("Regular", 11)
         let iconFont = nerdFont("Bold", 12)
         let nameFont = nerdFont("Bold", 12)
+        let bar = NSRect(x: screen.minX, y: baseY, width: screen.width, height: h)
+        let pillY = baseY + (h - pillH) / 2
 
         // apple pill, square
-        let apple = NSRect(x: bar.minX + pad, y: bar.midY - pillH / 2, width: pillH, height: pillH)
+        let apple = NSRect(x: bar.minX + padLeft, y: pillY, width: pillH, height: pillH)
         r.pill.setFill()
         NSBezierPath(roundedRect: apple, xRadius: radius, yRadius: radius).fill()
         drawGlyph("\u{f179}", iconFont, r.accent, in: apple)
 
-        // workspace bracket: five slots, the third focused
+        // workspace bracket: five square chips, the third focused
         let chips: [(String, Bool)] = [("1", false), ("2", false), ("3", true),
                                        ("4", false), ("5", false)]
-        let chipW: CGFloat = 20
-        let bracket = NSRect(x: apple.maxX + gap, y: bar.midY - pillH / 2,
-                             width: CGFloat(chips.count) * chipW, height: pillH)
+        let slotW = chipBox + chipPad * 2
+        let bracket = NSRect(x: apple.maxX + 10, y: pillY,
+                             width: CGFloat(chips.count) * slotW, height: pillH)
         r.pill.setFill()
         NSBezierPath(roundedRect: bracket, xRadius: radius, yRadius: radius).fill()
         var x = bracket.minX
         for (label, focused) in chips {
-            let box = NSRect(x: x, y: bracket.minY, width: chipW, height: bracket.height)
+            let box = NSRect(x: x + chipPad, y: baseY, width: chipBox, height: h)
             if focused {
+                let chip = NSRect(x: box.minX, y: baseY + (h - chipPillH) / 2,
+                                  width: chipBox, height: chipPillH)
                 r.accent.setFill()
-                NSBezierPath(roundedRect: box.insetBy(dx: 2, dy: 2), xRadius: 4, yRadius: 4).fill()
+                NSBezierPath(roundedRect: chip, xRadius: chipRadius, yRadius: chipRadius).fill()
             }
             drawGlyph(label, chipFont, focused ? r.bar : r.muted, in: box)
-            x += chipW
+            x += slotW
         }
 
         // right cluster, laid out from the right edge inwards
@@ -5592,16 +5603,16 @@ final class PreviewPaneView: NSView {
             ("\u{F0079}", "84%", r.label),              // battery
             ("\u{F05A9}", "", r.label),                 // wifi
         ]
-        var cursor = bar.maxX - pad
+        var cursor = bar.maxX - padLeft
         for item in right {
             let hasIcon = !item.glyph.isEmpty
             let hasLabel = !item.label.isEmpty
             let iconInk = hasIcon ? advance(item.glyph, iconFont) : 0
             let labelAdv = hasLabel ? advance(item.label, nameFont) : 0
-            let inner: CGFloat = hasIcon && hasLabel ? 6 : 0
+            let inner: CGFloat = hasIcon && hasLabel ? 7 : 0
             let square = hasIcon && !hasLabel
             let w = square ? pillH : 10 + iconInk + inner + labelAdv + 10
-            let pill = NSRect(x: cursor - w, y: bar.midY - pillH / 2, width: w, height: pillH)
+            let pill = NSRect(x: cursor - w, y: pillY, width: w, height: pillH)
             r.pill.setFill()
             NSBezierPath(roundedRect: pill, xRadius: radius, yRadius: radius).fill()
             if hasIcon {
@@ -5612,7 +5623,7 @@ final class PreviewPaneView: NSView {
             if hasLabel {
                 drawBaseline(item.label, nameFont, r.label,
                              x: pill.minX + 10 + iconInk + inner,
-                             baseline: bar.midY - nameFont.capHeight / 2)
+                             baseline: pill.midY - nameFont.capHeight / 2)
             }
             cursor = pill.minX - gap
         }
