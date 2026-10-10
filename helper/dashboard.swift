@@ -2604,6 +2604,21 @@ func hexString(from color: NSColor) -> String? {
     return String(format: "#%02x%02x%02x", r, g, b)
 }
 
+// The engine's ColorMath.lightened, integer-exact. The semantic ACCENT
+// group's Orange is the red slot lightened 15% (`palette shades`), and
+// that orange is the accent an edition carries to the desktop — the bar,
+// the focus ring and the dashboard chrome all read it.
+func lightenedHex(_ hex: String, percent: Double) -> String {
+    let clean = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+    guard clean.count == 6, let v = UInt64(clean, radix: 16) else { return hex }
+    func ch(_ c: UInt64) -> UInt64 {
+        let f = Double(c)
+        return UInt64((f + (255 - f) * percent / 100).rounded())
+    }
+    let r = ch((v >> 16) & 0xff), g = ch((v >> 8) & 0xff), b = ch(v & 0xff)
+    return String(format: "#%02x%02x%02x", r, g, b)
+}
+
 // A user-typed colour, normalised to "#rrggbb"; nil when it is not one.
 func cleanHex(_ raw: String) -> String? {
     var s = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -2906,7 +2921,8 @@ final class PaletteModel {
         resolvedMode = resolved == "light" ? "light" : "dark"
         baseColors = colors
         // Aether's setPalette at extraction: the UI colours derive from the
-        // new palette (accent = colour 4), they are not the wallpaper's own
+        // new palette (accent = the palette's orange), they are not the
+        // wallpaper's own
         extendedHex = defaultExtended(colors, accent: nil)
         adjustments = EditorAdjustments()
         curve = []
@@ -3315,7 +3331,13 @@ final class PaletteModel {
 
     private func defaultExtended(_ colors: [String], accent: String?) -> [String: String] {
         let c = colors.count == 16 ? colors : Array(repeating: "#000000", count: 16)
-        return ["accent": accent ?? c[4], "cursor": c[7],
+        // The accent is the same orange the semantic ACCENT group shows:
+        // the red slot lightened 15% (the engine's `palette shades`). The
+        // ANSI blue slot (c[4]) left the desktop accent unrelated to the
+        // palette the editor draws, so the bar and dashboard kept a colour
+        // the user could not find anywhere in the editor.
+        return ["accent": accent ?? lightenedHex(c[1], percent: 15),
+                "cursor": c[7],
                 "selection_foreground": c[0], "selection_background": c[7]]
     }
 
