@@ -2836,6 +2836,15 @@ final class PaletteModel {
     private(set) var sourceName: String?
     private(set) var sourceIsPreset = false
 
+    // Per-app template overrides, and the app/role catalogue from themecore
+    // (`template apps`). Overrides live at the top level of the record; the
+    // appliers read them only while the terminal theme is on.
+    struct TemplateRoleInfo { let key: String; let label: String; let source: String }
+    struct TemplateAppInfo { let id: String; let name: String; let roles: [TemplateRoleInfo] }
+    private(set) var appOverrides: [String: [String: String]] = [:]
+    private(set) var templateApps: [TemplateAppInfo] = []
+    private(set) var selectedTemplateApp = 0
+
     // Undo/redo: whole-editor snapshots, 50 deep. A burst of changes to the
     // same control inside one second folds into a single step (a slider drag
     // is one undo, not sixty).
@@ -2848,6 +2857,7 @@ final class PaletteModel {
         var mode: String
         var resolvedMode: String
         var sourceName: String?
+        var appOverrides: [String: [String: String]]
     }
     private var undoStack: [HistoryEntry] = []
     private var redoStack: [HistoryEntry] = []
@@ -2861,6 +2871,7 @@ final class PaletteModel {
     enum EditTarget: Equatable {
         case color(Int)
         case extended(String)
+        case override(String, String)   // app, role key
     }
     private(set) var editTarget: EditTarget?
 
@@ -2909,6 +2920,7 @@ final class PaletteModel {
 
     init() {
         loadModes()
+        loadTemplateApps()
     }
 
     // --- seeding ------------------------------------------------------------
@@ -2937,6 +2949,8 @@ final class PaletteModel {
         histogram = []
         roles = [:]
         sourceName = nil
+        appOverrides.removeAll()
+        selectedTemplateApp = 0
         undoStack.removeAll()
         redoStack.removeAll()
         lastPushKey = nil
@@ -2976,6 +2990,11 @@ final class PaletteModel {
         histogram = []
         roles = [:]
         sourceName = nil
+        appOverrides.removeAll()
+        if let ov = record["appOverrides"] as? [String: [String: String]] {
+            appOverrides = ov
+        }
+        selectedTemplateApp = 0
         undoStack.removeAll()
         redoStack.removeAll()
         lastPushKey = nil
@@ -3048,7 +3067,8 @@ final class PaletteModel {
     private func snapshot() -> HistoryEntry {
         HistoryEntry(baseColors: baseColors, extendedHex: extendedHex,
                      adjustments: adjustments, curve: curve, method: method,
-                     mode: mode, resolvedMode: resolvedMode, sourceName: sourceName)
+                     mode: mode, resolvedMode: resolvedMode, sourceName: sourceName,
+                     appOverrides: appOverrides)
     }
 
     private func pushHistory(_ key: String?) {
@@ -3088,6 +3108,7 @@ final class PaletteModel {
         mode = e.mode
         resolvedMode = e.resolvedMode
         sourceName = e.sourceName
+        appOverrides = e.appOverrides
         sourceIsPreset = e.sourceName.map { name in presetsCache?.contains { $0.name == name } ?? false } ?? false
         update()
         refreshRender()
@@ -3268,8 +3289,16 @@ final class PaletteModel {
         case .color(let i): return baseColors.indices.contains(i) ? baseColors[i] : nil
         case .extended(let key):
             return extendedHex[key] ?? shades[key] ?? defaultExtended(baseColors, accent: nil)[key]
+        case .override(let app, let key):
+            if let ov = appOverrides[app]?[key] { return ov }
+            if let src = templateSource(app, key) { return templateDefault(src) }
+            return nil
         case nil: return nil
         }
+    }
+
+    private func templateSource(_ app: String, _ key: String) -> String? {
+        templateApps.first { $0.id == app }?.roles.first { $0.key == key }?.source
     }
 
     func editTargetTitle() -> String {
@@ -3281,6 +3310,11 @@ final class PaletteModel {
             if let slot = Self.extendedKeys.first(where: { $0.key == key }) { return slot.label }
             if let slot = Self.shadeKeys.first(where: { $0.key == key }) { return slot.label }
             return key
+        case .override(let app, let key):
+            let appName = templateApps.first { $0.id == app }?.name ?? app
+            let roleLabel = templateApps.first { $0.id == app }?
+                .roles.first { $0.key == key }?.label ?? key
+            return "\(appName) · \(roleLabel)"
         case nil:
             return "No colour selected"
         }
@@ -3290,6 +3324,7 @@ final class PaletteModel {
         switch editTarget {
         case .color(let i): setBaseColor(i, hex)
         case .extended(let key): setExtended(key, hex)
+        case .override(let app, let key): setAppOverride(app, key, hex)
         case nil: break
         }
         scheduleRecent(hex)
@@ -3374,6 +3409,89 @@ final class PaletteModel {
             }
             return ((g["label"] as? String) ?? "", modes)
         }
+    }
+
+    // The apps and colour roles a saved edition can override. themecore owns
+    // the catalogue so the editor and the appliers name the roles the same way.
+    private func loadTemplateApps() {
+        let (code, out) = themecore("template apps --json")
+        guard code == 0, let data = out.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let apps = obj["apps"] as? [[String: Any]] else { return }
+        templateApps = apps.compactMap { a in
+            guard let id = a["id"] as? String, let name = a["name"] as? String else { return nil }
+            let roles = (a["roles"] as? [[String: Any]] ?? []).compactMap { r -> TemplateRoleInfo? in
+                guard let key = r["key"] as? String, let label = r["label"] as? String,
+                      let source = r["source"] as? String else { return nil }
+                return TemplateRoleInfo(key: key, label: label, source: source)
+            }
+            return TemplateAppInfo(id: id, name: name, roles: roles)
+        }
+    }
+
+    // --- template overrides -------------------------------------------------
+
+    func templateOverride(_ app: String, _ key: String) -> String? {
+        appOverrides[app]?[key]
+    }
+
+    // The colour a role would take with no override: the palette slot its
+    // catalogue `source` names, the same slot the applier reads.
+    func templateDefault(_ source: String) -> String {
+        let c = finalColors.count == 16 ? finalColors : baseColors
+        func slot(_ i: Int, _ fallback: String = "#000000") -> String {
+            c.indices.contains(i) ? c[i] : fallback
+        }
+        switch source {
+        case "bg": return slot(0)
+        case "fg": return slot(7, "#ffffff")
+        case "muted": return slot(8, "#808080")
+        case "accent": return finalExtended["accent"] ?? slot(1)
+        case "cursor": return finalExtended["cursor"] ?? slot(7, "#ffffff")
+        case "sel_bg": return finalExtended["selection_background"] ?? slot(0)
+        case "sel_fg": return finalExtended["selection_foreground"] ?? slot(7, "#ffffff")
+        case "red": return slot(1)
+        case "green": return slot(2)
+        case "yellow", "warn": return slot(3)
+        case "blue", "info": return slot(6)
+        case "magenta": return slot(5)
+        case "cyan": return slot(6)
+        case "err": return slot(1)
+        default:
+            if source.hasPrefix("p"), let i = Int(source.dropFirst(1)) { return slot(i) }
+            return "#000000"
+        }
+    }
+
+    func selectTemplateApp(_ index: Int) {
+        guard templateApps.indices.contains(index), index != selectedTemplateApp else { return }
+        selectedTemplateApp = index
+        editTarget = nil
+        update()
+    }
+
+    func setAppOverride(_ app: String, _ key: String, _ hex: String) {
+        var roles = appOverrides[app] ?? [:]
+        guard roles[key] != hex else { return }
+        pushHistory("ovr:\(app):\(key)")
+        roles[key] = hex
+        appOverrides[app] = roles
+        edited()
+        update()
+    }
+
+    func resetAppOverrides() {
+        guard templateApps.indices.contains(selectedTemplateApp) else { return }
+        let app = templateApps[selectedTemplateApp].id
+        guard appOverrides[app] != nil else { return }
+        pushHistory(nil)
+        appOverrides.removeValue(forKey: app)
+        edited()
+        update()
+    }
+
+    func hasTemplateOverride(_ app: String) -> Bool {
+        !(appOverrides[app] ?? [:]).isEmpty
     }
 
     @discardableResult
@@ -4322,6 +4440,7 @@ final class PaletteCardsView: NSView {
             switch editTarget {
             case .color(let idx): isEditing = card.index >= 0 && idx == card.index
             case .extended(let key): isEditing = card.extendedKey == key
+            case .override: isEditing = false
             case nil: isEditing = false
             }
             if isEditing {
@@ -4485,6 +4604,149 @@ final class SemanticSectionView: NSView {
                 if let key = card.key { onEdit?(.extended(key)); return }
                 if let slot = card.slot { onEdit?(.color(slot)); return }
             }
+        }
+    }
+
+    override var acceptsFirstResponder: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+// --- template override ------------------------------------------------------
+
+// The per-app colour overrides. An app picker, then that app's roles as
+// swatches; a swatch that carries an override is ringed in the accent, and
+// Reset clears them for the app. The values reach the terminal tools only
+// while the terminal theme follows the theme.
+final class TemplateOverrideSectionView: NSView {
+    struct Role {
+        let key: String
+        let label: String
+        let hex: String
+        let overridden: Bool
+    }
+    var apps: [String] = [] { didSet { needsDisplay = true } }
+    var appIds: [String] = []
+    var selectedApp = 0 { didSet { needsDisplay = true } }
+    var roles: [Role] = [] { didSet { needsDisplay = true } }
+    var canReset = false { didSet { needsDisplay = true } }
+    var editTarget: PaletteModel.EditTarget? { didSet { needsDisplay = true } }
+    var onSelectApp: ((Int) -> Void)?
+    var onEdit: ((String, String) -> Void)?
+    var onReset: (() -> Void)?
+
+    private let headerH: CGFloat = 26
+    private let chipsH: CGFloat = 30
+    private let cols = 4
+    private let cardH: CGFloat = 34
+    private let labelH: CGFloat = 15
+    private let rowGap: CGFloat = 12
+
+    static func height(roleCount: Int) -> CGFloat {
+        let rows = max(1, (roleCount + 3) / 4)
+        return 26 + 30 + 6 + CGFloat(rows) * (34 + 15) + CGFloat(rows - 1) * 12 + 22
+    }
+
+    private var contentTop: CGFloat { headerH + chipsH + 6 }
+
+    private func appRects() -> [NSRect] {
+        var out: [NSRect] = []
+        let font = nerdFont("Regular", 11)
+        var x: CGFloat = 0
+        for name in apps {
+            let w = advance(name, font) + 20
+            out.append(NSRect(x: x, y: bounds.height - headerH - chipsH + 4, width: w, height: 24))
+            x += w + 6
+        }
+        return out
+    }
+
+    private func cardRects() -> [NSRect] {
+        guard !roles.isEmpty, bounds.width > 0 else { return [] }
+        let colGap: CGFloat = 8
+        let colW = (bounds.width - CGFloat(cols - 1) * colGap) / CGFloat(cols)
+        var out: [NSRect] = []
+        for i in roles.indices {
+            let col = i % cols, row = i / cols
+            let x = CGFloat(col) * (colW + colGap)
+            let top = contentTop + CGFloat(row) * (cardH + labelH + rowGap)
+            out.append(NSRect(x: x, y: bounds.height - top - cardH, width: colW, height: cardH))
+        }
+        return out
+    }
+
+    private var resetRect: NSRect? {
+        guard canReset else { return nil }
+        let w = advance("Reset override", nerdFont("Regular", 11)) + 8
+        return NSRect(x: bounds.width - w, y: bounds.height - headerH - 20, width: w, height: 18)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        drawTopLeft("Template Override", nerdFont("Bold", 12), palette.accent,
+                    x: 16, top: 0, height: bounds.height)
+        drawTopLeft("Per-app colours; applied only when the terminal follows the theme.",
+                    nerdFont("Regular", 10), palette.muted,
+                    x: 16 + 140, top: 1, height: bounds.height)
+        if let r = resetRect {
+            drawMidLeft("Reset override", nerdFont("Regular", 11), .systemRed,
+                        x: r.minX + 3, midTop: bounds.height - r.midY, height: bounds.height)
+        }
+        for (i, rect) in appRects().enumerated() {
+            let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+            if i == selectedApp {
+                palette.accent.withAlphaComponent(0.9).setFill()
+                path.fill()
+                drawMidCenter(apps[i], nerdFont("Bold", 11), palette.barBG,
+                              centerX: rect.midX, midTop: bounds.height - rect.midY,
+                              height: bounds.height)
+            } else {
+                palette.itemBG.withAlphaComponent(0.3).setFill()
+                path.fill()
+                palette.muted.withAlphaComponent(0.3).setStroke()
+                path.lineWidth = 1
+                path.stroke()
+                drawMidCenter(apps[i], nerdFont("Regular", 11), palette.label,
+                              centerX: rect.midX, midTop: bounds.height - rect.midY,
+                              height: bounds.height)
+            }
+        }
+        let rects = cardRects()
+        for (i, role) in roles.enumerated() where rects.indices.contains(i) {
+            let r = rects[i]
+            let path = NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4)
+            nsColor(fromHex: role.hex).setFill()
+            path.fill()
+            let light = relativeLuminance(nsColor(fromHex: role.hex)) > 0.5
+            drawMidLeft(role.hex, nerdFont("Regular", 8),
+                        (light ? NSColor.black : .white).withAlphaComponent(0.62),
+                        x: r.minX + 5, midTop: bounds.height - r.maxY + r.height - 9,
+                        height: bounds.height)
+            drawMidCenter(role.label, nerdFont("Regular", 9),
+                          palette.label.withAlphaComponent(0.72),
+                          centerX: r.midX, midTop: bounds.height - r.minY + 7,
+                          height: bounds.height)
+            var editing = false
+            if case .override(_, let k) = editTarget, k == role.key { editing = true }
+            if role.overridden || editing {
+                palette.accent.setStroke()
+                path.lineWidth = role.overridden ? 2 : 1.5
+                path.stroke()
+            }
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if let r = resetRect, r.contains(p) { onReset?(); return }
+        for (i, rect) in appRects().enumerated() where rect.contains(p) {
+            onSelectApp?(i)
+            return
+        }
+        guard appIds.indices.contains(selectedApp) else { return }
+        let rects = cardRects()
+        for (i, role) in roles.enumerated()
+            where rects.indices.contains(i) && rects[i].contains(p) {
+            onEdit?(appIds[selectedApp], role.key)
+            return
         }
     }
 
@@ -5995,6 +6257,11 @@ final class PaletteCanvasView: NSView {
         doc.colorCards.onToggleLock = { [weak self] i in self?.model?.toggleLock(i) }
         doc.colorCards.onToggleSelect = { [weak self] i in self?.model?.toggleSelect(i) }
         doc.semantic.onEdit = { [weak self] target in self?.model?.selectForEdit(target) }
+        doc.template.onSelectApp = { [weak self] i in self?.model?.selectTemplateApp(i) }
+        doc.template.onEdit = { [weak self] app, key in
+            self?.model?.selectForEdit(.override(app, key))
+        }
+        doc.template.onReset = { [weak self] in self?.model?.resetAppOverrides() }
     }
 
     func sync() {
@@ -6048,8 +6315,33 @@ final class PaletteCanvasView: NSView {
         doc.semantic.editTarget = model.editTarget
         doc.pinnedCount = model.pinnedShadeCount()
         doc.onResetPins = { [weak self] in self?.model?.clearShadePins() }
+
+        // Template overrides: the app picker and the selected app's roles.
+        doc.template.apps = model.templateApps.map { $0.name }
+        doc.template.appIds = model.templateApps.map { $0.id }
+        doc.template.selectedApp = model.selectedTemplateApp
+        if model.templateApps.indices.contains(model.selectedTemplateApp) {
+            let app = model.templateApps[model.selectedTemplateApp]
+            doc.template.roles = app.roles.map { r in
+                let override = model.templateOverride(app.id, r.key)
+                return TemplateOverrideSectionView.Role(
+                    key: r.key, label: r.label,
+                    hex: override ?? model.templateDefault(r.source),
+                    overridden: override != nil)
+            }
+            doc.template.canReset = model.hasTemplateOverride(app.id)
+            doc.templateHeight = TemplateOverrideSectionView.height(roleCount: app.roles.count)
+        } else {
+            doc.template.roles = []
+            doc.template.canReset = false
+            doc.templateHeight = model.templateApps.isEmpty
+                ? 0 : TemplateOverrideSectionView.height(roleCount: 0)
+        }
+        doc.template.editTarget = model.editTarget
+
         doc.needsDisplay = true
         preview.needsDisplay = true
+        needsLayout = true
         needsDisplay = true
     }
 
@@ -6104,8 +6396,10 @@ final class PaletteCanvasView: NSView {
 final class PaletteCanvasDoc: NSView {
     let colorCards = PaletteCardsView()
     let semantic = SemanticSectionView()
+    let template = TemplateOverrideSectionView()
     var methodText = ""
     var pinnedCount = 0 { didSet { needsDisplay = true } }
+    var templateHeight: CGFloat = 0 { didSet { needsDisplay = true } }
     var onResetPins: (() -> Void)?
 
     private let insetL: CGFloat = 16
@@ -6113,12 +6407,14 @@ final class PaletteCanvasDoc: NSView {
     private var paletteTop: CGFloat = 0
     private var hintTop: CGFloat = 0
     private var semanticTop: CGFloat = 0
+    private var templateTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         colorCards.showsLocks = true
         addSubview(colorCards)
         addSubview(semantic)
+        addSubview(template)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -6131,6 +6427,7 @@ final class PaletteCanvasDoc: NSView {
         h += 36                                             // spaced hint line
         h += 26                                             // "Semantic Colors"
         h += SemanticSectionView.height()
+        if templateHeight > 0 { h += 24 + templateHeight }
         h += 12
         return h
     }
@@ -6151,6 +6448,13 @@ final class PaletteCanvasDoc: NSView {
         semanticTop = top
         top += 26
         semantic.frame = rect(top: top, h: SemanticSectionView.height(), x: insetL, w: contentW)
+        top += SemanticSectionView.height()
+        if templateHeight > 0 {
+            templateTop = top + 24
+            template.frame = rect(top: templateTop, h: templateHeight, x: insetL, w: contentW)
+        } else {
+            template.frame = .zero
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -6638,6 +6942,11 @@ final class ThemeEditor {
                                  "blur": false, "edited": false]]
         }
         top["palette"] = palettePayload()
+        if model.appOverrides.isEmpty {
+            top.removeValue(forKey: "appOverrides")
+        } else {
+            top["appOverrides"] = model.appOverrides
+        }
         return top
     }
 
