@@ -4234,7 +4234,7 @@ enum Templates {
             .init(key: "bright_cyan", label: "Bright Cyan", source: "p14"),
             .init(key: "bright_blue", label: "Bright Blue", source: "p12"),
             .init(key: "bright_purple", label: "Bright Purple", source: "p13"),
-            .init(key: "accent", label: "Accent", source: "blue"),
+            .init(key: "accent", label: "Accent", source: "accent"),
             .init(key: "cursor", label: "Cursor", source: "cursor"),
             .init(key: "selection", label: "Selection", source: "lighter_bg"),
             .init(key: "selection_foreground", label: "Selection Foreground", source: "fg"),

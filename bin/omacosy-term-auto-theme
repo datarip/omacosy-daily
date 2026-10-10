@@ -795,7 +795,10 @@ write_nvim() {
   bright_cyan="$(ovr nvim bright_cyan "$(val OMACOSY_P14)")"
   bright_blue="$(ovr nvim bright_blue "$(val OMACOSY_P12)")"
   bright_purple="$(ovr nvim bright_purple "$(val OMACOSY_P13)")"
-  accent="$(ovr nvim accent "$(val OMACOSY_P4)")"
+  # The accent is Omacosy's own (the palette's orange), so Neovim's accent --
+  # and any accent-driven UI like the LazyVim logo -- matches the desktop.
+  # {blue} stays the palette's blue slot; Aether's blue accent is not used.
+  accent="$(ovr nvim accent "$(val OMACOSY_ACCENT)")"
   cursor="$(ovr nvim cursor "$(val OMACOSY_CURSOR)")"
   sel="$(ovr nvim selection "$lighter_bg")"
   mkdir -p "$(dirname "$NVIM_OUT")"
