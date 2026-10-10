@@ -3391,12 +3391,16 @@ final class PaletteModel {
             let ext = obj["extended"] as? [String: String] ?? [:]
             DispatchQueue.main.async {
                 guard self.renderGeneration == gen else { return }
-                self.finalColors = colors
+                // a locked slot is frozen: Aether reverts it to its raw base
+                // after the adjustments, so the hex never moves until unlocked
+                var final = colors
+                for i in self.locked where i < 16 { final[i] = self.baseColors[i] }
+                self.finalColors = final
                 if !ext.isEmpty { self.finalExtended = ext }
-                self.rebuildHistogram(colors)
+                self.rebuildHistogram(final)
                 self.update()
-                self.loadShades(colors)
-                self.loadRoles(colors, accent: self.finalExtended["accent"])
+                self.loadShades(final)
+                self.loadRoles(final, accent: self.finalExtended["accent"])
             }
         }
     }
