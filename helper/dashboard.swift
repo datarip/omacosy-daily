@@ -16,6 +16,7 @@
 // all follow automatically.
 
 import Cocoa
+import CoreImage
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -2986,6 +2987,417 @@ final class EditorColumnView: NSView {
         drawMidLeft(title, nerdFont("Bold", 13), palette.accent,
                     x: 16, midTop: 18, height: bounds.height)
     }
+}
+
+// --- wallpaper filters (Phase 8b) -------------------------------------------
+
+// The dashboard's mirror of themecore's ImageFilters (Aether's Filters). The
+// dashboard and themecore are separate binaries built from separate files, so
+// this is a deliberate copy of the recipe shape: the engine's `image render`
+// stays the record and this drives the fast in-process CoreImage preview only.
+// Keep the field names, the JSON keys and the strength rule in step with
+// helper/themecore.swift's ImageFilters.
+struct EditorFilters {
+    var blur = 0.0
+    var brightness = 100.0
+    var contrast = 100.0
+    var saturation = 100.0
+    var hueRotate = 0.0
+    var sepia = 0.0
+    var invert = 0.0
+    var exposure = 0.0
+    var vignette = 0.0
+    var sharpen = 0.0
+    var grain = 0.0
+    var shadows = 0.0
+    var highlights = 0.0
+    var temperature = 0.0
+    var tint = 0.0
+    var curvePoints: [[Double]] = []
+    var paletteStops: [String] = []
+    var paletteStrength = 70.0
+    var cropX = 0.0
+    var cropY = 0.0
+    var cropW = 1.0
+    var cropH = 1.0
+    var resizeW = 0.0
+    var resizeH = 0.0
+    var rotate = 0.0
+    var flipH = false
+    var flipV = false
+    var strength = 100.0
+
+    init() {}
+
+    // The same vocabulary `image render --filters` accepts, including the
+    // snake_case aliases, so a recipe recorded by the engine round-trips.
+    init(json: [String: Any]) {
+        self.init()
+        let known: Set<String> = ["blur", "brightness", "contrast", "saturation", "hueRotate",
+            "hue_rotate", "sepia", "invert", "exposure", "vignette", "sharpen", "grain",
+            "shadows", "highlights", "temperature", "tint", "curvePoints", "curve_points",
+            "paletteStops", "palette_stops", "paletteStrength", "palette_strength",
+            "cropX", "cropY", "cropW", "cropH", "crop_x", "crop_y", "crop_w", "crop_h",
+            "resizeW", "resizeH", "resize_w", "resize_h", "rotate", "flipH", "flipV",
+            "flip_h", "flip_v", "strength"]
+        for (key, value) in json where known.contains(key) {
+            switch key {
+            case "blur": blur = num(value)
+            case "brightness": brightness = num(value)
+            case "contrast": contrast = num(value)
+            case "saturation": saturation = num(value)
+            case "hueRotate", "hue_rotate": hueRotate = num(value)
+            case "sepia": sepia = num(value)
+            case "invert": invert = num(value)
+            case "exposure": exposure = num(value)
+            case "vignette": vignette = num(value)
+            case "sharpen": sharpen = num(value)
+            case "grain": grain = num(value)
+            case "shadows": shadows = num(value)
+            case "highlights": highlights = num(value)
+            case "temperature": temperature = num(value)
+            case "tint": tint = num(value)
+            case "paletteStrength", "palette_strength": paletteStrength = num(value)
+            case "cropX", "crop_x": cropX = num(value)
+            case "cropY", "crop_y": cropY = num(value)
+            case "cropW", "crop_w": cropW = num(value)
+            case "cropH", "crop_h": cropH = num(value)
+            case "resizeW", "resize_w": resizeW = num(value)
+            case "resizeH", "resize_h": resizeH = num(value)
+            case "rotate": rotate = num(value)
+            case "strength": strength = num(value)
+            case "flipH", "flip_h": flipH = bool(value)
+            case "flipV", "flip_v": flipV = bool(value)
+            case "curvePoints", "curve_points":
+                var pts: [[Double]] = []
+                if let outer = value as? [Any] {
+                    for row in outer {
+                        if let pair = row as? [Any], pair.count == 2,
+                           let x = (pair[0] as? NSNumber)?.doubleValue,
+                           let y = (pair[1] as? NSNumber)?.doubleValue {
+                            pts.append([x, y])
+                        }
+                    }
+                }
+                curvePoints = pts
+            case "paletteStops", "palette_stops":
+                if let list = value as? [String] { paletteStops = list }
+            default: break
+            }
+        }
+    }
+
+    private func num(_ value: Any) -> Double {
+        if let n = value as? NSNumber { return n.doubleValue }
+        if let n = value as? Double { return n }
+        if let n = value as? Int { return Double(n) }
+        return 0
+    }
+    private func bool(_ value: Any) -> Bool {
+        if let b = value as? Bool { return b }
+        if let n = value as? NSNumber { return n.boolValue }
+        return false
+    }
+
+    // Aether's applyStrength: structural fields (crop, resize, rotate, flip,
+    // palette stops) are not scaled; curve points shift toward y=x.
+    func strengthScaled() -> EditorFilters {
+        let s = strength / 100
+        if s == 1 { return self }
+        var f = self
+        func lerp(_ v: Double, _ def: Double) -> Double { def + (v - def) * s }
+        f.brightness = lerp(brightness, 100)
+        f.contrast = lerp(contrast, 100)
+        f.saturation = lerp(saturation, 100)
+        f.exposure = lerp(exposure, 0)
+        f.shadows = lerp(shadows, 0)
+        f.highlights = lerp(highlights, 0)
+        f.temperature = lerp(temperature, 0)
+        f.tint = lerp(tint, 0)
+        f.hueRotate = hueRotate * s
+        f.sepia = sepia * s
+        f.invert = invert * s
+        f.vignette = vignette * s
+        f.sharpen = sharpen * s
+        f.grain = grain * s
+        f.blur = blur * s
+        f.paletteStrength = paletteStrength * s
+        f.curvePoints = curvePoints.map { [$0[0], $0[0] + ($0[1] - $0[0]) * s] }
+        return f
+    }
+
+    var isIdentity: Bool {
+        curvePoints.isEmpty && paletteStops.count < 2 && blur == 0 && brightness == 100
+            && contrast == 100 && saturation == 100 && hueRotate == 0 && sepia == 0 && invert == 0
+            && exposure == 0 && vignette == 0 && sharpen == 0 && grain == 0 && shadows == 0
+            && highlights == 0 && temperature == 0 && tint == 0 && rotate == 0 && !flipH && !flipV
+            && cropX == 0 && cropY == 0 && cropW == 1 && cropH == 1 && resizeW == 0 && resizeH == 0
+    }
+}
+
+// Parse the door's --filters argument: an inline JSON object or @file, the
+// same shape `image render --filters` takes.
+func editorFiltersJSON(_ raw: String) -> [String: Any]? {
+    let text = raw.hasPrefix("@")
+        ? (try? String(contentsOfFile: String(raw.dropFirst()), encoding: .utf8)) ?? ""
+        : raw
+    guard let data = text.data(using: .utf8),
+          let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+        return nil
+    }
+    return obj
+}
+
+// The in-process preview: the same recipe through CoreImage, best-effort.
+// CoreImage cannot always match the engine's scalar maths (the engine's
+// brightness multiplies; the tone curve and the palette grade are the engine's
+// own LUTs and arrive with their controls; grain is random). Where the two
+// differ, the engine's `image render` is the record.
+private let editorCIContext = CIContext(options: [
+    .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+])
+
+private func ciColorMatrix(_ image: CIImage, r: CIVector, g: CIVector, b: CIVector,
+                           a: CIVector, bias: CIVector) -> CIImage {
+    guard let f = CIFilter(name: "CIColorMatrix") else { return image }
+    f.setValue(image, forKey: kCIInputImageKey)
+    f.setValue(r, forKey: "inputRVector")
+    f.setValue(g, forKey: "inputGVector")
+    f.setValue(b, forKey: "inputBVector")
+    f.setValue(a, forKey: "inputAVector")
+    f.setValue(bias, forKey: "inputBiasVector")
+    return f.outputImage ?? image
+}
+
+// The engine's hue rotation is a fixed linear map (luma/luma·u/v), so the
+// preview can use the same matrix instead of CoreImage's own approximation.
+private func ciHueColorMatrix(_ image: CIImage, degrees: Double) -> CIImage {
+    let h = degrees * Double.pi / 180
+    let c = cos(h), s = sin(h)
+    let a = [[0.2126, 0.7152, 0.0722],
+             [-0.09991, -0.33609, 0.436],
+             [0.615, -0.55861, -0.05639]]
+    let rot = [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]]
+    let b = [[1.0, 0.0, 1.28033],
+             [1.0, -0.21482, -0.38059],
+             [1.0, 2.12798, 0.0]]
+    var m = [[Double]](repeating: [0, 0, 0], count: 3)
+    for i in 0..<3 {
+        for j in 0..<3 {
+            var sum = 0.0
+            for k in 0..<3 { for l in 0..<3 { sum += b[i][k] * rot[k][l] * a[l][j] } }
+            m[i][j] = sum
+        }
+    }
+    return ciColorMatrix(image,
+        r: CIVector(x: m[0][0], y: m[0][1], z: m[0][2], w: 0),
+        g: CIVector(x: m[1][0], y: m[1][1], z: m[1][2], w: 0),
+        b: CIVector(x: m[2][0], y: m[2][1], z: m[2][2], w: 0),
+        a: CIVector(x: 0, y: 0, z: 0, w: 1),
+        bias: CIVector(x: 0, y: 0, z: 0, w: 0))
+}
+
+// A tone curve applied to every channel, done as a colour cube because the
+// engine's shadow/highlight response is piecewise linear and has no single CI
+// filter. The same helper serves the per-channel curve once its controls land.
+private func ciCurveCube(_ image: CIImage, lut: [Double], size: Int = 32) -> CIImage {
+    func sample(_ x: Double) -> Double {
+        let p = min(max(0, x), 1) * 255
+        let i = Int(p), f = p - Double(i)
+        if i >= 255 { return lut[255] }
+        return lut[i] + (lut[i + 1] - lut[i]) * f
+    }
+    var cube = [Float](repeating: 0, count: size * size * size * 4)
+    var idx = 0
+    for bi in 0..<size {
+        let b = sample(Double(bi) / Double(size - 1))
+        for gi in 0..<size {
+            let g = sample(Double(gi) / Double(size - 1))
+            for ri in 0..<size {
+                cube[idx] = Float(sample(Double(ri) / Double(size - 1)))
+                cube[idx + 1] = Float(g)
+                cube[idx + 2] = Float(b)
+                cube[idx + 3] = 1
+                idx += 4
+            }
+        }
+    }
+    guard let f = CIFilter(name: "CIColorCube") else { return image }
+    f.setValue(image, forKey: kCIInputImageKey)
+    f.setValue(size, forKey: "inputCubeDimension")
+    f.setValue(Data(bytes: cube, count: cube.count * MemoryLayout<Float>.size),
+               forKey: "inputCubeData")
+    return f.outputImage ?? image
+}
+
+func imagePreviewCGImage(source: URL, raw: EditorFilters, maxSize: Int = 960) -> CGImage? {
+    let f = raw.strengthScaled()
+    guard let input = CIImage(contentsOf: source, options: [.applyOrientationProperty: true]) else {
+        return nil
+    }
+    let natW = input.extent.width, natH = input.extent.height
+    guard natW >= 1, natH >= 1 else { return nil }
+
+    // Crop: fractions from the top-left of the source; CoreImage's y is up.
+    let ox = min(max(0, (f.cropX * Double(natW)).rounded()), max(0, Double(natW) - 1))
+    let oy = min(max(0, (f.cropY * Double(natH)).rounded()), max(0, Double(natH) - 1))
+    let ow = min(max(1, (f.cropW * Double(natW)).rounded()), Double(natW) - ox)
+    let oh = min(max(1, (f.cropH * Double(natH)).rounded()), Double(natH) - oy)
+    let cropRect = CGRect(x: ox, y: Double(natH) - (oy + oh), width: ow, height: oh)
+    var ci = input.cropped(to: cropRect)
+    ci = ci.transformed(by: CGAffineTransform(translationX: -cropRect.minX, y: -cropRect.minY))
+
+    // Resize, then the preview's long-side cap — the engine's own arithmetic.
+    var outW = ow, outH = oh
+    if f.resizeW > 0 && f.resizeH > 0 { outW = f.resizeW; outH = f.resizeH }
+    else if f.resizeW > 0 { outW = f.resizeW; outH = (oh * outW / ow).rounded() }
+    else if f.resizeH > 0 { outH = f.resizeH; outW = (ow * outH / oh).rounded() }
+    let fullLong = max(outW, outH)
+    if maxSize > 0 && (outW > Double(maxSize) || outH > Double(maxSize)) {
+        let s = Double(maxSize) / max(outW, outH)
+        outW = (outW * s).rounded(); outH = (outH * s).rounded()
+    }
+    if abs(outW - ow) > 0.5 || abs(outH - oh) > 0.5 {
+        let scale = outW / ow
+        if let lanczos = CIFilter(name: "CILanczosScaleTransform") {
+            lanczos.setValue(ci, forKey: kCIInputImageKey)
+            lanczos.setValue(scale, forKey: kCIInputScaleKey)
+            lanczos.setValue((outH / oh) / scale, forKey: kCIInputAspectRatioKey)
+            ci = lanczos.outputImage ?? ci
+        }
+    }
+    let target = CGRect(x: 0, y: 0, width: outW, height: outH)
+    ci = ci.cropped(to: target)
+    let spatialScale = fullLong > 0 ? max(outW, outH) / fullLong : 1
+
+    if f.blur > 0 {
+        let radius = max(1, ((f.blur / 4) * spatialScale).rounded())
+        if let blur = CIFilter(name: "CIGaussianBlur") {
+            blur.setValue(ci, forKey: kCIInputImageKey)
+            blur.setValue(radius, forKey: kCIInputRadiusKey)
+            ci = (blur.outputImage ?? ci).cropped(to: target)
+        }
+    }
+
+    // Per-pixel chain, in the engine's order as far as CoreImage allows.
+    if f.invert > 0 {
+        let a = f.invert / 100
+        let s = 1 - 2 * a
+        ci = ciColorMatrix(ci, r: CIVector(x: s, y: 0, z: 0, w: 0),
+                           g: CIVector(x: 0, y: s, z: 0, w: 0),
+                           b: CIVector(x: 0, y: 0, z: s, w: 0),
+                           a: CIVector(x: 0, y: 0, z: 0, w: 1),
+                           bias: CIVector(x: a, y: a, z: a, w: 0))
+    }
+    if f.brightness != 100 {
+        let s = f.brightness / 100
+        ci = ciColorMatrix(ci, r: CIVector(x: s, y: 0, z: 0, w: 0),
+                           g: CIVector(x: 0, y: s, z: 0, w: 0),
+                           b: CIVector(x: 0, y: 0, z: s, w: 0),
+                           a: CIVector(x: 0, y: 0, z: 0, w: 1),
+                           bias: CIVector(x: 0, y: 0, z: 0, w: 0))
+    }
+    if f.contrast != 100 || f.saturation != 100 {
+        if let controls = CIFilter(name: "CIColorControls") {
+            controls.setValue(ci, forKey: kCIInputImageKey)
+            controls.setValue(0.0, forKey: kCIInputBrightnessKey)
+            controls.setValue(f.contrast / 100, forKey: kCIInputContrastKey)
+            controls.setValue(f.saturation / 100, forKey: kCIInputSaturationKey)
+            ci = controls.outputImage ?? ci
+        }
+    }
+    if f.hueRotate != 0 { ci = ciHueColorMatrix(ci, degrees: f.hueRotate) }
+    if f.sepia > 0 {
+        let amt = f.sepia / 100
+        let s = [[0.393, 0.769, 0.189], [0.349, 0.686, 0.168], [0.272, 0.534, 0.131]]
+        func row(_ i: Int) -> CIVector {
+            CIVector(x: (i == 0 ? 1 - amt : 0) + amt * s[i][0],
+                     y: (i == 1 ? 1 - amt : 0) + amt * s[i][1],
+                     z: (i == 2 ? 1 - amt : 0) + amt * s[i][2], w: 0)
+        }
+        ci = ciColorMatrix(ci, r: row(0), g: row(1), b: row(2),
+                           a: CIVector(x: 0, y: 0, z: 0, w: 1),
+                           bias: CIVector(x: 0, y: 0, z: 0, w: 0))
+    }
+    if f.exposure != 0 {
+        // The engine's exposure is a gamma, not a linear EV.
+        let gamma = f.exposure > 0 ? 1 / (1 + f.exposure / 100) : 1 + abs(f.exposure) / 100
+        if let g = CIFilter(name: "CIGammaAdjust") {
+            g.setValue(ci, forKey: kCIInputImageKey)
+            g.setValue(gamma, forKey: "inputPower")
+            ci = g.outputImage ?? ci
+        }
+    }
+    if f.shadows != 0 || f.highlights != 0 {
+        // The engine lifts shadows and recovers highlights with a piecewise
+        // linear curve about 0.5; reproduce it exactly.
+        let sh = f.shadows / 200, hi = f.highlights / 200
+        let lut = (0..<256).map { i -> Double in
+            let x = Double(i) / 255
+            return x < 0.5 ? x + sh * (1 - x / 0.5) : x + hi * ((x - 0.5) / 0.5)
+        }
+        ci = ciCurveCube(ci, lut: lut)
+    }
+    if f.temperature != 0 || f.tint != 0 {
+        let t = f.temperature / 100, n = f.tint / 100
+        ci = ciColorMatrix(ci, r: CIVector(x: 1, y: 0, z: 0, w: 0),
+                           g: CIVector(x: 0, y: 1, z: 0, w: 0),
+                           b: CIVector(x: 0, y: 0, z: 1, w: 0),
+                           a: CIVector(x: 0, y: 0, z: 0, w: 1),
+                           bias: CIVector(x: t * 30 / 255 + n * 10 / 255,
+                                          y: -n * 20 / 255,
+                                          z: -t * 30 / 255 + n * 10 / 255, w: 0))
+    }
+    if f.sharpen > 0 {
+        if let conv = CIFilter(name: "CIConvolution3X3") {
+            let a = f.sharpen / 100
+            let k = CIVector(values: [0, -0.25 * a, 0,
+                                      -0.25 * a, 1 + 1.25 * a, -0.25 * a,
+                                      0, -0.25 * a, 0], count: 9)
+            conv.setValue(ci, forKey: kCIInputImageKey)
+            conv.setValue(k, forKey: kCIInputWeightsKey)
+            conv.setValue(0.0, forKey: kCIInputBiasKey)
+            ci = (conv.outputImage ?? ci).cropped(to: target)
+        }
+    }
+    if f.vignette > 0 {
+        // The engine's vignette is a radial multiply: full brightness out to
+        // 0.3 of the corner radius, falling to (1 - strength*0.8) at 0.85.
+        let cx = target.midX, cy = target.midY
+        let maxR = hypot(cx, cy)
+        let r0 = maxR * 0.3, r1 = maxR * 0.85
+        let edge = 1 - f.vignette / 100 * 0.8
+        if let grad = CIFilter(name: "CIRadialGradient") {
+            grad.setValue(CIVector(x: cx, y: cy), forKey: "inputCenter")
+            grad.setValue(r0, forKey: "inputRadius0")
+            grad.setValue(r1, forKey: "inputRadius1")
+            grad.setValue(CIColor(red: 1, green: 1, blue: 1), forKey: "inputColor0")
+            grad.setValue(CIColor(red: edge, green: edge, blue: edge), forKey: "inputColor1")
+            if let mask = grad.outputImage?.cropped(to: target),
+               let mul = CIFilter(name: "CIMultiplyCompositing") {
+                mul.setValue(mask, forKey: kCIInputImageKey)
+                mul.setValue(ci, forKey: kCIInputBackgroundImageKey)
+                ci = mul.outputImage ?? ci
+            }
+        }
+    }
+
+    // Rotate (clockwise) and flip about the centre. The engine's inverse map
+    // undoes the flip first, so the forward order is rotate, then flip.
+    // CoreImage's y is up, the engine's is down: clockwise is a negative angle.
+    if f.rotate.truncatingRemainder(dividingBy: 360) != 0 || f.flipH || f.flipV {
+        let e = ci.extent
+        let cx = e.midX, cy = e.midY
+        var m = CGAffineTransform(translationX: cx, y: cy)
+        m = m.scaledBy(x: f.flipH ? -1 : 1, y: f.flipV ? -1 : 1)
+        m = m.rotated(by: -f.rotate * Double.pi / 180)
+        m = m.translatedBy(x: -cx, y: -cy)
+        ci = ci.transformed(by: m)
+        let r = ci.extent
+        ci = ci.transformed(by: CGAffineTransform(translationX: -r.minX, y: -r.minY))
+    }
+
+    return editorCIContext.createCGImage(ci, from: ci.extent)
 }
 
 // --- palette builder --------------------------------------------------------
@@ -10678,6 +11090,33 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-do
         }
         exit(rc)
     } catch { print("download failed: \(error.localizedDescription)"); exit(1) }
+}
+
+// The wallpaper editor's preview door (Phase 8b): render the in-process
+// CoreImage preview headlessly so its output can be compared, by hand, with
+// the engine's `image render --max 960`. Like the wallhaven doors, it runs
+// before the window opens.
+if CommandLine.arguments.count >= 5, CommandLine.arguments[1] == "--image-preview" {
+    let src = CommandLine.arguments[2]
+    let filtersRaw = CommandLine.arguments[3]
+    let out = CommandLine.arguments[4]
+    guard let obj = editorFiltersJSON(filtersRaw) else {
+        print("--image-preview: filters must be a JSON object or @file")
+        exit(2)
+    }
+    guard let cg = imagePreviewCGImage(source: URL(fileURLWithPath: src),
+                                       raw: EditorFilters(json: obj), maxSize: 960) else {
+        print("--image-preview: cannot render \(src)")
+        exit(1)
+    }
+    let rep = NSBitmapImageRep(cgImage: cg)
+    guard let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
+    do { try png.write(to: URL(fileURLWithPath: out)) } catch {
+        print("--image-preview: cannot write \(out)")
+        exit(1)
+    }
+    print("\(out) \(cg.width)x\(cg.height)")
+    exit(0)
 }
 
 let app = NSApplication.shared
