@@ -644,7 +644,17 @@ struct OptionRow {
     let category: String
     let title: String
     let desc: String
-    let seg: SegmentedView
+    let seg: SegmentedView?
+    let slider: OpacitySliderView?
+
+    init(category: String, title: String, desc: String,
+         seg: SegmentedView? = nil, slider: OpacitySliderView? = nil) {
+        self.category = category
+        self.title = title
+        self.desc = desc
+        self.seg = seg
+        self.slider = slider
+    }
 }
 
 final class OptionsDocView: NSView {
@@ -663,11 +673,18 @@ final class OptionsDocView: NSView {
         var top = topPad
         for row in rows {
             top += catH
-            let sz = row.seg.sizeThatFits()
-            let segTop = top + (rowH - sz.height) / 2
-            row.seg.frame = NSRect(x: bounds.width - sz.width,
+            if let seg = row.seg {
+                let sz = seg.sizeThatFits()
+                let segTop = top + (rowH - sz.height) / 2
+                seg.frame = NSRect(x: bounds.width - sz.width,
                                    y: bounds.height - segTop - sz.height,
                                    width: sz.width, height: sz.height)
+            }
+            if let slider = row.slider {
+                let w: CGFloat = 220
+                slider.frame = NSRect(x: bounds.width - w, y: bounds.height - (top + rowH / 2) - 7,
+                                      width: w, height: 14)
+            }
             top += rowH + sectionGap
         }
     }
@@ -697,7 +714,7 @@ final class OptionsTabView: NSView, ScrollStepTab {
     func refreshColors() {
         needsDisplay = true
         doc.needsDisplay = true
-        for r in rows { r.seg.needsDisplay = true }
+        for r in rows { r.seg?.needsDisplay = true }
         scroller.refresh()
     }
     private var original = DashboardState()
@@ -749,6 +766,9 @@ final class OptionsTabView: NSView, ScrollStepTab {
         let fsSeg = makeSeg(["Off", "On"], original.fullscreen ? 1 : 0)
         let atSeg = makeSeg(["Own Colours", "Follow Theme"], original.termTheme.rawValue)
 
+        let opacitySlider = OpacitySliderView()
+        opacitySlider.value = readGlobalToolOpacity() ?? readTerminalOpacity() ?? 100
+
         rows = [
             OptionRow(category: "Window Manager", title: "Window Manager",
                       desc: "Which tiling manager Omacosy switches to. Switching reloads Omacosy for a moment.",
@@ -761,9 +781,15 @@ final class OptionsTabView: NSView, ScrollStepTab {
                       desc: "A workspace holding one window fills the display.", seg: fsSeg),
             OptionRow(category: "Themes", title: "Terminal Auto-Theme",
                       desc: "Let the terminal and its apps follow the wallpaper theme, or keep their own colours.", seg: atSeg),
+            OptionRow(category: "Appearance", title: "Terminal Opacity",
+                      desc: "How see-through the terminal and its tools are. Every theme that inherits it follows.",
+                      slider: opacitySlider),
         ]
         doc.rows = rows
-        for r in rows { doc.addSubview(r.seg) }
+        for r in rows {
+            if let s = r.seg { doc.addSubview(s) }
+            if let sl = r.slider { doc.addSubview(sl) }
+        }
     }
 
     override func layout() {
@@ -799,11 +825,19 @@ final class OptionsTabView: NSView, ScrollStepTab {
     }
 
     private func save() {
-        let wm = WindowManager(rawValue: rows[0].seg.index) ?? original.wm
-        let corners = CornerMode(rawValue: rows[1].seg.index) ?? original.corners
-        let bar = BarMode(rawValue: rows[2].seg.index) ?? original.bar
-        let fullscreen = rows[3].seg.index == 1
-        let termTheme = TerminalThemeMode(rawValue: rows[4].seg.index) ?? original.termTheme
+        let wm = WindowManager(rawValue: rows[0].seg!.index) ?? original.wm
+        let corners = CornerMode(rawValue: rows[1].seg!.index) ?? original.corners
+        let bar = BarMode(rawValue: rows[2].seg!.index) ?? original.bar
+        let fullscreen = rows[3].seg!.index == 1
+        let termTheme = TerminalThemeMode(rawValue: rows[4].seg!.index) ?? original.termTheme
+
+        // the machine-wide terminal opacity
+        var opacityChanged = false
+        if let slider = rows.first(where: { $0.slider != nil })?.slider,
+           slider.value != readGlobalToolOpacity() {
+            writeGlobalToolOpacity(slider.value)
+            opacityChanged = true
+        }
 
         var steps: [String] = []
         if wm != original.wm {
@@ -824,7 +858,7 @@ final class OptionsTabView: NSView, ScrollStepTab {
             steps.append("\(HOME)/.local/bin/omacosy-term-auto-theme \(termTheme == .follow ? "on" : "off")")
         }
 
-        guard !steps.isEmpty else {
+        guard !steps.isEmpty || opacityChanged else {
             status = "No changes"
             needsDisplay = true
             return
@@ -4743,12 +4777,10 @@ final class TemplateOverrideSectionView: NSView {
     var onEdit: ((String, String) -> Void)?
     var onReset: (() -> Void)?
     var onToolOpacity: ((Int?) -> Void)?
-    var onSetGlobalOpacity: ((Int?) -> Void)?
     let opacitySlider = OpacitySliderView()
-    let globalSlider = OpacitySliderView()
 
     private let headerH: CGFloat = 26
-    private let settingsH: CGFloat = 56
+    private let settingsH: CGFloat = 28
     private let chipsH: CGFloat = 30
     private let cols = 4
     private let cardH: CGFloat = 34
@@ -4758,27 +4790,23 @@ final class TemplateOverrideSectionView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         opacitySlider.onChange = { [weak self] v in self?.onToolOpacity?(v) }
-        globalSlider.onChange = { [weak self] v in self?.onSetGlobalOpacity?(v) }
         addSubview(opacitySlider)
-        addSubview(globalSlider)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    // The sliders open showing the opacity actually in use, so they are never
-    // an empty track: edition -> global -> the terminal's own -> opaque.
+    // The slider opens showing the opacity actually in use, so it is never an
+    // empty track: edition -> global -> the terminal's own -> opaque.
     private func refreshSliders() {
         opacitySlider.value = toolOpacity ?? globalOpacity ?? terminalOpacity ?? 100
-        globalSlider.value = globalOpacity ?? terminalOpacity ?? 100
     }
 
     static func height(roleCount: Int) -> CGFloat {
         let rows = max(1, (roleCount + 3) / 4)
-        return 26 + 56 + 30 + 6 + CGFloat(rows) * (34 + 15) + CGFloat(rows - 1) * 12 + 22
+        return 26 + 28 + 30 + 6 + CGFloat(rows) * (34 + 15) + CGFloat(rows - 1) * 12 + 22
     }
 
     private var contentTop: CGFloat { headerH + settingsH + chipsH + 6 }
     private var editRowTop: CGFloat { headerH }
-    private var globalRowTop: CGFloat { headerH + 28 }
     private var sliderX: CGFloat { 60 }
 
     private var inheritRect: NSRect {
@@ -4789,8 +4817,6 @@ final class TemplateOverrideSectionView: NSView {
         super.layout()
         let w = max(80, bounds.width - sliderX - 108 - 8 - 46)
         opacitySlider.frame = NSRect(x: sliderX, y: bounds.height - editRowTop - 21, width: w, height: 14)
-        globalSlider.frame = NSRect(x: sliderX, y: bounds.height - globalRowTop - 21,
-                                    width: max(80, bounds.width - sliderX - 46), height: 14)
     }
 
     private func appRects() -> [NSRect] {
@@ -4859,10 +4885,6 @@ final class TemplateOverrideSectionView: NSView {
         drawMidCenter("Inherit global", nerdFont("Regular", 10),
                       toolOpacity == nil ? palette.barBG : palette.label,
                       centerX: ir.midX, midTop: bounds.height - ir.midY, height: bounds.height)
-        drawMidLeft("Default", nerdFont("Regular", 10), palette.muted,
-                    x: 0, midTop: globalRowTop + 14, height: bounds.height)
-        drawMidLeft("\(globalOpacity ?? terminalOpacity ?? 100)%", sfont, palette.muted,
-                    x: globalSlider.frame.maxX + 8, midTop: globalRowTop + 14, height: bounds.height)
         for (i, rect) in appRects().enumerated() {
             let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
             if i == selectedApp {
@@ -6442,12 +6464,6 @@ final class PaletteCanvasView: NSView {
         }
         doc.template.onReset = { [weak self] in self?.model?.resetAppOverrides() }
         doc.template.onToolOpacity = { [weak self] v in self?.model?.setToolOpacity(v) }
-        doc.template.onSetGlobalOpacity = { [weak self] v in
-            writeGlobalToolOpacity(v)
-            self?.doc.template.globalOpacity = readGlobalToolOpacity()
-            self?.preview.globalOpacity = readGlobalToolOpacity()
-            self?.preview.needsDisplay = true
-        }
     }
 
     func sync() {
