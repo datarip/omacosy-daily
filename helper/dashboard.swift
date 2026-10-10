@@ -3517,6 +3517,11 @@ final class PaletteModel {
         case "orange": return lightenedHex(slot(1), percent: 15)
         case "lighter_bg": return mixHex(slot(0), "#ffffff", 10)
         case "light_fg": return lightenedHex(slot(7, "#ffffff"), percent: 15)
+        case "bright_fg": return lightenedHex(slot(7, "#ffffff"), percent: 25)
+        case "dark_bg": return mixHex(slot(0), "#000000", 8)
+        case "darker_bg": return mixHex(slot(0), "#000000", 15)
+        case "dark_fg": return mixHex(slot(7, "#ffffff"), "#000000", 30)
+        case "brown": return mixHex(slot(1), "#000000", 40)
         default:
             if source.hasPrefix("p"), let i = Int(source.dropFirst(1)) { return slot(i) }
             return "#000000"

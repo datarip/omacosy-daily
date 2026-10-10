@@ -4209,29 +4209,37 @@ enum Templates {
             ghostty.append(.init(key: "bright_\(ansiNames[i])",
                                  label: "Bright \(ansiNames[i].capitalized)", source: "p\(i + 8)"))
         }
-        // Neovim: the named palette plus the base16 table its colourscheme builds.
-        let nvimBase: [String] = ["bg", "bg", "sel_bg", "muted", "muted", "fg", "fg", "fg",
-                                  "red", "peach", "yellow", "green", "cyan", "accent",
-                                  "magenta", "magenta"]
-        let nvimBaseLabels = ["Base 00", "Base 01", "Base 02", "Base 03", "Base 04", "Base 05",
-                              "Base 06", "Base 07", "Base 08", "Base 09", "Base 0A", "Base 0B",
-                              "Base 0C", "Base 0D", "Base 0E", "Base 0F"]
-        var nvim: [TemplateRole] = [
-            .init(key: "bg", label: "Background", source: "bg"),
-            .init(key: "fg", label: "Foreground", source: "fg"),
-            .init(key: "accent", label: "Accent", source: "accent"),
-            .init(key: "alt", label: "Alternate", source: "magenta"),
-            .init(key: "ok", label: "OK", source: "green"),
-            .init(key: "warn", label: "Warn", source: "yellow"),
-            .init(key: "err", label: "Error", source: "red"),
-            .init(key: "info", label: "Info", source: "cyan"),
-            .init(key: "peach", label: "Peach", source: "peach"),
+        // Neovim: Aether's colourscheme roles (omacom/aether.nvim).
+        let nvim: [TemplateRole] = [
+            .init(key: "background", label: "Background", source: "bg"),
+            .init(key: "foreground", label: "Foreground", source: "fg"),
             .init(key: "muted", label: "Muted", source: "muted"),
+            .init(key: "lighter_bg", label: "Lighter Background", source: "lighter_bg"),
+            .init(key: "dark_bg", label: "Dark Background", source: "dark_bg"),
+            .init(key: "darker_bg", label: "Darker Background", source: "darker_bg"),
+            .init(key: "dark_fg", label: "Dark Foreground", source: "dark_fg"),
+            .init(key: "light_fg", label: "Light Foreground", source: "light_fg"),
+            .init(key: "bright_fg", label: "Bright Foreground", source: "bright_fg"),
+            .init(key: "red", label: "Red", source: "red"),
+            .init(key: "yellow", label: "Yellow", source: "yellow"),
+            .init(key: "orange", label: "Orange", source: "orange"),
+            .init(key: "green", label: "Green", source: "green"),
+            .init(key: "cyan", label: "Cyan", source: "cyan"),
+            .init(key: "blue", label: "Blue", source: "blue"),
+            .init(key: "purple", label: "Purple", source: "magenta"),
+            .init(key: "brown", label: "Brown", source: "brown"),
+            .init(key: "bright_red", label: "Bright Red", source: "p9"),
+            .init(key: "bright_yellow", label: "Bright Yellow", source: "p11"),
+            .init(key: "bright_green", label: "Bright Green", source: "p10"),
+            .init(key: "bright_cyan", label: "Bright Cyan", source: "p14"),
+            .init(key: "bright_blue", label: "Bright Blue", source: "p12"),
+            .init(key: "bright_purple", label: "Bright Purple", source: "p13"),
+            .init(key: "accent", label: "Accent", source: "blue"),
+            .init(key: "cursor", label: "Cursor", source: "cursor"),
+            .init(key: "selection", label: "Selection", source: "lighter_bg"),
+            .init(key: "selection_foreground", label: "Selection Foreground", source: "fg"),
+            .init(key: "selection_background", label: "Selection Background", source: "lighter_bg"),
         ]
-        for i in 0..<16 {
-            nvim.append(.init(key: String(format: "base%02X", i),
-                              label: nvimBaseLabels[i], source: nvimBase[i]))
-        }
         // starship: the named roles and the sixteen ANSI names.
         var starship: [TemplateRole] = [
             .init(key: "bg", label: "Background", source: "bg"),
