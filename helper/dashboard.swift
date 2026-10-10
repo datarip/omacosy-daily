@@ -2619,6 +2619,20 @@ func lightenedHex(_ hex: String, percent: Double) -> String {
     return String(format: "#%02x%02x%02x", r, g, b)
 }
 
+// The writers' `mix(a, b, p)` exactly: an integer sRGB lerp toward b by p
+// percent, truncating like bash. btop's meter, boxes and divider are built
+// from it, so the override panel's default must be the colour the writer emits.
+func mixHex(_ a: String, _ b: String, _ p: Int) -> String {
+    func comps(_ hex: String) -> (Int, Int, Int)? {
+        let clean = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        guard clean.count == 6, let v = UInt64(clean, radix: 16) else { return nil }
+        return (Int((v >> 16) & 0xff), Int((v >> 8) & 0xff), Int(v & 0xff))
+    }
+    guard let (ar, ag, ab) = comps(a), let (br, bg, bb) = comps(b) else { return a }
+    func ch(_ x: Int, _ y: Int) -> Int { x + (y - x) * p / 100 }
+    return String(format: "#%02x%02x%02x", ch(ar, br), ch(ag, bg), ch(ab, bb))
+}
+
 // A user-typed colour, normalised to "#rrggbb"; nil when it is not one.
 func cleanHex(_ raw: String) -> String? {
     var s = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -3457,6 +3471,9 @@ final class PaletteModel {
         case "magenta": return slot(5)
         case "cyan": return slot(6)
         case "err": return slot(1)
+        case "mix_bg_muted_50": return mixHex(slot(0), slot(8, "#808080"), 50)
+        case "mix_bg_muted_60": return mixHex(slot(0), slot(8, "#808080"), 60)
+        case "mix_bg_accent_55": return mixHex(slot(0), finalExtended["accent"] ?? slot(1), 55)
         default:
             if source.hasPrefix("p"), let i = Int(source.dropFirst(1)) { return slot(i) }
             return "#000000"
