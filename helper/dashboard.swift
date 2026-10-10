@@ -5416,6 +5416,121 @@ final class PreviewPaneView: NSView {
     static let screenAspect: CGFloat = 1440.0 / 900.0
     static let barFraction: CGFloat = 34.0 / 900.0
 
+    // Overlays, toggled from the toolbar (step 3); on by default so the
+    // preview opens as the desktop looks.
+    var showMenuBar = true
+    var showTerminal = true
+    var showRing = true
+
+    // The six bar roles, resolved from the editor's own state: `palette roles`
+    // for bar/pill/muted/label/accent/ring, with the rendered palette as the
+    // fallback before the first round-trip lands.
+    private struct BarRoles {
+        var bar = NSColor.black
+        var pill = NSColor.black
+        var muted = NSColor.gray
+        var label = NSColor.white
+        var accent = NSColor.systemBlue
+        var ring = NSColor.systemBlue
+    }
+
+    private func resolvedRoles() -> BarRoles {
+        guard let model else { return BarRoles() }
+        let colors = model.finalColors.count == 16 ? model.finalColors : model.baseColors
+        func color(_ i: Int) -> NSColor? {
+            colors.indices.contains(i) ? nsColor(fromHex: colors[i]) : nil
+        }
+        var r = BarRoles()
+        r.bar = model.roles["bar"].map(nsColor(fromHex:)) ?? color(0) ?? r.bar
+        r.pill = model.roles["pill"].map(nsColor(fromHex:)) ?? color(8) ?? r.pill
+        r.muted = model.roles["muted"].map(nsColor(fromHex:)) ?? color(8) ?? r.muted
+        r.label = model.roles["label"].map(nsColor(fromHex:)) ?? color(7) ?? r.label
+        r.accent = model.roles["accent"].map(nsColor(fromHex:))
+            ?? model.finalExtended["accent"].map(nsColor(fromHex:)) ?? color(1) ?? r.accent
+        r.ring = model.roles["ring"].map(nsColor(fromHex:)) ?? r.accent
+        return r
+    }
+
+    private func drawGlyph(_ s: String, _ font: NSFont, _ color: NSColor, in box: NSRect) {
+        drawMidCenter(s, font, color, centerX: box.midX,
+                      midTop: bounds.height - box.midY, height: bounds.height)
+    }
+
+    // The real bar on this machine is transparent (autohide off): the pills sit
+    // straight on the wallpaper's top band, so the picture behind them is the
+    // real picture. Same pill vocabulary as bar.swift, same roles.
+    private func drawMenuBar(in screen: NSRect) {
+        let r = resolvedRoles()
+        let h: CGFloat = 34
+        let bar = NSRect(x: screen.minX, y: screen.maxY - h, width: screen.width, height: h)
+        let pillH = h - 8
+        let radius: CGFloat = 5
+        let pad: CGFloat = 5
+        let gap: CGFloat = 6
+        let chipFont = nerdFont("Regular", 11)
+        let iconFont = nerdFont("Bold", 12)
+        let nameFont = nerdFont("Bold", 12)
+
+        // apple pill, square
+        let apple = NSRect(x: bar.minX + pad, y: bar.midY - pillH / 2, width: pillH, height: pillH)
+        r.pill.setFill()
+        NSBezierPath(roundedRect: apple, xRadius: radius, yRadius: radius).fill()
+        drawGlyph("\u{f179}", iconFont, r.accent, in: apple)
+
+        // workspace bracket: five slots, the third focused
+        let chips: [(String, Bool)] = [("1", false), ("2", false), ("3", true),
+                                       ("4", false), ("5", false)]
+        let chipW: CGFloat = 20
+        let bracket = NSRect(x: apple.maxX + gap, y: bar.midY - pillH / 2,
+                             width: CGFloat(chips.count) * chipW, height: pillH)
+        r.pill.setFill()
+        NSBezierPath(roundedRect: bracket, xRadius: radius, yRadius: radius).fill()
+        var x = bracket.minX
+        for (label, focused) in chips {
+            let box = NSRect(x: x, y: bracket.minY, width: chipW, height: bracket.height)
+            if focused {
+                r.accent.setFill()
+                NSBezierPath(roundedRect: box.insetBy(dx: 2, dy: 2), xRadius: 4, yRadius: 4).fill()
+            }
+            drawGlyph(label, chipFont, focused ? r.bar : r.muted, in: box)
+            x += chipW
+        }
+
+        // right cluster, laid out from the right edge inwards
+        let clock = DateFormatter()
+        clock.dateFormat = "HH:mm"
+        let right: [(glyph: String, label: String, color: NSColor)] = [
+            ("\u{F035B}", "", r.accent),                // activity
+            ("", clock.string(from: Date()), r.label),  // clock
+            ("\u{F0079}", "84%", r.label),              // battery
+            ("\u{F05A9}", "", r.label),                 // wifi
+        ]
+        var cursor = bar.maxX - pad
+        for item in right {
+            let hasIcon = !item.glyph.isEmpty
+            let hasLabel = !item.label.isEmpty
+            let iconInk = hasIcon ? advance(item.glyph, iconFont) : 0
+            let labelAdv = hasLabel ? advance(item.label, nameFont) : 0
+            let inner: CGFloat = hasIcon && hasLabel ? 6 : 0
+            let square = hasIcon && !hasLabel
+            let w = square ? pillH : 10 + iconInk + inner + labelAdv + 10
+            let pill = NSRect(x: cursor - w, y: bar.midY - pillH / 2, width: w, height: pillH)
+            r.pill.setFill()
+            NSBezierPath(roundedRect: pill, xRadius: radius, yRadius: radius).fill()
+            if hasIcon {
+                let box = square ? pill
+                    : NSRect(x: pill.minX + 10, y: pill.minY, width: iconInk, height: pill.height)
+                drawGlyph(item.glyph, iconFont, item.color, in: box)
+            }
+            if hasLabel {
+                drawBaseline(item.label, nameFont, r.label,
+                             x: pill.minX + 10 + iconInk + inner,
+                             baseline: bar.midY - nameFont.capHeight / 2)
+            }
+            cursor = pill.minX - gap
+        }
+    }
+
     private var cachePath = ""
     private var cacheSide = 0
     private var cacheImage: CGImage?
@@ -5459,6 +5574,9 @@ final class PreviewPaneView: NSView {
                               centerX: screen.midX, midTop: bounds.height - screen.midY,
                               height: bounds.height)
             }
+        }
+        if showMenuBar, screen.width > 1, screen.height > 1 {
+            drawMenuBar(in: screen)
         }
         // the frame line, drawn on every edge so the panel reads as a frame
         palette.muted.withAlphaComponent(0.3).setStroke()
