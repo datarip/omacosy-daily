@@ -418,9 +418,16 @@ final class SegmentedView: NSView {
     private func layoutSegments() {
         segFrames.removeAll()
         let f = nerdFont("Regular", 12)
+        var widths = items.map { max(advance($0, f) + 22, 46) }
+        // a frame wider than the natural width shares the slack out evenly,
+        // so a stretch-to-fit use keeps every segment flush with its edges
+        let slack = bounds.width - 4 - widths.reduce(0, +)
+        if slack > 1, !widths.isEmpty {
+            let add = slack / CGFloat(widths.count)
+            for i in widths.indices { widths[i] += add }
+        }
         var x: CGFloat = 2
-        for it in items {
-            let w = max(advance(it, f) + 22, 46)
+        for w in widths {
             segFrames.append(NSRect(x: x, y: 2, width: w, height: bounds.height - 4))
             x += w
         }
@@ -2806,6 +2813,35 @@ final class PaletteModel {
     private(set) var shades: [String: String] = [:]
     private(set) var recentColors: [String] = []
     private(set) var imagePath = ""
+    // bar/pill/label/muted/ring for the current rendered palette, for the
+    // accessibility panel
+    private(set) var roles: [String: String] = [:]
+    // the palette source that is not a Method: a preset name, "From Colour"
+    // or "Gradient"; nil means the header follows the method
+    private(set) var sourceName: String?
+    private(set) var sourceIsPreset = false
+
+    // Undo/redo: whole-editor snapshots, 50 deep. A burst of changes to the
+    // same control inside one second folds into a single step (a slider drag
+    // is one undo, not sixty).
+    private struct HistoryEntry {
+        var baseColors: [String]
+        var extendedHex: [String: String]
+        var adjustments: EditorAdjustments
+        var curve: [[Double]]
+        var method: String
+        var mode: String
+        var resolvedMode: String
+        var sourceName: String?
+    }
+    private var undoStack: [HistoryEntry] = []
+    private var redoStack: [HistoryEntry] = []
+    private var lastPushKey: String?
+    private var lastPushTime = Date.distantPast
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+
+    private var presetsCache: [(name: String, mode: String, colors: [String])]?
 
     enum EditTarget: Equatable {
         case color(Int)
@@ -2838,6 +2874,7 @@ final class PaletteModel {
     func seedDraft(image: String, colors: [String], accent: String?, resolved: String) {
         imagePath = image
         method = "magic"
+        sourceIsPreset = false
         mode = "auto"
         resolvedMode = resolved == "light" ? "light" : "dark"
         baseColors = colors
@@ -2852,9 +2889,15 @@ final class PaletteModel {
         strips.removeAll()
         strips["magic"] = colors
         histogram = []
+        roles = [:]
+        sourceName = nil
+        undoStack.removeAll()
+        redoStack.removeAll()
+        lastPushKey = nil
+        lastPushTime = .distantPast
+        rebuildHistogram(finalColors)
         update()
         refreshRender()
-        loadHistogram()
         loadStrips()
     }
 
@@ -2885,9 +2928,15 @@ final class PaletteModel {
         finalExtended = extendedHex
         strips.removeAll()
         histogram = []
+        roles = [:]
+        sourceName = nil
+        undoStack.removeAll()
+        redoStack.removeAll()
+        lastPushKey = nil
+        lastPushTime = .distantPast
+        rebuildHistogram(finalColors)
         update()
         refreshRender()
-        loadHistogram()
         loadStrips()
     }
 
@@ -2895,6 +2944,7 @@ final class PaletteModel {
 
     func setBaseColor(_ index: Int, _ hex: String) {
         guard baseColors.indices.contains(index), baseColors[index] != hex else { return }
+        pushHistory("color:\(index)")
         baseColors[index] = hex
         edited()
         update()
@@ -2903,6 +2953,7 @@ final class PaletteModel {
 
     func setExtended(_ key: String, _ hex: String) {
         guard extendedHex[key] != hex else { return }
+        pushHistory("extended:\(key)")
         extendedHex[key] = hex
         edited()
         update()
@@ -2911,6 +2962,7 @@ final class PaletteModel {
 
     func setAdjustment(_ key: String, _ value: Double) {
         guard abs(adjustments[key] - value) > 1e-9 else { return }
+        pushHistory("adjust:\(key)")
         adjustments[key] = value
         edited()
         update()
@@ -2919,6 +2971,7 @@ final class PaletteModel {
 
     func resetAdjustments() {
         guard !adjustments.isIdentity || !curve.isEmpty else { return }
+        pushHistory(nil)
         adjustments = EditorAdjustments()
         curve = []
         edited()
@@ -2928,6 +2981,7 @@ final class PaletteModel {
 
     func setCurve(_ points: [[Double]]) {
         guard points != curve else { return }
+        pushHistory("curve")
         curve = points
         edited()
         update()
@@ -2936,18 +2990,160 @@ final class PaletteModel {
 
     func resetCurve() {
         guard !curve.isEmpty else { return }
+        pushHistory(nil)
         curve = []
         edited()
         update()
         refreshRender()
     }
 
-    func chooseMethod(_ value: String) {
-        guard value != method else { return }
-        method = value
+    // --- history ------------------------------------------------------------
+
+    private func snapshot() -> HistoryEntry {
+        HistoryEntry(baseColors: baseColors, extendedHex: extendedHex,
+                     adjustments: adjustments, curve: curve, method: method,
+                     mode: mode, resolvedMode: resolvedMode, sourceName: sourceName)
+    }
+
+    private func pushHistory(_ key: String?) {
+        let now = Date()
+        if let key, key == lastPushKey, now.timeIntervalSince(lastPushTime) < 1.0 {
+            // same control inside a second: one step, already pushed
+            lastPushTime = now
+            return
+        }
+        undoStack.append(snapshot())
+        if undoStack.count > 50 { undoStack.removeFirst(undoStack.count - 50) }
+        redoStack.removeAll()
+        lastPushKey = key
+        lastPushTime = now
+    }
+
+    func undo() {
+        guard let entry = undoStack.popLast() else { return }
+        redoStack.append(snapshot())
+        restore(entry)
+    }
+
+    func redo() {
+        guard let entry = redoStack.popLast() else { return }
+        undoStack.append(snapshot())
+        restore(entry)
+    }
+
+    private func restore(_ e: HistoryEntry) {
+        lastPushKey = nil
+        lastPushTime = .distantPast
+        baseColors = e.baseColors
+        extendedHex = e.extendedHex
+        adjustments = e.adjustments
+        curve = e.curve
+        method = e.method
+        mode = e.mode
+        resolvedMode = e.resolvedMode
+        sourceName = e.sourceName
+        sourceIsPreset = e.sourceName.map { name in presetsCache?.contains { $0.name == name } ?? false } ?? false
+        update()
+        refreshRender()
+        edited()
+    }
+
+    // --- palette sources (presets, from colour, gradient) -------------------
+
+    func sourceLabel() -> String {
+        sourceName ?? methodLabel(method)
+    }
+
+    func withPresets(_ handler: @escaping ([(name: String, mode: String, colors: [String])]) -> Void) {
+        if let cache = presetsCache { handler(cache); return }
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            let (code, out) = self.themecore("presets --json")
+            var list: [(name: String, mode: String, colors: [String])] = []
+            if code == 0, let data = out.data(using: .utf8),
+               let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] {
+                list = arr.compactMap { p in
+                    guard let name = p["name"] as? String,
+                          let colors = p["colors"] as? [String], colors.count == 16 else { return nil }
+                    return (name, (p["mode"] as? String) ?? "dark", colors)
+                }
+            }
+            DispatchQueue.main.async {
+                guard !list.isEmpty else { return }
+                self.presetsCache = list
+                handler(list)
+            }
+        }
+    }
+
+    func applyPreset(_ name: String, colors: [String]) {
+        guard colors.count == 16, baseColors.count == 16 else { return }
+        pushHistory(nil)
+        var next = colors
+        for i in locked where i < 16 { next[i] = baseColors[i] }
+        baseColors = next
+        // a whole-palette swap also resets the sliders and the curve, like
+        // Aether's setPalette
+        curve = []
+        adjustments = EditorAdjustments()
+        sourceName = name
+        sourceIsPreset = true
         edited()
         update()
-        regenerate(reset: value == "magic")
+        refreshRender()
+    }
+
+    func applyFromColor(_ raw: String) {
+        let hex = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard hex.isEmpty == false else { return }
+        applyGenerated("color from-color \(shellQuote(hex)) --json",
+                       label: "From \(hex.uppercased())")
+    }
+
+    func applyGradient(_ startRaw: String, _ endRaw: String) {
+        let a = startRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let b = endRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !a.isEmpty, !b.isEmpty else { return }
+        applyGenerated("color gradient \(shellQuote(a)) \(shellQuote(b)) --steps 16 --json",
+                       label: "Gradient")
+    }
+
+    // One path for the two generated sources: ask the engine, then apply the
+    // 16 colours with locked slots kept, exactly like a preset.
+    private func applyGenerated(_ command: String, label: String) {
+        guard baseColors.count == 16 else { return }
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            let (code, out) = self.themecore(command)
+            guard code == 0, let data = out.data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let colors = obj["colors"] as? [String], colors.count == 16 else { return }
+            DispatchQueue.main.async {
+                guard self.baseColors.count == 16 else { return }
+                self.pushHistory(nil)
+                var next = colors
+                for i in self.locked where i < 16 { next[i] = self.baseColors[i] }
+                self.baseColors = next
+                self.curve = []
+                self.adjustments = EditorAdjustments()
+                self.sourceName = label
+                self.sourceIsPreset = false
+                self.edited()
+                self.update()
+                self.refreshRender()
+            }
+        }
+    }
+
+    func chooseMethod(_ value: String) {
+        guard value != method else { return }
+        pushHistory(nil)
+        method = value
+        sourceName = nil
+        sourceIsPreset = false
+        edited()
+        update()
+        regenerate()
     }
 
     func setMode(_ index: Int) {
@@ -2970,14 +3166,14 @@ final class PaletteModel {
                     guard self.paletteGeneration == gen else { return }
                     self.resolvedMode = resolved
                     self.update()
-                    if self.method != "magic" { self.regenerate(reset: false) }
+                    if self.method != "magic" { self.regenerate() }
                     else { self.refreshRender() }
                     self.loadStrips()
                 }
             }
         } else {
             resolvedMode = newMode
-            if method != "magic" { regenerate(reset: false) } else { refreshRender() }
+            if method != "magic" { regenerate() } else { refreshRender() }
             loadStrips()
         }
     }
@@ -3122,7 +3318,7 @@ final class PaletteModel {
     // Re-derives the base palette from the image. Locked colours keep their
     // old value; choosing Magic resets the adjustments too (the plan's
     // reset action).
-    private func regenerate(reset: Bool) {
+    private func regenerate() {
         guard !imagePath.isEmpty, baseColors.count == 16 else { return }
         paletteGeneration += 1
         let gen = paletteGeneration
@@ -3148,7 +3344,10 @@ final class PaletteModel {
                 var next = colors
                 for i in lockedNow where i < 16 { next[i] = previous[i] }
                 self.baseColors = next
-                if reset { self.adjustments = EditorAdjustments() }
+                // re-extraction is a whole-palette swap: sliders and curve
+                // reset, like Aether's setPalette
+                self.curve = []
+                self.adjustments = EditorAdjustments()
                 self.update()
                 self.refreshRender()
             }
@@ -3194,8 +3393,10 @@ final class PaletteModel {
                 guard self.renderGeneration == gen else { return }
                 self.finalColors = colors
                 if !ext.isEmpty { self.finalExtended = ext }
+                self.rebuildHistogram(colors)
                 self.update()
                 self.loadShades(colors)
+                self.loadRoles(colors, accent: self.finalExtended["accent"])
             }
         }
     }
@@ -3217,20 +3418,69 @@ final class PaletteModel {
         }
     }
 
-    private func loadHistogram() {
-        guard !imagePath.isEmpty else { return }
-        let q = shellQuote(imagePath)
+    // Bar/pill/label/muted/ring for the rendered palette: the surfaces the
+    // accessibility panel checks text colours against.
+    private func loadRoles(_ colors: [String], accent: String?) {
+        var args = "palette roles --colors \(shellQuote(colors.joined(separator: ",")))"
+        if let accent, !accent.isEmpty { args += " --accent \(shellQuote(accent))" }
+        args += " --json"
         DispatchQueue.global().async { [weak self] in
             guard let self else { return }
-            let (code, out) = self.themecore("image histogram \(q) --json")
+            let (code, out) = self.themecore(args)
             guard code == 0, let data = out.data(using: .utf8),
-                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let bins = obj["bins"] as? [Int], bins.count == 256 else { return }
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: String]
+            else { return }
             DispatchQueue.main.async {
-                self.histogram = bins
+                self.roles = obj
                 self.update()
             }
         }
+    }
+
+    // One row per colour the Accessibility section checks: the three text
+    // roles first, then every accent. Ratios run in surface order (bar,
+    // pill, surface); follows the rendered palette, so it moves live.
+    struct ContrastRow {
+        let name: String
+        let hex: String
+        let ratios: [Double]
+    }
+
+    func contrastRows() -> [ContrastRow] {
+        guard finalColors.count == 16 else { return [] }
+        let names = ["Label", "Accent", "Muted",
+                     "Red", "Green", "Yellow", "Blue", "Magenta", "Cyan"]
+        let hexes = [finalColors[7],
+                     finalExtended["accent"] ?? finalColors[4],
+                     finalColors[8],
+                     finalColors[1], finalColors[2], finalColors[3],
+                     finalColors[4], finalColors[5], finalColors[6]]
+        let surfaces = [roles["bar"] ?? "#000000",
+                        roles["pill"] ?? "#000000",
+                        finalColors[0]]
+        return zip(names, hexes).map { name, hex in
+            ContrastRow(name: name, hex: hex,
+                        ratios: surfaces.map { contrastRatioHex(hex, $0) })
+        }
+    }
+
+    // Aether's palette luminance histogram, the curve backdrop: every colour
+    // adds a Gaussian bump (sigma 8) at its HSL lightness, so editing a
+    // swatch reshapes the graph before any slider is touched.
+    private func rebuildHistogram(_ colors: [String]) {
+        var bins = [Double](repeating: 0, count: 256)
+        for hex in colors {
+            let clean = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+            guard clean.count == 6, let v = UInt64(clean, radix: 16) else { continue }
+            let r = Double((v >> 16) & 0xff), g = Double((v >> 8) & 0xff), b = Double(v & 0xff)
+            let lum = ((max(r, g, b) + min(r, g, b)) / 2).rounded()
+            for i in 0..<256 {
+                let d = Double(i) - lum
+                bins[i] += exp(-d * d / 128)
+            }
+        }
+        // integers; the view normalises against the tallest bin anyway
+        histogram = bins.map { Int(($0 * 4096).rounded()) }
     }
 
     // The mini palette strips the Method picker shows. The Magic strip is
@@ -3284,6 +3534,43 @@ final class PaletteModel {
 
 // A flat "popup button": the current choice and a chevron; the menu itself
 // is the MethodPicker card window.
+// A colour swatch for the palette sources: shows the current colour and
+// opens the shared colour panel for its field.
+// A minimal NSColorWell: the click opens the system swatch popover (the same
+// grid Aether shows in its webview), which closes on any outside click and
+// offers "Show Colors…" for the full panel. The action fires while picking.
+final class ColorWellView: NSColorWell {
+    var hex = "#000000" { didSet { syncColor() } }
+    var onChange: ((String) -> Void)?
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        colorWellStyle = .minimal
+        target = self
+        action = #selector(picked)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    private func syncColor() {
+        guard let want = hexString(from: nsColor(fromHex: hex)) else { return }
+        if hexString(from: color) != want {
+            color = nsColor(fromHex: hex)
+        }
+    }
+
+    override func activate(_ exclusive: Bool) {
+        // a click on the well commits whatever field is being edited first
+        window?.makeFirstResponder(nil)
+        super.activate(exclusive)
+    }
+
+    @objc private func picked() {
+        guard let h = hexString(from: color) else { return }
+        hex = h
+        onChange?(h)
+    }
+}
+
 final class PopupButtonView: NSView {
     var title = "" { didSet { needsDisplay = true } }
     var onClick: (() -> Void)?
@@ -3302,7 +3589,13 @@ final class PopupButtonView: NSView {
                       centerX: bounds.width - 15, midTop: bounds.height / 2, height: bounds.height)
     }
 
-    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func mouseDown(with event: NSEvent) {
+        // a click on any button commits whatever field is being edited
+        // first — without this the field stays first responder, and a
+        // later ⌘Z would undo the field's text instead of the palette
+        window?.makeFirstResponder(nil)
+        onClick?()
+    }
     override var acceptsFirstResponder: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
@@ -3720,10 +4013,10 @@ final class AdjustmentSliderView: NSView, NSTextFieldDelegate {
 
 // --- tone curve editor ------------------------------------------------------
 
-// The curve box, Aether-style: the image's luminance histogram as a backdrop,
-// the curve sampled from the LUT, and draggable control points. The endpoints
-// (0,0) and (1,1) are fixed; click empty space to add, drag to move,
-// double-click a point to remove, Reset returns to identity.
+// The curve box, Aether-style: the palette's luminance histogram as a
+// backdrop, the curve sampled from the LUT, and draggable control points.
+// The endpoints (0,0) and (1,1) are fixed; click empty space to add, drag
+// to move, double-click a point to remove, Reset returns to identity.
 final class CurveEditorView: NSView {
     var points: [[Double]] = [] { didSet { needsDisplay = true } }
     var histogram: [Int] = [] { didSet { needsDisplay = true } }
@@ -3990,6 +4283,12 @@ func contrastRatioHex(_ a: String, _ b: String) -> Double {
     let la = Double(relativeLuminance(nsColor(fromHex: a)))
     let lb = Double(relativeLuminance(nsColor(fromHex: b)))
     return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+}
+
+// Shared badge spelling for every contrast readout: WCAG AA (4.5), AAA (7)
+// and the large-text AA-L (3) the swatch cards already use.
+func contrastBadge(_ ratio: Double) -> String {
+    ratio >= 7 ? "AAA" : (ratio >= 4.5 ? "AA" : (ratio >= 3 ? "AA-L" : "!"))
 }
 
 // --- semantic colours -------------------------------------------------------
@@ -4579,6 +4878,7 @@ final class PaletteBuilderView: NSView {
     private let doc = PaletteBuilderDoc()
     private let scrollerW: CGFloat = 8
     private var shownEditKey: String?
+    private var shownImage = ""
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -4616,7 +4916,48 @@ final class PaletteBuilderView: NSView {
                 model?.chooseMethod(value)
             }
         }
+        doc.presetsButton.onClick = { [weak self] in
+            guard let self, let model = self.model else { return }
+            model.withPresets { [weak self] presets in
+                guard let self, !presets.isEmpty else { return }
+                var rows: [MethodPicker.Row] = []
+                var strips: [String: [String]] = [:]
+                for mode in ["dark", "light"] {
+                    let group = presets.filter { $0.mode == mode }
+                    guard !group.isEmpty else { continue }
+                    rows.append(MethodPicker.Row(header: mode.uppercased(),
+                                                 value: nil, label: mode.uppercased()))
+                    for p in group {
+                        rows.append(MethodPicker.Row(header: nil, value: p.name, label: p.name))
+                        strips[p.name] = p.colors
+                    }
+                }
+                MethodPicker.present(from: self.doc.presetsButton, rows: rows, strips: strips,
+                                     currentMethod: model.sourceName ?? "") { [weak self] name in
+                    guard let colors = strips[name] else { return }
+                    self?.model?.applyPreset(name, colors: colors)
+                }
+            }
+        }
+        doc.fromColorBuild.onClick = { [weak self] in
+            self?.model?.applyFromColor(self?.doc.fromColorField.stringValue ?? "")
+        }
+        doc.gradientBuild.onClick = { [weak self] in
+            guard let self else { return }
+            self.model?.applyGradient(self.doc.gradientStart.stringValue,
+                                      self.doc.gradientEnd.stringValue)
+        }
+        doc.fromColorWell.onChange = { [weak self] hex in
+            self?.doc.fromColorField.stringValue = hex
+        }
+        doc.gradientStartWell.onChange = { [weak self] hex in
+            self?.doc.gradientStart.stringValue = hex
+        }
+        doc.gradientEndWell.onChange = { [weak self] hex in
+            self?.doc.gradientEnd.stringValue = hex
+        }
         doc.modeSeg.onChange = { [weak self] i in self?.model?.setMode(i) }
+        doc.inspector.onColor = { [weak self] hex in self?.model?.writeEditTarget(hex) }
         doc.curveView.onChange = { [weak self] points in self?.model?.setCurve(points) }
         for slider in doc.sliders {
             let key = slider.field.key
@@ -4628,6 +4969,18 @@ final class PaletteBuilderView: NSView {
     func sync() {
         guard let model else { return }
         doc.methodButton.title = model.methodLabel(model.method)
+        doc.presetsButton.title = model.sourceIsPreset ? (model.sourceName ?? "Choose…") : "Choose…"
+        // scratch inputs for the two generated sources: seeded per document
+        if model.imagePath != shownImage {
+            shownImage = model.imagePath
+            doc.fromColorField.stringValue = model.extendedHex["accent"] ?? "#ffffff"
+            doc.gradientStart.stringValue = model.baseColors.first ?? "#000000"
+            doc.gradientEnd.stringValue = model.extendedHex["accent"] ?? "#ffffff"
+        }
+        doc.fromColorWell.hex = doc.fromColorField.stringValue
+        doc.gradientStartWell.hex = doc.gradientStart.stringValue
+        doc.gradientEndWell.hex = doc.gradientEnd.stringValue
+        doc.contrast = model.contrastRows()
         doc.modeSeg.index = model.mode == "light" ? 2 : (model.mode == "dark" ? 1 : 0)
         doc.modeSeg.needsDisplay = true
         doc.curveView.points = model.curve
@@ -4648,13 +5001,19 @@ final class PaletteBuilderView: NSView {
                              bgHex: finals.first ?? "#000000",
                              fgHex: finals.indices.contains(7) ? finals[7] : "#ffffff",
                              recent: model.recentColors)
-        let editKey = editing ? (model.editTargetHex() ?? "") + "·" + model.editTargetTitle() : nil
+        // Bring the inspector into view only when a different colour is
+        // picked: keyed on the target itself, not its hex, so applying a
+        // preset or rendering the palette never yanks the column around.
+        let editKey = editing ? model.editTargetTitle() : nil
         if editKey != shownEditKey {
             shownEditKey = editKey
             if editKey != nil {
                 DispatchQueue.main.async { [weak self] in self?.doc.scrollInspectorIntoView() }
             }
         }
+        // the Contrast section appears once the roles land: the document
+        // grows, so the scroll host has to re-run its layout
+        needsLayout = true
         doc.needsDisplay = true
         needsDisplay = true
     }
@@ -4683,12 +5042,22 @@ final class PaletteBuilderView: NSView {
         let targetH = max(doc.contentHeight(), clipH)
         if w > 0, (abs(doc.frame.width - w) > 0.5 || abs(doc.frame.height - targetH) > 0.5) {
             let first = doc.frame.width == 0
+            let oldH = doc.frame.height
             doc.frame = NSRect(origin: .zero, size: NSSize(width: w, height: targetH))
             doc.needsLayout = true
             doc.layoutSubtreeIfNeeded()
-            if first {
-                scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, targetH - clipH)))
-                scroll.reflectScrolledClipView(scroll.contentView)
+            // Top-anchored layout: content moves up in document coordinates
+            // whenever the height grows (the Accessibility rows arrive
+            // asynchronously). Carry the scroll origin by the same delta so
+            // the view stays on the content under it — first open lands at
+            // the top and stays there.
+            let clip = scroll.contentView
+            let maxY = max(0, targetH - clipH)
+            let cur = clip.bounds.origin.y
+            let next = first ? maxY : min(maxY, max(0, cur + (targetH - oldH)))
+            if abs(next - cur) > 0.5 {
+                clip.scroll(to: NSPoint(x: 0, y: next))
+                scroll.reflectScrolledClipView(clip)
             }
             scroller.refresh()
         }
@@ -4707,6 +5076,18 @@ final class PaletteBuilderDoc: NSView {
     let curveView = CurveEditorView()
     var sliders: [AdjustmentSliderView] = []
     let resetButton = ButtonView()
+    // palette sources
+    let presetsButton = PopupButtonView()
+    let fromColorField = NSTextField()
+    let fromColorWell = ColorWellView()
+    let fromColorBuild = ButtonView()
+    let gradientStart = NSTextField()
+    let gradientEnd = NSTextField()
+    let gradientStartWell = ColorWellView()
+    let gradientEndWell = ColorWellView()
+    let gradientBuild = ButtonView()
+    // Accessibility section data
+    var contrast: [PaletteModel.ContrastRow] = []
 
     // the inspector appears only while a card is selected
     var editorVisible = false
@@ -4715,8 +5096,12 @@ final class PaletteBuilderDoc: NSView {
     private let insetR: CGFloat = 12
     private var methodTop: CGFloat = 0
     private var modeTop: CGFloat = 0
+    private var presetsTop: CGFloat = 0
+    private var fromColorTop: CGFloat = 0
+    private var gradientTop: CGFloat = 0
     private var editorTop: CGFloat = 0
     private var adjTop: CGFloat = 0
+    private var contrastTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -4733,6 +5118,26 @@ final class PaletteBuilderDoc: NSView {
         }
         resetButton.title = "Reset"
         addSubview(resetButton)
+        presetsButton.title = "Presets"
+        addSubview(presetsButton)
+        for f in [fromColorField, gradientStart, gradientEnd] {
+            f.isBezeled = false
+            f.drawsBackground = true
+            f.backgroundColor = palette.itemBG.withAlphaComponent(0.35)
+            f.textColor = palette.label
+            f.font = nerdFont("Regular", 12)
+            f.focusRingType = .none
+            f.usesSingleLineMode = true
+            f.lineBreakMode = .byTruncatingTail
+            addSubview(f)
+        }
+        fromColorBuild.title = "Build"
+        gradientBuild.title = "Build"
+        addSubview(fromColorBuild)
+        addSubview(gradientBuild)
+        addSubview(fromColorWell)
+        addSubview(gradientStartWell)
+        addSubview(gradientEndWell)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -4754,11 +5159,13 @@ final class PaletteBuilderDoc: NSView {
     func contentHeight() -> CGFloat {
         var h: CGFloat = 10
         h += 34 + 34                                        // Method + Mode
+        h += 34 + 10 + 60 + 60                              // Presets, From Colour, Gradient
         if editorVisible { h += ColorInspectorView.viewHeight + 20 }
         h += 24                                             // Adjustments
         h += CurveEditorView.viewHeight + 8
         h += CGFloat(sliders.count) * AdjustmentSliderView.rowHeight
-        h += 38                                             // Reset Adjustments
+        h += 34                                             // Reset + Undo/Redo
+        h += 38 + CGFloat(contrast.count) * 26              // Accessibility
         h += 10
         return h
     }
@@ -4770,14 +5177,36 @@ final class PaletteBuilderDoc: NSView {
     override func layout() {
         super.layout()
         var top: CGFloat = 10
+        modeTop = top
+        let segSize = modeSeg.sizeThatFits()
+        // same width as the Method and Presets popups: one flush column
+        modeSeg.frame = rect(top: top + 3, h: segSize.height,
+                             x: insetL + max(0, contentW - 170), w: min(170, contentW))
+        top += 34
         methodTop = top
         methodButton.frame = rect(top: top + 3, h: 26, x: insetL + max(0, contentW - 170), w: 170)
         top += 34
-        modeTop = top
-        let segSize = modeSeg.sizeThatFits()
-        modeSeg.frame = rect(top: top + 3, h: segSize.height,
-                             x: insetL + max(0, contentW - segSize.width), w: segSize.width)
+        presetsTop = top
+        presetsButton.frame = rect(top: top + 3, h: 26, x: insetL + max(0, contentW - 170), w: 170)
         top += 34
+        // the two generator sections run on the same rhythm: 10 above the
+        // heading, 22 to its controls, 60 per section
+        fromColorTop = top + 10
+        let wellS: CGFloat = 24, buildW: CGFloat = 64
+        fromColorWell.frame = rect(top: fromColorTop + 22, h: wellS, x: insetL, w: wellS)
+        fromColorField.frame = rect(top: fromColorTop + 23, h: 22, x: insetL + wellS + 6, w: 62)
+        fromColorBuild.frame = rect(top: fromColorTop + 22, h: 24, x: insetL + contentW - buildW, w: buildW)
+        top = fromColorTop + 60
+        gradientTop = top
+        let gW: CGFloat = 62
+        gradientStartWell.frame = rect(top: gradientTop + 22, h: wellS, x: insetL, w: wellS)
+        gradientStart.frame = rect(top: gradientTop + 23, h: 22, x: insetL + wellS + 6, w: gW)
+        gradientEndWell.frame = rect(top: gradientTop + 22, h: wellS,
+                                     x: insetL + wellS + 6 + gW + 6, w: wellS)
+        gradientEnd.frame = rect(top: gradientTop + 23, h: 22,
+                                 x: insetL + wellS + 6 + gW + 6 + wellS + 6, w: gW)
+        gradientBuild.frame = rect(top: gradientTop + 22, h: 24, x: insetL + contentW - buildW, w: buildW)
+        top = gradientTop + 60
         if editorVisible {
             editorTop = top + 10
             inspector.frame = rect(top: editorTop, h: ColorInspectorView.viewHeight,
@@ -4794,13 +5223,21 @@ final class PaletteBuilderDoc: NSView {
         }
         top += 8
         resetButton.frame = rect(top: top, h: 24, x: insetL, w: 96)
+        top += 34
+        contrastTop = top
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        drawMidLeft("Method", nerdFont("Bold", 12), palette.label,
-                    x: insetL, midTop: methodTop + 16, height: bounds.height)
         drawMidLeft("Mode", nerdFont("Bold", 12), palette.label,
                     x: insetL, midTop: modeTop + 16, height: bounds.height)
+        drawMidLeft("Method", nerdFont("Bold", 12), palette.label,
+                    x: insetL, midTop: methodTop + 16, height: bounds.height)
+        drawMidLeft("Presets", nerdFont("Bold", 12), palette.label,
+                    x: insetL, midTop: presetsTop + 16, height: bounds.height)
+        drawTopLeft("From Colour", nerdFont("Bold", 12), palette.label,
+                    x: insetL, top: fromColorTop, height: bounds.height)
+        drawTopLeft("Gradient", nerdFont("Bold", 12), palette.label,
+                    x: insetL, top: gradientTop, height: bounds.height)
         if editorVisible {
             palette.muted.withAlphaComponent(0.25).setFill()
             NSRect(x: insetL, y: bounds.height - (editorTop - 6), width: contentW, height: 1).fill()
@@ -4808,6 +5245,58 @@ final class PaletteBuilderDoc: NSView {
         }
         drawTopLeft("Adjustments", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: adjTop, height: bounds.height)
+        drawTopLeft("Accessibility", nerdFont("Bold", 12), palette.accent,
+                    x: insetL, top: contrastTop, height: bounds.height)
+        drawContrast()
+    }
+
+    // Label / Accent / Muted against the three surfaces the theme paints
+    // (bar, pill, base background), each with its WCAG badge.
+    private func drawContrast() {
+        guard !contrast.isEmpty else { return }
+        let h = bounds.height
+        let pass = contrast.flatMap { $0.ratios }.filter { $0 >= 4.5 }.count
+        let summary = "\(pass) of \(contrast.count * 3) pass AA"
+        let sf = nerdFont("Regular", 10)
+        drawMidLeft(summary, sf, palette.muted,
+                    x: insetL + contentW - advance(summary, sf), midTop: contrastTop + 9,
+                    height: h)
+        let colW: CGFloat = 64
+        let centres = [insetL + contentW - colW * 2.5,
+                       insetL + contentW - colW * 1.5,
+                       insetL + contentW - colW * 0.5]
+        for (i, title) in ["BAR", "PILL", "SURFACE"].enumerated() {
+            drawMidCenter(title, nerdFont("Regular", 9), palette.muted,
+                          centerX: centres[i], midTop: contrastTop + 26, height: h)
+        }
+        for (i, row) in contrast.enumerated() {
+            let mid = contrastTop + 38 + CGFloat(i) * 26 + 13
+            drawMidLeft(row.name, nerdFont("Bold", 12), palette.label,
+                        x: insetL, midTop: mid, height: h)
+            let dot = NSRect(x: insetL + 62, y: h - mid - 5, width: 10, height: 10)
+            let dotPath = NSBezierPath(roundedRect: dot, xRadius: 3, yRadius: 3)
+            nsColor(fromHex: row.hex).setFill()
+            dotPath.fill()
+            palette.muted.withAlphaComponent(0.4).setStroke()
+            dotPath.lineWidth = 1
+            dotPath.stroke()
+            for (j, ratio) in row.ratios.enumerated() {
+                // ratio and verdict, centred as one pair inside the column
+                let badge = contrastBadge(ratio)
+                let ratioText = String(format: "%.1f:1", ratio)
+                let rf = nerdFont("Regular", 9)
+                let bf = nerdFont(badge == "AAA" ? "Bold" : "Regular", 10)
+                let rw = advance(ratioText, rf)
+                let bw = advance(badge, bf)
+                let x0 = centres[j] - (rw + 6 + bw) / 2
+                let ink = badge == "!" ? NSColor.systemRed
+                    : (badge == "AA-L" ? palette.muted : palette.label)
+                drawMidLeft(ratioText, rf, palette.muted,
+                            x: x0, midTop: mid, height: h)
+                drawMidLeft(badge, bf, ink,
+                            x: x0 + rw + 6, midTop: mid, height: h)
+            }
+        }
     }
 }
 
@@ -4860,7 +5349,7 @@ final class PaletteCanvasView: NSView {
         doc.colorCards.selected = model.selected
         doc.colorCards.editTarget = model.editTarget
         doc.colorCards.bgHex = finals.first ?? "#000000"
-        doc.methodText = "· \(model.methodLabel(model.method))"
+        doc.methodText = "· \(model.sourceLabel())"
 
         func base(_ i: Int) -> String { finals.indices.contains(i) ? finals[i] : "#000000" }
         func shade(_ key: String, _ fallback: Int) -> String {
@@ -4919,12 +5408,19 @@ final class PaletteCanvasView: NSView {
         let targetH = max(doc.contentHeight(), clipH)
         if w > 0, (abs(doc.frame.width - w) > 0.5 || abs(doc.frame.height - targetH) > 0.5) {
             let first = doc.frame.width == 0
+            let oldH = doc.frame.height
             doc.frame = NSRect(origin: .zero, size: NSSize(width: w, height: targetH))
             doc.needsLayout = true
             doc.layoutSubtreeIfNeeded()
-            if first {
-                scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, targetH - clipH)))
-                scroll.reflectScrolledClipView(scroll.contentView)
+            // same anchoring as the builder column: carry the origin by the
+            // height delta so arriving content does not shift the view
+            let clip = scroll.contentView
+            let maxY = max(0, targetH - clipH)
+            let cur = clip.bounds.origin.y
+            let next = first ? maxY : min(maxY, max(0, cur + (targetH - oldH)))
+            if abs(next - cur) > 0.5 {
+                clip.scroll(to: NSPoint(x: 0, y: next))
+                scroll.reflectScrolledClipView(clip)
             }
             scroller.refresh()
         }
@@ -5005,6 +5501,9 @@ final class EditorFooterView: NSView {
     let saveButton = ButtonView()
     let saveAsButton = ButtonView()
     let applyButton = ButtonView()
+    // history is global to the editor: it lives in the bottom band
+    let undoButton = ButtonView()
+    let redoButton = ButtonView()
     var dirty = false { didSet { needsDisplay = true } }
     var message: (text: String, red: Bool)? { didSet { needsDisplay = true } }
 
@@ -5014,9 +5513,19 @@ final class EditorFooterView: NSView {
         saveAsButton.secondary = true
         saveButton.title = "Save"
         applyButton.title = "Apply Theme"
+        undoButton.title = "\u{f0e2}"
+        undoButton.centeredByBounds = true
+        undoButton.fontSize = 12
+        undoButton.toolTip = "Undo (⌘Z)"
+        redoButton.title = "\u{f01e}"
+        redoButton.centeredByBounds = true
+        redoButton.fontSize = 12
+        redoButton.toolTip = "Redo (⇧⌘Z)"
         addSubview(saveAsButton)
         addSubview(saveButton)
         addSubview(applyButton)
+        addSubview(undoButton)
+        addSubview(redoButton)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -5028,6 +5537,8 @@ final class EditorFooterView: NSView {
         applyButton.frame = NSRect(x: bounds.width - margin - w, y: y, width: w, height: h)
         saveButton.frame = NSRect(x: applyButton.frame.minX - 8 - w, y: y, width: w, height: h)
         saveAsButton.frame = NSRect(x: saveButton.frame.minX - 8 - w, y: y, width: w, height: h)
+        undoButton.frame = NSRect(x: margin, y: y, width: 24, height: h)
+        redoButton.frame = NSRect(x: margin + 28, y: y, width: 24, height: h)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -5036,13 +5547,13 @@ final class EditorFooterView: NSView {
         if let message {
             drawMidLeft(message.text, nerdFont("Regular", 11),
                         message.red ? .systemRed : palette.muted,
-                        x: 20, midTop: bounds.height / 2, height: bounds.height)
+                        x: 84, midTop: bounds.height / 2, height: bounds.height)
         } else if dirty {
-            let dot = NSRect(x: 20, y: bounds.midY - 3, width: 6, height: 6)
+            let dot = NSRect(x: 84, y: bounds.midY - 3, width: 6, height: 6)
             palette.accent.setFill()
             NSBezierPath(ovalIn: dot).fill()
             drawMidLeft("Unsaved changes", nerdFont("Regular", 11), palette.muted,
-                        x: 32, midTop: bounds.height / 2, height: bounds.height)
+                        x: 96, midTop: bounds.height / 2, height: bounds.height)
         }
     }
 }
@@ -5057,6 +5568,7 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
     let paletteCanvas = PaletteCanvasView()
     let wallpaperEditor = EditorColumnView()
     let footer = EditorFooterView()
+    private let penButton = ButtonView()
 
     private let headerH: CGFloat = 56
     private let footerH: CGFloat = 54
@@ -5075,16 +5587,39 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
         nameField.focusRingType = .none
         nameField.usesSingleLineMode = true
         nameField.lineBreakMode = .byTruncatingTail
+        nameField.isEditable = false
+        nameField.isSelectable = false
         nameField.delegate = self
         nameField.target = self
         nameField.action = #selector(nameReturn)
+        penButton.title = "\u{f040}"
+        penButton.centeredByBounds = true
+        penButton.fontSize = 12
+        penButton.toolTip = "Rename Theme"
+        penButton.onClick = { [weak self] in
+            guard let self else { return }
+            self.setPenOpen(!self.nameEditable)
+        }
         addSubview(nameField)
+        addSubview(penButton)
         addSubview(paletteBuilder)
         addSubview(paletteCanvas)
         addSubview(wallpaperEditor)
         addSubview(footer)
+        // a click anywhere else ends the name edit — the app's custom views
+        // never take first responder, so nothing else closes the field
+        penMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                guard let self, self.nameEditable else { return event }
+                let p = self.convert(event.locationInWindow, from: nil)
+                if !self.nameField.frame.contains(p), !self.penRect.contains(p) {
+                    self.setPenOpen(false)
+                }
+                return event
+            }
     }
     required init?(coder: NSCoder) { fatalError("not used") }
+    deinit { if let m = penMonitor { NSEvent.removeMonitor(m) } }
 
     var nameValue: String {
         nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5093,6 +5628,7 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
 
     @objc private func nameReturn() { window?.makeFirstResponder(self) }
     func controlTextDidChange(_ obj: Notification) { onNameEdit?() }
+    func controlTextDidEndEditing(_ obj: Notification) { setPenOpen(false) }
 
     // a theme name is not prose: the field editor's red dotted spell
     // underline reads as a rendering bug in the header
@@ -5106,10 +5642,51 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
         editor.isGrammarCheckingEnabled = false
     }
 
+    // -14 centres the cell-drawn text on the header's mid line — NSTextField
+    // lays text out from the frame top, not on cap height. The pen and the
+    // close ride this field's centre line, not the header's.
+    private var nameRect: NSRect {
+        NSRect(x: 20, y: bounds.height - headerH / 2 - 14,
+               width: max(120, penRect.minX - 14 - 20), height: 22)
+    }
+
     private var closeRect: NSRect {
-        NSRect(x: bounds.width - closeSize - 16,
-               y: bounds.height - headerH / 2 - closeSize / 2,
+        NSRect(x: bounds.width - closeSize - 16, y: nameRect.midY - closeSize / 2,
                width: closeSize, height: closeSize)
+    }
+
+    // the pen unlocks the name: the title reads as a label until asked for
+    private var nameEditable = false
+    private var penMonitor: Any?
+
+    private var penRect: NSRect {
+        NSRect(x: closeRect.minX - closeSize - 8, y: nameRect.midY - closeSize / 2,
+               width: closeSize, height: closeSize)
+    }
+
+    private func setPenOpen(_ open: Bool) {
+        guard nameEditable != open else { return }
+        nameEditable = open
+        if open {
+            nameField.isEditable = true
+            nameField.isSelectable = true
+            nameField.backgroundColor = palette.itemBG.withAlphaComponent(0.5)
+            window?.makeFirstResponder(nameField)
+            // focus without selecting: a select-all highlight over the
+            // label colour is unreadable — park the caret at the end
+            if let editor = nameField.currentEditor() {
+                let end = (nameField.stringValue as NSString).length
+                editor.selectedRange = NSRange(location: end, length: 0)
+            }
+        } else {
+            if let editor = nameField.currentEditor(), editor.window?.firstResponder === editor {
+                window?.makeFirstResponder(nil)
+            }
+            nameField.isEditable = false
+            nameField.isSelectable = false
+            nameField.backgroundColor = palette.itemBG.withAlphaComponent(0.25)
+        }
+        needsDisplay = true
     }
 
     override func layout() {
@@ -5121,11 +5698,9 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
         wallpaperEditor.frame = NSRect(x: bounds.width - rightW, y: footerH, width: rightW, height: h)
         footer.frame = NSRect(x: 0, y: 0, width: bounds.width, height: footerH)
         // the name field is the whole title — no static prefix (the editor
-        // is obvious from its contents); -14 centres the cell-drawn text on
-        // the header's mid line — NSTextField lays text out from the frame
-        // top, not on cap height
-        nameField.frame = NSRect(x: 20, y: bounds.height - headerH / 2 - 14,
-                                 width: max(120, closeRect.minX - 16 - 20), height: 22)
+        // is obvious from its contents)
+        nameField.frame = nameRect
+        penButton.frame = penRect
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -5140,7 +5715,8 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
         body.stroke()
 
         drawMidCenter("✕", nerdFont("Regular", 12), palette.muted,
-                      centerX: closeRect.midX, midTop: headerH / 2, height: bounds.height)
+                      centerX: closeRect.midX, midTop: bounds.height - nameRect.midY,
+                      height: bounds.height)
 
         // column rules, drawn last so they sit on every surface
         palette.muted.withAlphaComponent(0.25).setFill()
@@ -5153,6 +5729,7 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         if closeRect.contains(p) { onClose?() }
+        else if nameField.frame.contains(p) { setPenOpen(true) }
     }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -5204,6 +5781,8 @@ final class ThemeEditor {
             self.dirty = true
             self.root.dirty = true
         }
+        root.footer.undoButton.onClick = { [weak self] in self?.model.undo() }
+        root.footer.redoButton.onClick = { [weak self] in self?.model.redo() }
         root.footer.saveButton.onClick = { [weak self] in self?.startSave(newID: false, action: .none) }
         root.footer.saveAsButton.onClick = { [weak self] in self?.startSave(newID: true, action: .none) }
         root.footer.applyButton.onClick = { [weak self] in self?.startSave(newID: false, action: .apply) }
@@ -5214,6 +5793,52 @@ final class ThemeEditor {
         window.acceptsMouseMovedEvents = true
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         window.contentView = root
+        // "Show Colors…" in the swatch popover opens the shared panel, and
+        // the system resets its level to floating on every show — below the
+        // editor card. Watch it and lift it back above on every appearance.
+        Self.installPanelWatch()
+    }
+
+    private static var panelWatchInstalled = false
+
+    private static func installPanelWatch() {
+        let panel = NSColorPanel.shared
+        let above = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
+        panel.showsAlpha = false
+        panel.level = above
+        guard !panelWatchInstalled else { return }
+        panelWatchInstalled = true
+        let lift: (Notification) -> Void = { note in
+            guard let p = note.object as? NSWindow, p.level != above else { return }
+            p.level = above
+            p.orderFrontRegardless()
+        }
+        for name: Notification.Name in [
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.didUpdateNotification,
+        ] {
+            NotificationCenter.default.addObserver(
+                forName: name, object: panel, queue: .main, using: lift)
+        }
+        // like the swatch popover, the full panel dismisses on any click
+        // outside it — in-app or in any other app
+        let outside: (NSEvent) -> Void = { _ in
+            if panel.isVisible, !panel.frame.contains(NSEvent.mouseLocation) {
+                panel.orderOut(nil)
+            }
+        }
+        NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]) { event in
+                outside(event)
+                return event
+            }
+        NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown], handler: outside)
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil,
+            queue: .main) { _ in
+                if panel.isVisible { panel.orderOut(nil) }
+            }
     }
 
     // The Edit pill's front door. A named variation opens its saved record;
@@ -5404,6 +6029,13 @@ final class ThemeEditor {
         // monitors ignore an Esc aimed at another window
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] e in
             guard let self, e.window === self.window else { return e }
+            // ⌘Z / ⇧⌘Z walk the palette history; while a text field is
+            // editing, let the field keep its own undo
+            if e.keyCode == 6, e.modifierFlags.contains(.command),
+               !(self.window.firstResponder is NSTextView) {
+                if e.modifierFlags.contains(.shift) { self.model.redo() } else { self.model.undo() }
+                return nil
+            }
             if e.keyCode == 53 {
                 // Esc while the name is being edited ends that first
                 if self.root.nameField.currentEditor() != nil {
@@ -5529,6 +6161,8 @@ final class ThemeEditor {
         guard ThemeEditor.current === self else { return }
         ThemeEditor.current = nil
         if let k = keyMonitor { NSEvent.removeMonitor(k); keyMonitor = nil }
+        NSColorPanel.shared.setTarget(nil)
+        NSColorPanel.shared.orderOut(nil)
         model.teardown()
         if let dash = window.parent as? DashboardWindow {
             dash.hideSuppressed = false
