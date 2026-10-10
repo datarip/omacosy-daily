@@ -504,6 +504,68 @@ final class SegmentedView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+// A drawn checkbox, in the house style. The row's title and description
+// carry the words; the box shows the state and is the only hit target.
+final class CheckView: NSView {
+    var isOn = false { didSet { needsDisplay = true } }
+    var onChange: ((Bool) -> Void)?
+
+    func sizeThatFits() -> NSSize { NSSize(width: 22, height: 22) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let box = NSRect(x: 0, y: (bounds.height - 18) / 2, width: 18, height: 18)
+        let r = NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4)
+        if isOn {
+            palette.accent.setFill(); r.fill()
+            whDrawGlyphCentered("\u{f00c}", in: box, color: palette.barBG, size: 12)
+        } else {
+            palette.itemBG.withAlphaComponent(0.4).setFill(); r.fill()
+            palette.muted.withAlphaComponent(0.5).setStroke()
+            r.lineWidth = 1; r.stroke()
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        isOn.toggle()
+        onChange?(isOn)
+    }
+    override var acceptsFirstResponder: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+// A single on/off switch, square-ish and themed: a track with a knob that
+// slides left (off) or right (on). One control, not two buttons. AppKit's
+// NSSwitch exists but is a system-styled pill that would not match the
+// hand-drawn dashboard.
+final class ToggleView: NSView {
+    var isOn = false { didSet { needsDisplay = true } }
+    var onChange: ((Bool) -> Void)?
+
+    func sizeThatFits() -> NSSize { NSSize(width: 46, height: 24) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let track = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5)
+        if isOn {
+            palette.accent.setFill(); track.fill()
+        } else {
+            palette.itemBG.withAlphaComponent(0.45).setFill(); track.fill()
+            palette.muted.withAlphaComponent(0.5).setStroke(); track.lineWidth = 1; track.stroke()
+        }
+        let ks = bounds.height - 8
+        let kx = isOn ? bounds.width - ks - 4 : 4
+        let knob = NSBezierPath(roundedRect: NSRect(x: kx, y: 4, width: ks, height: ks),
+                                xRadius: 4, yRadius: 4)
+        (isOn ? palette.barBG : palette.muted).setFill(); knob.fill()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        isOn.toggle()
+        onChange?(isOn)
+    }
+    override var acceptsFirstResponder: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 final class ButtonView: NSView {
     var title = "Save" { didSet { needsDisplay = true } }
     var fontSize: CGFloat = 12
@@ -513,6 +575,10 @@ final class ButtonView: NSView {
     // a quieter fill for the second action in a dialog or footer row
     var secondary = false { didSet { needsDisplay = true } }
     var busy = false { didSet { needsDisplay = true } }
+    var danger = false { didSet { needsDisplay = true } }
+    // a brief dim on the press, so a tap always shows even when the action
+    // it fires is instant
+    var highlighted = false { didSet { needsDisplay = true } }
     var onClick: (() -> Void)?
 
     override func draw(_ dirtyRect: NSRect) {
@@ -524,28 +590,34 @@ final class ButtonView: NSView {
             r.lineWidth = 1
             r.stroke()
         } else {
-            (busy ? palette.muted : palette.accent).setFill()
+            (busy ? palette.muted : (danger ? NSColor.systemRed : palette.accent)).setFill()
             r.fill()
         }
         let text = busy ? "Saving…" : title
         let font = nerdFont("Bold", fontSize)
         let ink = (secondary && !busy) ? palette.label : palette.barBG
         if centeredByBounds {
-            // centre on the glyph's ink, not its line box: nerd-font icons
-            // carry odd metrics and drift high/left in a line-box centre
-            guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-            let line = textLine(text, font, ink)
-            let inkBounds = CTLineGetImageBounds(line, ctx)
-            ctx.textPosition = CGPoint(x: bounds.midX - inkBounds.midX,
-                                       y: bounds.midY - inkBounds.midY)
-            CTLineDraw(line, ctx)
+            whDrawGlyphCentered(text, in: bounds, color: ink, size: fontSize)
         } else {
             drawMidCenter(text, font, ink,
                           centerX: bounds.midX, midTop: bounds.height / 2, height: bounds.height)
         }
+        if highlighted {
+            NSColor.black.withAlphaComponent(0.22).setFill()
+            r.fill()
+        }
     }
 
-    override func mouseDown(with event: NSEvent) { if !busy { onClick?() } }
+    override func mouseDown(with event: NSEvent) {
+        guard !busy else { return }
+        highlighted = true
+        needsDisplay = true
+        onClick?()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            self?.highlighted = false
+            self?.needsDisplay = true
+        }
+    }
     override var acceptsFirstResponder: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
@@ -646,14 +718,19 @@ struct OptionRow {
     let desc: String
     let seg: SegmentedView?
     let slider: OpacitySliderView?
+    let check: CheckView?
+    let toggle: ToggleView?
 
     init(category: String, title: String, desc: String,
-         seg: SegmentedView? = nil, slider: OpacitySliderView? = nil) {
+         seg: SegmentedView? = nil, slider: OpacitySliderView? = nil,
+         check: CheckView? = nil, toggle: ToggleView? = nil) {
         self.category = category
         self.title = title
         self.desc = desc
         self.seg = seg
         self.slider = slider
+        self.check = check
+        self.toggle = toggle
     }
 }
 
@@ -684,6 +761,20 @@ final class OptionsDocView: NSView {
                 let w: CGFloat = 220
                 slider.frame = NSRect(x: bounds.width - w, y: bounds.height - (top + rowH / 2) - 7,
                                       width: w, height: 14)
+            }
+            if let check = row.check {
+                let sz = check.sizeThatFits()
+                let cTop = top + (rowH - sz.height) / 2
+                check.frame = NSRect(x: bounds.width - sz.width,
+                                     y: bounds.height - cTop - sz.height,
+                                     width: sz.width, height: sz.height)
+            }
+            if let toggle = row.toggle {
+                let sz = toggle.sizeThatFits()
+                let tTop = top + (rowH - sz.height) / 2
+                toggle.frame = NSRect(x: bounds.width - sz.width,
+                                      y: bounds.height - tTop - sz.height,
+                                      width: sz.width, height: sz.height)
             }
             top += rowH + sectionGap
         }
@@ -719,6 +810,8 @@ final class OptionsTabView: NSView, ScrollStepTab {
         needsDisplay = true
         doc.needsDisplay = true
         for r in rows { r.seg?.needsDisplay = true }
+        for r in rows { r.check?.needsDisplay = true }
+        for r in rows { r.toggle?.needsDisplay = true }
         scroller.refresh()
     }
     private var original = DashboardState()
@@ -767,12 +860,16 @@ final class OptionsTabView: NSView, ScrollStepTab {
         let wmSeg = makeSeg(["AeroSpace", "OmniWM"], original.wm.rawValue)
         let cornerSeg = makeSeg(["Rounded", "Square"], original.corners.rawValue)
         let barSeg = makeSeg(["Visible", "Hidden", "Auto"], original.bar.rawValue)
-        let fsSeg = makeSeg(["Off", "On"], original.fullscreen ? 1 : 0)
+        let fsToggle = ToggleView()
+        fsToggle.isOn = original.fullscreen
         let atSeg = makeSeg(["Own Colours", "Follow Theme"], original.termTheme.rawValue)
 
         let opacitySlider = OpacitySliderView()
         opacitySlider.value = readGlobalToolOpacity() ?? readTerminalOpacity() ?? 100
         opacitySlider.onChange = { [weak self] _ in self?.doc.needsDisplay = true }
+
+        let nsfwToggle = ToggleView()
+        nsfwToggle.isOn = WHConfig.load().hideNSFW
 
         rows = [
             OptionRow(category: "Window Manager", title: "Window Manager",
@@ -783,17 +880,22 @@ final class OptionsTabView: NSView, ScrollStepTab {
             OptionRow(category: "Bar", title: "Menu Bar Mode",
                       desc: "Keep the bar visible, let it hide at rest, or follow the display.", seg: barSeg),
             OptionRow(category: "Fullscreen", title: "Full Screen Mode",
-                      desc: "A workspace holding one window fills the display.", seg: fsSeg),
+                      desc: "A workspace holding one window fills the display.", toggle: fsToggle),
             OptionRow(category: "Themes", title: "Terminal Auto-Theme",
                       desc: "Let the terminal and its apps follow the wallpaper theme, or keep their own colours.", seg: atSeg),
             OptionRow(category: "Appearance", title: "Terminal Opacity",
                       desc: "How see-through the terminal and its tools are. Every theme that inherits it follows.",
                       slider: opacitySlider),
+            OptionRow(category: "Content", title: "Hide NSFW Content",
+                      desc: "Hide adult wallhaven results and anything downloaded from them, everywhere. Nothing is deleted.",
+                      toggle: nsfwToggle),
         ]
         doc.rows = rows
         for r in rows {
             if let s = r.seg { doc.addSubview(s) }
             if let sl = r.slider { doc.addSubview(sl) }
+            if let c = r.check { doc.addSubview(c) }
+            if let t = r.toggle { doc.addSubview(t) }
         }
     }
 
@@ -833,7 +935,7 @@ final class OptionsTabView: NSView, ScrollStepTab {
         let wm = WindowManager(rawValue: rows[0].seg!.index) ?? original.wm
         let corners = CornerMode(rawValue: rows[1].seg!.index) ?? original.corners
         let bar = BarMode(rawValue: rows[2].seg!.index) ?? original.bar
-        let fullscreen = rows[3].seg!.index == 1
+        let fullscreen = rows[3].toggle?.isOn ?? original.fullscreen
         let termTheme = TerminalThemeMode(rawValue: rows[4].seg!.index) ?? original.termTheme
 
         // the machine-wide terminal opacity
@@ -842,6 +944,13 @@ final class OptionsTabView: NSView, ScrollStepTab {
            slider.value != readGlobalToolOpacity() {
             writeGlobalToolOpacity(slider.value)
             opacityChanged = true
+        }
+
+        // the global NSFW hide lives in the wallhaven preferences
+        var nsfwChanged = false
+        if let toggle = rows.first(where: { $0.category == "Content" })?.toggle {
+            var cfg = WHConfig.load()
+            if cfg.hideNSFW != toggle.isOn { cfg.hideNSFW = toggle.isOn; cfg.save(); nsfwChanged = true }
         }
 
         var steps: [String] = []
@@ -863,7 +972,7 @@ final class OptionsTabView: NSView, ScrollStepTab {
             steps.append("\(HOME)/.local/bin/omacosy-term-auto-theme \(termTheme == .follow ? "on" : "off")")
         }
 
-        guard !steps.isEmpty || opacityChanged else {
+        guard !steps.isEmpty || opacityChanged || nsfwChanged else {
             status = "No changes"
             needsDisplay = true
             return
@@ -1210,6 +1319,149 @@ final class PickerRoot: NSView {
 
 final class PickerWindow: NSWindow {
     override var canBecomeKey: Bool { true }
+}
+
+// --- delete confirmation ---------------------------------------------------
+
+// A small centred card that asks before a wallpaper or theme is removed. The
+// checkboxes choose what goes: the file to the Trash, and/or the editions
+// built from it. It is a child window, so it sits above the modal and
+// dismisses with it. Nothing here hard-deletes: the file goes to the Trash.
+final class DeleteConfirmView: NSView {
+    var titleText = "" { didSet { needsDisplay = true } }
+    var subtitleText = "" { didSet { needsDisplay = true } }
+    var labels: [String] = []
+    private(set) var values: [Bool] = []
+    private var checks: [CheckView] = []
+    private let cancel = ButtonView()
+    private let deleteButton = ButtonView()
+    var onCancel: (() -> Void)?
+    var onDelete: (() -> Void)?
+
+    init(width: CGFloat, labels: [String], defaults: [Bool], subtitle: String) {
+        self.labels = labels
+        self.values = defaults
+        self.subtitleText = subtitle
+        let height = 96 + CGFloat(max(labels.count, 0)) * 30 + 46
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        wantsLayer = true
+        for (i, _) in labels.enumerated() {
+            let c = CheckView()
+            c.isOn = defaults[i]
+            c.onChange = { [weak self] on in
+                guard let self, i < self.values.count else { return }
+                self.values[i] = on
+            }
+            addSubview(c)
+            checks.append(c)
+        }
+        cancel.title = "Cancel"
+        cancel.secondary = true
+        cancel.fontSize = 12
+        cancel.onClick = { [weak self] in self?.onCancel?() }
+        addSubview(cancel)
+        deleteButton.title = "Delete"
+        deleteButton.danger = true
+        deleteButton.fontSize = 12
+        deleteButton.onClick = { [weak self] in self?.onDelete?() }
+        addSubview(deleteButton)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layout() {
+        super.layout()
+        let bw: CGFloat = 96, bh: CGFloat = 26
+        deleteButton.frame = NSRect(x: bounds.width - 20 - bw, y: 18, width: bw, height: bh)
+        cancel.frame = NSRect(x: bounds.width - 20 - bw - 8 - bw, y: 18, width: bw, height: bh)
+        var top: CGFloat = 78
+        for c in checks {
+            c.frame = NSRect(x: 20, y: bounds.height - top - 18, width: 22, height: 18)
+            top += 30
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let corner = min(windowCornerRadius(12), min(bounds.width, bounds.height) / 2)
+        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                                xRadius: corner, yRadius: corner)
+        palette.barBG.setFill(); card.fill()
+        palette.accent.withAlphaComponent(0.55).setStroke(); card.lineWidth = 1; card.stroke()
+
+        let tf = nerdFont("Bold", 13)
+        drawTopLeft(truncate(titleText, tf, bounds.width - 40), tf, palette.label,
+                    x: 20, top: 16, height: bounds.height)
+        drawTopLeft(truncate(subtitleText, nerdFont("Regular", 11), bounds.width - 40),
+                    nerdFont("Regular", 11), palette.muted, x: 20, top: 40, height: bounds.height)
+        var top: CGFloat = 78
+        for lab in labels {
+            drawMidLeft(lab, nerdFont("Regular", 12), palette.label,
+                        x: 50, midTop: top + 9, height: bounds.height)
+            top += 30
+        }
+    }
+}
+
+final class DeleteConfirm: NSObject {
+    private static var current: DeleteConfirm?
+    private let window: PickerWindow
+    private let root: DeleteConfirmView
+    private var keyMonitor: Any?
+
+    private init(title: String, subtitle: String, labels: [String], defaults: [Bool],
+                 onDelete: @escaping ([Bool]) -> Void) {
+        let width: CGFloat = 420
+        root = DeleteConfirmView(width: width, labels: labels, defaults: defaults, subtitle: subtitle)
+        root.titleText = title
+        window = PickerWindow(contentRect: root.frame,
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        super.init()
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.level = .popUpMenu
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        window.contentView = root
+        root.onCancel = { [weak self] in self?.close() }
+        root.onDelete = { [weak self] in
+            let vals = self?.root.values ?? []
+            self?.close()
+            onDelete(vals)
+        }
+    }
+
+    static func present(from host: NSView, title: String, subtitle: String,
+                        labels: [String] = [], defaults: [Bool] = [],
+                        onDelete: @escaping ([Bool]) -> Void) {
+        current?.close()
+        let d = DeleteConfirm(title: title, subtitle: subtitle, labels: labels,
+                              defaults: defaults, onDelete: onDelete)
+        guard let win = host.window else { return }
+        let f = win.frame
+        let x = f.midX - d.window.frame.width / 2
+        let y = f.midY - d.window.frame.height / 2
+        d.window.setFrameOrigin(NSPoint(x: x, y: y))
+        current = d
+        win.addChildWindow(d.window, ordered: .above)
+        d.show()
+    }
+
+    private func show() {
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] e in
+            if e.keyCode == 53 { self?.close(); return nil }               // Esc
+            if e.keyCode == 36 || e.keyCode == 76 { self?.root.onDelete?(); return nil }
+            return e
+        }
+    }
+
+    private func close() {
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        window.parent?.removeChildWindow(window)
+        window.orderOut(nil)
+        DeleteConfirm.current = nil
+    }
 }
 
 final class AppPicker: NSObject, NSWindowDelegate {
@@ -1987,6 +2239,15 @@ func customVariants() -> [ThemeCell] {
         .filter { isImageFile($0) }.sorted()
     let editions = allEditions()
 
+    // Hide NSFW downloads (and editions built from them) when the global
+    // toggle is on. Nothing is removed from disk; the number simply skips.
+    let hideNSFW = WHConfig.load().hideNSFW
+    let manifest = hideNSFW ? whDownloadManifest() : [:]
+    func hidden(_ path: String) -> Bool {
+        hideNSFW && manifest[(path as NSString).lastPathComponent]?.purity == "nsfw"
+    }
+    let visibleFiles = files.filter { !hidden($0) }
+
     var bySource: [String: Int] = [:]
     for e in editions {
         guard let src = e.sourcePath else { continue }
@@ -2002,11 +2263,12 @@ func customVariants() -> [ThemeCell] {
     }
     for e in sorted {
         guard let img = editionImage(e) else { continue }
+        if let src = e.sourcePath, hidden(src) { continue }
         out.append(ThemeCell(logical: "custom", wallpaper: img, title: e.name,
                              isCustom: true, paletteFile: "",
                              editionID: e.id, storedColors: e.colors))
     }
-    for (i, f) in files.enumerated() {
+    for (i, f) in visibleFiles.enumerated() {
         let p = dir + "/" + f
         out.append(ThemeCell(logical: "custom", wallpaper: p,
                              title: "Wallpaper #\(i + 1)", isCustom: true, paletteFile: "",
@@ -2196,6 +2458,10 @@ final class ThemeGridView: NSView {
     var onApplied: ((String) -> Void)?
     // the Edit pill's click: opens the Theme Editor on this cell
     var onEdit: ((ThemeCell) -> Void)?
+    // the hover trash's click: asks before removing this cell
+    var onDelete: ((ThemeCell) -> Void)?
+    // Off-screen review only.
+    func debugSetHover(_ i: Int?) { hoveredIndex = i; needsDisplay = true }
     private var hoveredIndex: Int?
     private var hoverTracking: NSTrackingArea?
 
@@ -2394,6 +2660,13 @@ final class ThemeGridView: NSView {
             let ink = relativeLuminance(palette.accent) > 0.179 ? palette.barBG : palette.label
             drawMidCenter(label, nerdFont("Bold", 11), ink,
                           centerX: pill.midX, midTop: bounds.height - pill.midY, height: bounds.height)
+
+            // a trash on the top-right: opens the delete confirmation
+            let tr = trashRect(f)
+            let box = NSBezierPath(roundedRect: tr, xRadius: 6, yRadius: 6)
+            NSColor(srgbRed: 0.05, green: 0.05, blue: 0.07, alpha: 0.5).setFill(); box.fill()
+            NSColor.white.withAlphaComponent(0.14).setStroke(); box.lineWidth = 1; box.stroke()
+            whDrawGlyphCentered("\u{f1f8}", in: tr, color: NSColor.systemRed, size: 12)
         }
     }
 
@@ -2415,6 +2688,16 @@ final class ThemeGridView: NSView {
                       width: w, height: pillH)
     }
 
+    // The hover trash sits at the thumbnail's top-right corner; drawCell and
+    // mouseDown share this rect.
+    private func trashRect(_ f: NSRect) -> NSRect {
+        let thumbRect = NSRect(x: f.minX, y: f.minY + cellPaletteH + cellLabelH + cellThumbGap,
+                               width: f.width, height: f.height - cellPaletteH - cellLabelH - cellThumbGap)
+        let s: CGFloat = pillH
+        return NSRect(x: thumbRect.maxX - pillInset - s,
+                      y: thumbRect.maxY - pillInset - s, width: s, height: s)
+    }
+
     private func drawAspectFill(_ img: NSImage, in rect: NSRect) {
         let imgA = img.size.width / max(img.size.height, 1)
         let rectA = rect.width / max(rect.height, 1)
@@ -2433,8 +2716,12 @@ final class ThemeGridView: NSView {
         let p = convert(event.locationInWindow, from: nil)
         for (i, f) in cellFrames where f.contains(p) {
             let c = cells[i]
-            // a visible Edit/Customize pill takes the click; anywhere else
-            // applies the theme as before
+            // a visible Edit/Customize pill or trash takes the click; anywhere
+            // else applies the theme as before
+            if i == hoveredIndex, c.isCustom, trashRect(f).contains(p) {
+                onDelete?(c)
+                return
+            }
             if i == hoveredIndex, c.isCustom, editPillRect(f, label: pillLabel(c)).contains(p) {
                 onEdit?(c)
                 return
@@ -2514,6 +2801,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
                 self?.onApplied?()
             }
         }
+        grid.onDelete = { [weak self] cell in self?.confirmDelete(cell) }
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(visibleChanged),
             name: NSView.boundsDidChangeNotification, object: scroll.contentView)
@@ -2528,6 +2816,54 @@ final class ThemesTabView: NSView, ScrollStepTab {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil { reload() }
+    }
+
+    // Off-screen review only.
+    func debugHoverFirstCustom() {
+        if let i = grid.cells.firstIndex(where: { $0.isCustom }) { grid.debugSetHover(i) }
+    }
+
+    // Ask before removing. An edition is a record; a raw wallpaper is a file
+    // that goes to the Trash, with its editions as an option.
+    private func confirmDelete(_ cell: ThemeCell) {
+        let name = cell.title
+        if let id = cell.editionID {
+            DeleteConfirm.present(from: self,
+                                  title: "Delete \(name)?",
+                                  subtitle: "The theme is removed. Its wallpaper stays in place.",
+                                  onDelete: { _ in
+                _ = shell("\(HOME)/.local/bin/omacosy-themecore theme delete \(shellQuote(id)) 2>&1")
+                self.status = "Deleted \(name)"
+                self.reload()
+            })
+            return
+        }
+        let variations = cell.variations
+        var labels = ["Move the wallpaper file to Trash"]
+        var defaults = [true]
+        if variations > 0 {
+            labels.append("Also delete the \(variations) theme\(variations == 1 ? "" : "s") built from it")
+            defaults.append(true)
+        }
+        DeleteConfirm.present(from: self,
+                              title: "Delete \(name)?",
+                              subtitle: "The file goes to the Trash, so it can be recovered.",
+                              labels: labels, defaults: defaults,
+                              onDelete: { vals in
+            let trash = vals.first ?? true
+            let delEditions = vals.count > 1 ? vals[1] : false
+            if delEditions {
+                let target = canonicalPath(cell.wallpaper)
+                for e in allEditions() where e.sourcePath.map({ canonicalPath($0) == target }) == true {
+                    _ = shell("\(HOME)/.local/bin/omacosy-themecore theme delete \(shellQuote(e.id)) 2>&1")
+                }
+            }
+            if trash {
+                _ = shell("\(HOME)/.local/bin/omacosy-themecore wallpaper trash \(shellQuote(cell.wallpaper)) 2>&1")
+            }
+            self.status = "Deleted \(name)"
+            self.reload()
+        })
     }
 
     private var watchedPaths: [String] = []
@@ -7426,6 +7762,8 @@ final class StorageTabView: NSView {
     private let browseButton = ButtonView()
     private let addButton = ButtonView()
     private let chooseButton = ButtonView()
+    private let cacheButton = ButtonView()
+    private let cacheOpenButton = ButtonView()
     private var dir = ""
     private var status = ""
     // three buttons right-aligned as one group; every text button in the
@@ -7440,6 +7778,8 @@ final class StorageTabView: NSView {
         browseButton.needsDisplay = true
         addButton.needsDisplay = true
         chooseButton.needsDisplay = true
+        cacheButton.needsDisplay = true
+        cacheOpenButton.needsDisplay = true
         needsDisplay = true
     }
 
@@ -7459,9 +7799,23 @@ final class StorageTabView: NSView {
         chooseButton.title = "Set Folder"
         chooseButton.toolTip = "Change the Wallpaper Folder"
         chooseButton.onClick = { [weak self] in self?.chooseDirectory() }
+        cacheButton.title = "Clear Cache"
+        cacheButton.toolTip = "Delete the cached thumbnails; they rebuild as you browse"
+        cacheButton.onClick = { [weak self] in self?.clearCache() }
+        cacheOpenButton.title = "\u{f07b}"
+        cacheOpenButton.centeredByBounds = true
+        cacheOpenButton.fontSize = 12
+        cacheOpenButton.toolTip = "Open the Thumbnail Cache Folder"
+        cacheOpenButton.onClick = {
+            let d = whThumbsDir()
+            try? FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true)
+            NSWorkspace.shared.open(URL(fileURLWithPath: d))
+        }
         addSubview(browseButton)
         addSubview(addButton)
         addSubview(chooseButton)
+        addSubview(cacheButton)
+        addSubview(cacheOpenButton)
         reload()
     }
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -7484,6 +7838,9 @@ final class StorageTabView: NSView {
         chooseButton.frame = NSRect(x: bounds.width - chooseW, y: y, width: chooseW, height: 24)
         addButton.frame = NSRect(x: chooseButton.frame.minX - gap - addW, y: y, width: addW, height: 24)
         browseButton.frame = NSRect(x: addButton.frame.minX - gap - folderW, y: y, width: folderW, height: 24)
+        cacheButton.frame = NSRect(x: bounds.width - chooseW, y: y - 40, width: chooseW, height: 24)
+        cacheOpenButton.frame = NSRect(x: cacheButton.frame.minX - gap - folderW, y: y - 40,
+                                       width: folderW, height: 24)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -7501,11 +7858,55 @@ final class StorageTabView: NSView {
         drawMidLeft(truncate(dir, nerdFont("Regular", 11), pathW) + marker,
                     nerdFont("Regular", 11), palette.muted,
                     x: tw, midTop: bounds.height - mid, height: bounds.height)
+
+        // row 2: the on-disk thumbnail cache, with its size and a flush
+        let mid2 = cacheButton.frame.midY
+        drawMidLeft("Thumbnail Cache", nerdFont("Bold", 13), palette.accent,
+                    x: 0, midTop: bounds.height - mid2, height: bounds.height)
+        let tw2 = advance("Thumbnail Cache", nerdFont("Bold", 13)) + 14
+        drawMidLeft(cacheSummary(), nerdFont("Regular", 11), palette.muted,
+                    x: tw2, midTop: bounds.height - mid2, height: bounds.height)
+
         if !status.isEmpty {
             drawTopLeft(truncate(status, nerdFont("Regular", 11), bounds.width),
                         nerdFont("Regular", 11), palette.muted,
-                        x: 0, top: 44, height: bounds.height)
+                        x: 0, top: 84, height: bounds.height)
         }
+    }
+
+    // Both thumbnail shelves live under ~/.local/state/omacosy: the wallhaven
+    // browse cache and the dashboard's decoded previews. Flushing clears the
+    // pictures only; the wallpapers and bookmarks stay, and the thumbnails
+    // rebuild as the tabs are opened again.
+    private func cacheDirs() -> [String] {
+        [whThumbsDir(), HOME + "/.local/state/omacosy/dashboard/thumbs"]
+    }
+
+    private func cacheSummary() -> String {
+        let fm = FileManager.default
+        var files = 0
+        var bytes = 0
+        for d in cacheDirs() {
+            for e in (try? fm.contentsOfDirectory(atPath: d)) ?? [] {
+                files += 1
+                if let a = try? fm.attributesOfItem(atPath: d + "/" + e),
+                   let s = a[.size] as? NSNumber { bytes += s.intValue }
+            }
+        }
+        if files == 0 { return "empty" }
+        return "\(files) files · \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))"
+    }
+
+    private func clearCache() {
+        let fm = FileManager.default
+        var count = 0
+        for d in cacheDirs() {
+            for e in (try? fm.contentsOfDirectory(atPath: d)) ?? [] {
+                if (try? fm.removeItem(atPath: d + "/" + e)) != nil { count += 1 }
+            }
+        }
+        status = count == 0 ? "Cache already empty" : "Cleared \(count) cached thumbnails"
+        needsDisplay = true
     }
 
     // Images picked from anywhere — a USB key, a NAS, another folder — are
@@ -8086,6 +8487,48 @@ func whUniquePath(_ dir: String, _ name: String) -> String {
 func whConfigPath() -> String { HOME + "/.config/omacosy/wallhaven.json" }
 func whBookmarksPath() -> String { HOME + "/.config/omacosy/wallpaper-bookmarks.json" }
 func whThumbsDir() -> String { HOME + "/.local/state/omacosy/studio/wallhaven-thumbs" }
+func whDownloadsPath() -> String { HOME + "/.local/state/omacosy/studio/wallhaven-downloads.json" }
+
+// Which wallhaven rating each downloaded file carried, keyed by the file's
+// basename in the wallpaper folder. Written when a download lands, read to
+// hide NSFW downloads (and editions built from them) when Hide NSFW is on.
+// Nothing here is used to delete anything.
+struct WHDownload {
+    let id: String
+    let purity: String
+}
+
+func whDownloadManifest() -> [String: WHDownload] {
+    guard let data = FileManager.default.contents(atPath: whDownloadsPath()),
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return [:] }
+    var out: [String: WHDownload] = [:]
+    for (name, v) in obj {
+        guard let d = v as? [String: Any] else { continue }
+        out[name] = WHDownload(id: d["id"] as? String ?? "",
+                               purity: (d["purity"] as? String ?? "").lowercased())
+    }
+    return out
+}
+
+func whRecordDownload(_ basename: String, id: String, purity: String) {
+    guard !basename.isEmpty else { return }
+    var obj: [String: Any] = [:]
+    if let data = FileManager.default.contents(atPath: whDownloadsPath()),
+       let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        obj = existing
+    }
+    obj[basename] = ["id": id, "purity": purity.lowercased()]
+    guard let data = try? JSONSerialization.data(withJSONObject: obj,
+                                                 options: [.prettyPrinted, .sortedKeys]) else { return }
+    let dir = (whDownloadsPath() as NSString).deletingLastPathComponent
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    try? data.write(to: URL(fileURLWithPath: whDownloadsPath()), options: .atomic)
+}
+
+func whIsNSFWFile(_ basenameOrPath: String) -> Bool {
+    whDownloadManifest()[(basenameOrPath as NSString).lastPathComponent]?.purity == "nsfw"
+}
 
 struct WHConfig {
     var categories = "111"
@@ -8097,6 +8540,7 @@ struct WHConfig {
     var ratios = ""
     var cardSize = "small"          // small | medium | large
     var bookmarkedOnly = false
+    var hideNSFW = false
 
     static func load() -> WHConfig {
         var c = WHConfig()
@@ -8114,6 +8558,7 @@ struct WHConfig {
             c.cardSize = v
         }
         if let v = obj["bookmarkedOnly"] as? Bool { c.bookmarkedOnly = v }
+        if let v = obj["hideNSFW"] as? Bool { c.hideNSFW = v }
         return c
     }
 
@@ -8121,7 +8566,7 @@ struct WHConfig {
         let obj: [String: Any] = ["categories": categories, "purity": purity,
                                   "sorting": sorting, "order": order, "atleast": atleast,
                                   "colors": colors, "ratios": ratios, "cardSize": cardSize,
-                                  "bookmarkedOnly": bookmarkedOnly]
+                                  "bookmarkedOnly": bookmarkedOnly, "hideNSFW": hideNSFW]
         guard let data = try? JSONSerialization.data(withJSONObject: obj,
                                                      options: [.prettyPrinted, .sortedKeys])
         else { return }
@@ -8138,6 +8583,7 @@ struct WHBookmark {
     var thumbURL: String
     var resolution: String
     var fileSize: Int64
+    var purity: String
     var savedAt: Double
 }
 
@@ -8165,7 +8611,8 @@ final class WHBookmarkStore {
         }
         byID[w.id] = WHBookmark(id: w.id, imageURL: w.imageURL, pageURL: w.pageURL,
                                 thumbURL: w.smallThumbURL, resolution: w.resolution,
-                                fileSize: w.fileSize, savedAt: Date().timeIntervalSince1970)
+                                fileSize: w.fileSize, purity: w.purity,
+                                savedAt: Date().timeIntervalSince1970)
         save()
         return true
     }
@@ -8178,7 +8625,8 @@ final class WHBookmarkStore {
     func debugInsert(_ w: WHWallpaper) {
         byID[w.id] = WHBookmark(id: w.id, imageURL: w.imageURL, pageURL: w.pageURL,
                                 thumbURL: w.smallThumbURL, resolution: w.resolution,
-                                fileSize: w.fileSize, savedAt: Date().timeIntervalSince1970)
+                                fileSize: w.fileSize, purity: w.purity,
+                                savedAt: Date().timeIntervalSince1970)
     }
 
     private func load() {
@@ -8193,6 +8641,7 @@ final class WHBookmarkStore {
                                   thumbURL: o["thumbURL"] as? String ?? "",
                                   resolution: o["resolution"] as? String ?? "",
                                   fileSize: (o["fileSize"] as? NSNumber)?.int64Value ?? 0,
+                                  purity: o["purity"] as? String ?? "",
                                   savedAt: (o["savedAt"] as? NSNumber)?.doubleValue ?? 0)
         }
     }
@@ -8201,7 +8650,7 @@ final class WHBookmarkStore {
         let arr: [[String: Any]] = byID.values.map {
             ["id": $0.id, "imageURL": $0.imageURL, "pageURL": $0.pageURL,
              "thumbURL": $0.thumbURL, "resolution": $0.resolution,
-             "fileSize": $0.fileSize, "savedAt": $0.savedAt]
+             "fileSize": $0.fileSize, "purity": $0.purity, "savedAt": $0.savedAt]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: arr,
                                                      options: [.prettyPrinted, .sortedKeys])
@@ -8674,25 +9123,50 @@ final class WHDropdown: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
-// The download notification. It occupies the same slot as the bulk
-// Download button (the button's place), so a finished download reads as
-// the button turning into "Added" rather than a pill floating over the
-// cards. Green on success, red on failure.
-final class WHToast: NSView {
-    var message = "" { didSet { isHidden = message.isEmpty; needsDisplay = true } }
-    var ok = true { didSet { needsDisplay = true } }
+// The download indicator, in the bulk Download button's slot: a small round
+// badge — a progress ring while a download runs, a green check when it
+// lands, a red mark when it fails — with a short label beside it. Modern and
+// quiet, unlike a full-width bar.
+final class WHBadge: NSView {
+    enum Style { case hidden, progress(Double), success, failure }
+
+    var style: Style = .hidden {
+        didSet {
+            needsDisplay = true
+            if case .hidden = style { isHidden = true } else { isHidden = false }
+        }
+    }
+    var label = "" { didSet { needsDisplay = true } }
 
     override var isFlipped: Bool { false }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard !message.isEmpty else { return }
-        let r = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let p = NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6)
-        (ok ? NSColor.systemGreen : NSColor.systemRed).withAlphaComponent(0.95).setFill()
-        p.fill()
-        let f = nerdFont("Bold", 11)
-        drawMidCenter(truncate(message, f, bounds.width - 16), f, .white,
-                      centerX: bounds.midX, midTop: bounds.height / 2, height: bounds.height)
+        if case .hidden = style { return }
+        let d: CGFloat = 24
+        let circle = NSRect(x: 2, y: (bounds.height - d) / 2, width: d, height: d)
+        switch style {
+        case .hidden:
+            return
+        case .success, .failure:
+            let success = { if case .success = style { return true }; return false }()
+            (success ? NSColor.systemGreen : NSColor.systemRed).setFill()
+            NSBezierPath(ovalIn: circle).fill()
+            whDrawGlyphCentered(success ? "\u{f00c}" : "\u{f00d}", in: circle, color: .white, size: 12)
+        case .progress(let frac):
+            let track = NSBezierPath(ovalIn: circle)
+            NSColor.white.withAlphaComponent(0.18).setStroke(); track.lineWidth = 3; track.stroke()
+            let arc = NSBezierPath()
+            arc.appendArc(withCenter: NSPoint(x: circle.midX, y: circle.midY),
+                          radius: d / 2 - 1.5, startAngle: 90,
+                          endAngle: 90 - 360 * CGFloat(max(0.02, min(1, frac))), clockwise: true)
+            NSColor.systemGreen.setStroke(); arc.lineWidth = 3; arc.lineCapStyle = .round; arc.stroke()
+            whDrawGlyphCentered("\u{f019}", in: circle, color: palette.label, size: 10)
+        }
+        if !label.isEmpty {
+            let f = nerdFont("Regular", 11)
+            drawMidLeft(truncate(label, f, bounds.width - (circle.maxX + 10)), f, palette.label,
+                        x: circle.maxX + 8, midTop: bounds.height / 2, height: bounds.height)
+        }
     }
 
     override var acceptsFirstResponder: Bool { false }
@@ -8953,7 +9427,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     private let moreButton = ButtonView()
     private let sizeSeg = SegmentedView()
     private let bulkButton = ButtonView()
-    private let toastView = WHToast()
+    private let badge = WHBadge()
 
     private let client = WallhavenClient()
     private var config = WHConfig.load()
@@ -8976,6 +9450,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     private var totalResults = 0
     private var searchError = ""
     private var hasAPIKey = false
+    private var hideNSFW = false
     private var statusMessage = ""
     private var toastToken = 0
     private var pendingTopScroll = false
@@ -9035,7 +9510,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         grid.needsDisplay = true
     }
 
-    func debugToast() { showNotice("Added", ok: true) }
+    func debugToast() { showBadge(.success, label: "Added") }
 
     func debugShowBookmarks(_ n: Int) {
         for w in grid.cards.prefix(n) { bookmarks.debugInsert(w) }
@@ -9052,8 +9527,8 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         scroll.documentView = grid
         addSubview(scroller)
         scroller.scrollView = scroll
-        addSubview(toastView)
-        toastView.isHidden = true
+        addSubview(badge)
+        badge.style = .hidden
 
         field.isBezeled = false
         field.drawsBackground = true
@@ -9160,17 +9635,32 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else { return }
+        // re-read the shared prefs on every show, so a change made in the
+        // Options tab (Hide NSFW) is honoured without a restart
+        config = WHConfig.load()
+        hideNSFW = config.hideNSFW
         refreshKeyState()
         downloadedIDs = whDownloadedIDs(in: wallpapersDir())
         grid.downloaded = downloadedIDs
         if !didInitialSearch {
             didInitialSearch = true
             if config.bookmarkedOnly { rebuildGrid() } else { beginSearch(reset: true) }
+        } else {
+            rebuildGrid()
         }
     }
 
     private func refreshKeyState() {
         hasAPIKey = !readSecret("wallhaven").trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    // The stored purity, with NSFW forced off while Hide NSFW is on. The
+    // stored value is never overwritten, so turning the toggle off restores it.
+    private var effectivePurity: String {
+        guard hideNSFW, config.purity.count == 3 else { return config.purity }
+        var chars = Array(config.purity)
+        chars[2] = "0"
+        return String(chars)
     }
 
     private func toggleOrder() {
@@ -9185,7 +9675,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         var p = WHParams()
         p.query = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         p.categories = config.categories
-        p.purity = config.purity
+        p.purity = effectivePurity
         p.sorting = config.sorting
         p.order = config.order
         p.atleast = config.atleast
@@ -9279,14 +9769,16 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     private func rebuildGrid() {
         let cards: [WHWallpaper]
         if config.bookmarkedOnly {
-            cards = bookmarks.all().compactMap { b in
-                WHWallpaper(json: ["id": b.id, "path": b.imageURL, "url": b.pageURL,
-                                   "resolution": b.resolution,
-                                   "file_size": NSNumber(value: b.fileSize),
-                                   "thumbs": ["small": b.thumbURL]])
-            }
+            cards = bookmarks.all()
+                .filter { !(hideNSFW && $0.purity.lowercased() == "nsfw") }
+                .compactMap { b in
+                    WHWallpaper(json: ["id": b.id, "path": b.imageURL, "url": b.pageURL,
+                                       "resolution": b.resolution, "purity": b.purity,
+                                       "file_size": NSNumber(value: b.fileSize),
+                                       "thumbs": ["small": b.thumbURL]])
+                }
         } else {
-            cards = results
+            cards = results.filter { !(hideNSFW && $0.purity.lowercased() == "nsfw") }
         }
         grid.cards = cards
         grid.cardSize = config.cardSize
@@ -9332,7 +9824,9 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
 
     private func updateBulkButton() {
         let n = selected.count
-        bulkButton.isHidden = n == 0 || config.bookmarkedOnly
+        // works in the Bookmarked view too: a saved wallpaper can be
+        // downloaded from there just as from a search result
+        bulkButton.isHidden = n == 0
         bulkButton.title = n == 1 ? "Download 1" : "Download \(n)"
         needsLayout = true
     }
@@ -9351,10 +9845,11 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
             self.activeDownloads[w.id] = nil
             self.grid.downloading[w.id] = nil
             let ok: Bool
-            if case .success = res {
+            if case .success(let path) = res {
                 ok = true
                 self.downloadedIDs.insert(w.id)
                 self.grid.downloaded = self.downloadedIDs
+                whRecordDownload((path as NSString).lastPathComponent, id: w.id, purity: w.purity)
             } else {
                 ok = false
             }
@@ -9368,22 +9863,23 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
                 if self.bulkIDs.isEmpty {
                     self.finishBulk()
                 } else {
-                    // dynamic: the running added count in the button's slot
-                    self.showNotice("Added \(self.bulkDoneCount)/\(self.bulkTotal)",
-                                    ok: true, sticky: true)
+                    // dynamic: a progress ring with the running added count
+                    let frac = Double(self.bulkDoneCount) / Double(max(self.bulkTotal, 1))
+                    self.showBadge(.progress(frac),
+                                   label: "\(self.bulkDoneCount)/\(self.bulkTotal)", sticky: true)
                 }
             } else if ok {
-                self.showNotice("Added", ok: true)
+                self.showBadge(.success, label: "Added")
             } else if case .failure(let e) = res {
-                self.showNotice("Failed — \(e.localizedDescription)", ok: false)
+                self.showBadge(.failure, label: "Failed — \(e.localizedDescription)")
             }
         })
         activeDownloads[w.id] = d
     }
 
-    // Bulk download: the button slot becomes a running "Added k/N" and then
-    // a final "Added N" (or "Added N, M failed"), after which the selection
-    // clears and the button is gone.
+    // Bulk download: the button slot shows a progress ring and count, then a
+    // green check (or a red mark with the failures), after which the
+    // selection clears and the button is gone.
     private func downloadSelected() {
         let items = grid.cards.filter {
             selected.contains($0.id) && !downloadedIDs.contains($0.id) && activeDownloads[$0.id] == nil
@@ -9393,7 +9889,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         bulkDoneCount = 0
         bulkFailedCount = 0
         if bulkIDs.isEmpty { clearSelection(); return }
-        showNotice("Added 0/\(bulkTotal)", ok: true, sticky: true)
+        showBadge(.progress(0), label: "0/\(bulkTotal)", sticky: true)
         for w in items { download(w) }
     }
 
@@ -9403,9 +9899,9 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         bulkTotal = 0
         clearSelection()
         if failed == 0 {
-            showNotice("Added \(added)", ok: true)
+            showBadge(.success, label: "Added \(added)")
         } else {
-            showNotice("Added \(added), \(failed) failed", ok: false)
+            showBadge(.failure, label: "Added \(added), \(failed) failed")
         }
     }
 
@@ -9417,18 +9913,19 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         needsDisplay = true
     }
 
-    // A sticky notice stays until replaced (its message updates in place);
-    // a normal one clears itself after a moment.
-    private func showNotice(_ msg: String, ok: Bool, sticky: Bool = false) {
+    // A sticky badge stays until replaced (its ring and count update in
+    // place); a normal one clears itself after a moment.
+    private func showBadge(_ style: WHBadge.Style, label: String, sticky: Bool = false) {
         toastToken += 1
         let token = toastToken
-        toastView.ok = ok
-        toastView.message = msg
-        if !msg.isEmpty { bulkButton.isHidden = true }
+        badge.label = label
+        badge.style = style
+        bulkButton.isHidden = true
         guard !sticky else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
             guard let self, self.toastToken == token else { return }
-            self.toastView.message = ""
+            self.badge.style = .hidden
+            self.badge.label = ""
             self.updateBulkButton()
         }
     }
@@ -9535,6 +10032,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         moreButton.frame = frameFor(top: row3Top, x: W - segSize.width - g - moreW, w: moreW, h: row3H)
         updateBulkButton()
 
+        ratioButton.isHidden = !showMore
         if showMore {
             ratioButton.frame = frameFor(top: row4Top, x: W - 130, w: 130, h: row4H - 2)
         }
@@ -9544,8 +10042,8 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         scroll.frame = NSRect(x: 0, y: 16, width: max(0, W - scrollerW - 14), height: scrollH)
         scroller.frame = NSRect(x: W - scrollerW, y: 16, width: scrollerW, height: scrollH)
         scroller.refresh()
-        // the notification shares the bulk button's slot in the header
-        toastView.frame = frameFor(top: row3Top, x: 138, w: 200, h: row3H)
+        // the download indicator shares the bulk button's slot in the header
+        badge.frame = frameFor(top: row3Top, x: 138, w: 200, h: row3H)
 
         let gridW = scroll.contentSize.width
         if gridW > 0, abs(grid.frame.width - gridW) > 0.5 {
@@ -9592,9 +10090,9 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         let purRects = purityRects()
         let purTints = [NSColor.systemGreen, NSColor.systemYellow, NSColor.systemRed]
         for (i, r) in purRects.enumerated() {
-            let locked = i == 2 && !hasAPIKey
+            let locked = i == 2 && (!hasAPIKey || hideNSFW)
             chip(r, ["SFW", "Sketchy", "NSFW"][i],
-                 on: config.purity[config.purity.index(config.purity.startIndex, offsetBy: i)] == "1",
+                 on: effectivePurity[effectivePurity.index(effectivePurity.startIndex, offsetBy: i)] == "1",
                  tint: purTints[i], enabled: !locked)
         }
         let bookmarkRect = bookmarkChipRect()
@@ -9645,7 +10143,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         }
         let purRects = purityRects()
         for (i, r) in purRects.enumerated() where r.contains(p) {
-            if i == 2 && !hasAPIKey { return }
+            if i == 2 && (!hasAPIKey || hideNSFW) { return }
             toggleMask(&config.purity, i)
             config.save()
             beginSearch(reset: true)
@@ -10205,39 +10703,55 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wh-icon-debu
     exit(0)
 }
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-shot" {
-    // Off-screen render of the Wallpapers tab for layout review. Never
-    // ordered front, so it cannot steal focus from a running dashboard.
+    // Off-screen render for layout review. Never ordered front, so it cannot
+    // steal focus from a running dashboard. Add `options`, `themes`,
+    // `storage` or `keys` to pick a tab; default is the Wallpapers tab.
     app.setActivationPolicy(.accessory)
-    let root = RootView(frame: NSRect(x: 0, y: 0, width: 860, height: 720))
+    let shotH: CGFloat = CommandLine.arguments.contains("tall") ? 1200 : 720
+    let root = RootView(frame: NSRect(x: 0, y: 0, width: 860, height: shotH))
     let win = NSWindow(contentRect: root.frame, styleMask: .borderless,
                        backing: .buffered, defer: false)
     win.contentView = root
-    root.showTab(3)
-    if CommandLine.arguments.contains("more"),
-       let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
-        tab.setMoreFilters(true)
-    }
-    root.layoutSubtreeIfNeeded()
-    // wait for the first search to land, then let thumbnails settle a moment
-    let deadline = Date().addingTimeInterval(15)
-    while Date() < deadline {
-        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
-        if let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first,
-           !tab.debugGridInfo().contains("searching=true") { break }
-    }
-    let settle = Date().addingTimeInterval(1.5)
-    while Date() < settle { RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1)) }
-    if CommandLine.arguments.contains("hover"),
-       let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
-        tab.debugPreviewStates()
-    }
-    if CommandLine.arguments.contains("toast"),
-       let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
-        tab.debugToast()
-    }
-    if CommandLine.arguments.contains("bookmarks"),
-       let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
-        tab.debugShowBookmarks(2)
+    let args = CommandLine.arguments
+    var tabIndex = 3
+    if args.contains("options") { tabIndex = 0 }
+    else if args.contains("themes") { tabIndex = 2 }
+    else if args.contains("storage") { tabIndex = 4 }
+    else if args.contains("keys") { tabIndex = 5 }
+    root.showTab(tabIndex)
+    if tabIndex == 3 {
+        if args.contains("more"),
+           let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
+            tab.setMoreFilters(true)
+        }
+        root.layoutSubtreeIfNeeded()
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+            if let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first,
+               !tab.debugGridInfo().contains("searching=true") { break }
+        }
+        let settle = Date().addingTimeInterval(1.5)
+        while Date() < settle { RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1)) }
+        if args.contains("hover"),
+           let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
+            tab.debugPreviewStates()
+        }
+        if args.contains("toast"),
+           let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
+            tab.debugToast()
+        }
+        if args.contains("bookmarks"),
+           let tab = root.subviews.compactMap({ $0 as? WallpapersTabView }).first {
+            tab.debugShowBookmarks(2)
+        }
+    } else {
+        let settle = Date().addingTimeInterval(1.5)
+        while Date() < settle { RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1)) }
+        if args.contains("hoverTheme"),
+           let tab = root.subviews.compactMap({ $0 as? ThemesTabView }).first {
+            tab.debugHoverFirstCustom()
+        }
     }
     root.layoutSubtreeIfNeeded()
     guard let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { exit(1) }
