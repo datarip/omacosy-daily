@@ -786,7 +786,7 @@ file is removed and each app shows its own colors again.
 | `ls`, `eza` | the directory color, in the accent | at once | none |
 | yazi | directories and folder icons in the accent, markers, borders | when it opens | none |
 | btop | meters from green to red, highlights in the accent, the terminal's own background | at once | none |
-| Neovim | a base16 colorscheme from the palette, the terminal's own background | at once | `omacosy-term-auto-theme on` links the plugin |
+| Neovim | Aether's colourscheme from the palette, transparent, the accent matching the bar | at once | `omacosy-term-auto-theme on` links the plugin |
 | bat, delta | code in the 16 colors | at once | none |
 | delta | the added and removed line strips, in the palette's green and red | at once | `[include] path = ~/.config/omacosy/delta.gitconfig` in `~/.gitconfig` |
 | fzf, lazygit, fastfetch | accent, borders, selection | the next time they run | none |

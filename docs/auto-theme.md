@@ -301,45 +301,33 @@ kickstart) loads plugins from. `off` removes the link. A file of your own with
 that name is never replaced or removed. Without that folder nothing is linked,
 and the palette file below is still there to use by hand.
 
+**The plugin.** `config/nvim/omacosy-theme.lua` is a lazy.nvim spec for
+Aether's colourscheme, [`omacom/aether.nvim`](https://github.com/omacom/aether.nvim)
+(branch `v3`), which lazy.nvim installs on first load.
+
 **The palette.** On a custom theme omacosy writes
-`~/.config/omacosy/nvim/palette.lua`. It returns one table: the theme name,
-`dark`, the roles (`bg`, `fg`, `accent`, `alt`, `ok`, `warn`, `err`, `info`,
-`peach`, `muted`), the 16 colours as `ansi`, and a `base16` table. Any config
-can read it with `dofile()`.
+`~/.config/omacosy/nvim/palette.lua`: a `colors` table under Aether's role
+names (`background`, `foreground`, `muted`, `lighter_bg`, `dark_bg`,
+`darker_bg`, `dark_fg`, `light_fg`, `bright_fg`, `red`, `yellow`, `orange`,
+`green`, `cyan`, `blue`, `purple`, `brown`, the six `bright_*`, `accent`,
+`cursor`, `selection`, `selection_foreground`, `selection_background`). Any
+config can read it with `dofile()`.
 
-**The colourscheme.** The plugin gives `base16` to `mini.base16`, which lazy.nvim
-installs the first time. Functions wear the accent; strings, keywords and
-constants keep the six fixed hues of section 1, so red stays red in the editor
-too.
+**The colourscheme.** The plugin hands that table to `aether.setup`; Aether
+paints every group from it. `accent` is omacosy's own orange (the palette's red
+lightened 15%), so Neovim's accent matches the bar and the focus ring; Aether's
+own blue accent is not used. `transparent = true`, with transparent sidebars and
+floats, keeps the editor's background the terminal's, so Ghostty's opacity shows
+through. The LazyVim dashboard logo (the `SnacksDashboardHeader` group), which
+Aether links to `Title`, is pointed at the accent too.
 
-| base16 | from |
-| --- | --- |
-| base00 | background |
-| base01 | background mixed 8% toward the text |
-| base02 | selection background |
-| base03 | `MUTED` (comments) |
-| base04 | `MUTED` mixed halfway to the text |
-| base05 | foreground |
-| base06, base07 | the brightest of the 16 |
-| base08, base0A, base0B, base0C, base0E | red, yellow, green, cyan, magenta |
-| base09 | `PEACH` |
-| base0D | `ACCENT` |
-| base0F | `ALT` |
+**Following a switch.** The plugin watches `~/.config/omacosy/nvim/` — the
+folder, not the file, because omacosy replaces the file with a rename and a
+watch on a file stops after the first rename — and re-runs `aether.setup` on
+every change, so an open Neovim follows a theme switch. On a stock theme the
+file is deleted and the colourscheme your config set at startup comes back. It
+applies at `VimEnter`, after your config, so that scheme is the one remembered.
 
-`terminal_color_0` to `terminal_color_15` are set too, so a `:terminal` matches
-the one outside.
-
-`Normal`, `NormalNC`, `SignColumn`, `EndOfBuffer`, `LineNr` and `FoldColumn`
-get no background, so the editor shows the terminal's own background and its
-transparency. Popups, the status line and selections keep their colour, to
-stay readable.
-
-**Following a switch.** The plugin watches `~/.config/omacosy/nvim/`, the
-folder and not the file, because omacosy replaces the file with a rename and
-a watch on a file stops after the first rename. On a stock theme the file is
-deleted, and the plugin puts back the colourscheme your config set at startup.
-It applies its own at `VimEnter`, after your config, so that scheme is the one
-it remembers.
 
 **One plugin only.** Some terminal-theme tools ship a Neovim plugin that also
 sets the colourscheme from a palette. Two such plugins fight over it, so keep
