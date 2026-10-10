@@ -2871,14 +2871,16 @@ final class PaletteModel {
 
     // --- seeding ------------------------------------------------------------
 
-    func seedDraft(image: String, colors: [String], accent: String?, resolved: String) {
+    func seedDraft(image: String, colors: [String], resolved: String) {
         imagePath = image
         method = "magic"
         sourceIsPreset = false
         mode = "auto"
         resolvedMode = resolved == "light" ? "light" : "dark"
         baseColors = colors
-        extendedHex = defaultExtended(colors, accent: accent)
+        // Aether's setPalette at extraction: the UI colours derive from the
+        // new palette (accent = colour 4), they are not the wallpaper's own
+        extendedHex = defaultExtended(colors, accent: nil)
         adjustments = EditorAdjustments()
         curve = []
         locked.removeAll()
@@ -3086,6 +3088,7 @@ final class PaletteModel {
         // Aether's setPalette
         curve = []
         adjustments = EditorAdjustments()
+        resetExtended(next)
         sourceName = name
         sourceIsPreset = true
         edited()
@@ -3126,6 +3129,7 @@ final class PaletteModel {
                 self.baseColors = next
                 self.curve = []
                 self.adjustments = EditorAdjustments()
+                self.resetExtended(next)
                 self.sourceName = label
                 self.sourceIsPreset = false
                 self.edited()
@@ -3285,6 +3289,14 @@ final class PaletteModel {
                 "selection_foreground": c[0], "selection_background": c[7]]
     }
 
+    // Aether's setPalette: a whole-palette swap re-derives the four UI
+    // extended colours from the new palette, so the desktop accent follows
+    // the Method you pick instead of staying at the seed's wallpaper colour.
+    private func resetExtended(_ colors: [String]) {
+        guard colors.count == 16 else { return }
+        extendedHex = defaultExtended(colors, accent: nil)
+    }
+
     private func parseCurve(_ raw: Any?) -> [[Double]] {
         guard let list = raw as? [Any] else { return [] }
         return list.compactMap { pair in
@@ -3348,6 +3360,7 @@ final class PaletteModel {
                 // reset, like Aether's setPalette
                 self.curve = []
                 self.adjustments = EditorAdjustments()
+                self.resetExtended(next)
                 self.update()
                 self.refreshRender()
             }
@@ -6101,7 +6114,6 @@ final class ThemeEditor {
                         + "omacosy-editor-seed-\(ProcessInfo.processInfo.processIdentifier).env"
                     let (tc, _) = shell("\(HOME)/.local/bin/omacosy-term-palette \(shellQuote(dir)) \(shellQuote(envFile)) >/dev/null 2>&1")
                     var byIndex: [Int: String] = [:]
-                    var accent: String?
                     var resolved = "dark"
                     if tc == 0, let text = try? String(contentsOfFile: envFile, encoding: .utf8) {
                         for line in text.split(separator: "\n") {
@@ -6110,8 +6122,6 @@ final class ThemeEditor {
                             let value = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
                             if parts[0].hasPrefix("OMACOSY_P"), let i = Int(parts[0].dropFirst(9)) {
                                 byIndex[i] = value
-                            } else if parts[0] == "OMACOSY_ACCENT" {
-                                accent = value
                             } else if parts[0] == "OMACOSY_IS_DARK" {
                                 resolved = value == "1" ? "dark" : "light"
                             }
@@ -6122,7 +6132,7 @@ final class ThemeEditor {
                     if colors.count == 16 {
                         DispatchQueue.main.async {
                             self.model.seedDraft(image: wallpaper, colors: colors,
-                                                 accent: accent, resolved: resolved)
+                                                 resolved: resolved)
                         }
                         return
                     }
@@ -6153,13 +6163,12 @@ final class ThemeEditor {
                 group.wait()
                 lock.lock()
                 let finalColors = colors
-                let accent = roles["accent"] as? String
                 let resolved = (roles["ladder"] as? String) == "light" ? "light" : "dark"
                 lock.unlock()
                 DispatchQueue.main.async {
                     guard finalColors.count == 16 else { return }
                     self.model.seedDraft(image: wallpaper, colors: finalColors,
-                                         accent: accent, resolved: resolved)
+                                         resolved: resolved)
                 }
             }
         }
