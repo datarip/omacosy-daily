@@ -5399,22 +5399,130 @@ final class PaletteBuilderDoc: NSView {
     }
 }
 
-// The centre column: the palette cards, the extended four and the inline
-// colour editor. The wallpaper and preview panes arrive in Phase 6 above
-// this document.
+// --- preview pane -----------------------------------------------------------
+
+// The centre column's live desktop: the wallpaper being edited, drawn
+// aspect-filled exactly as the real wallpaper is. It decodes straight to the
+// pane's device-pixel size (the approach of helper/overlay.swift:129-192;
+// never the full source, which costs ~80 MB per 4K picture), on a 16:10
+// screen shape so what is shown IS the desktop and the menu-bar band can be
+// cropped from it. Everything it draws comes from the PaletteModel; it never
+// reads ~/.config/omarchy/current/theme, so an unsaved draft cannot be fooled
+// by the live theme.
+final class PreviewPaneView: NSView {
+    weak var model: PaletteModel?
+
+    // 1440x900: the frame derive.swift crops the menu-bar band from.
+    static let screenAspect: CGFloat = 1440.0 / 900.0
+    static let barFraction: CGFloat = 34.0 / 900.0
+
+    private var cachePath = ""
+    private var cacheSide = 0
+    private var cacheImage: CGImage?
+    private var decoding = false
+    private let decodeQueue = DispatchQueue(label: "omacosy.preview.decode", qos: .userInitiated)
+
+    // the screen-shaped rect the wallpaper fills, centred in the pane so the
+    // picture never stretches to the pane's own shape
+    private func screenRect(in rect: NSRect) -> NSRect {
+        var w = rect.width, h = w / Self.screenAspect
+        if h > rect.height { h = rect.height; w = h * Self.screenAspect }
+        return NSRect(x: rect.minX + (rect.width - w) / 2,
+                      y: rect.minY + (rect.height - h) / 2,
+                      width: w, height: h)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // A dark frame fills the whole column (Aether's preview panel) and the
+        // wallpaper is centred inside it, so the picture never floats on the
+        // card background and the frame edges line up with the column rules.
+        NSColor.black.setFill()
+        NSBezierPath(rect: bounds).fill()
+
+        let path = model?.imagePath ?? ""
+        let screen = screenRect(in: bounds.insetBy(dx: 14, dy: 12)).integral
+        if screen.width > 1, screen.height > 1, !path.isEmpty {
+            ensureImage(path: path, screen: screen)
+            if cachePath == path, let cg = cacheImage {
+                NSGraphicsContext.saveGraphicsState()
+                NSBezierPath(rect: screen).addClip()
+                NSGraphicsContext.current?.imageInterpolation = .high
+                let iw = CGFloat(cg.width), ih = CGFloat(cg.height)
+                let s = max(screen.width / iw, screen.height / ih)
+                let dw = iw * s, dh = ih * s
+                NSImage(cgImage: cg, size: NSSize(width: iw, height: ih))
+                    .draw(in: NSRect(x: screen.midX - dw / 2, y: screen.midY - dh / 2,
+                                     width: dw, height: dh))
+                NSGraphicsContext.restoreGraphicsState()
+            } else {
+                drawMidCenter("Loading preview…", nerdFont("Regular", 11), palette.muted,
+                              centerX: screen.midX, midTop: bounds.height - screen.midY,
+                              height: bounds.height)
+            }
+        }
+        // the frame line, drawn on every edge so the panel reads as a frame
+        palette.muted.withAlphaComponent(0.3).setStroke()
+        let border = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
+        border.lineWidth = 1
+        border.stroke()
+    }
+
+    // Decode only when the picture or the needed pixel size changes; a size
+    // change reuses the same path and re-decodes to the new cap.
+    private func ensureImage(path: String, screen: NSRect) {
+        let scale = window?.backingScaleFactor ?? 2
+        let side = Int((max(screen.width, screen.height) * scale).rounded())
+        if path == cachePath, side == cacheSide, cacheImage != nil { return }
+        if path != cachePath || side != cacheSide {
+            cachePath = path; cacheSide = side
+        }
+        guard !decoding else { return }
+        decoding = true
+        decodeQueue.async { [weak self] in
+            let img = PreviewPaneView.decode(path: path, maxSide: side)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.decoding = false
+                if self.cachePath == path, self.cacheSide == side { self.cacheImage = img }
+                self.needsDisplay = true
+            }
+        }
+    }
+
+    private static func decode(path: String, maxSide: Int) -> CGImage? {
+        guard let src = CGImageSourceCreateWithURL(
+            URL(fileURLWithPath: path) as CFURL,
+            [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(1, maxSide),
+            kCGImageSourceShouldCache: false,
+            kCGImageSourceShouldCacheImmediately: false,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
+    }
+}
+
+// The centre column: the pinned preview on top, then the palette cards, the
+// semantic colours and (Phase 6) the template overrides, which scroll.
 final class PaletteCanvasView: NSView {
     var model: PaletteModel? { didSet { wire(); sync() } }
 
+    private let preview = PreviewPaneView()
+    private var previewH: CGFloat = 0
     private let scroll = NSScrollView()
     private let scroller = CustomScroller()
     private let doc = PaletteCanvasDoc()
     private let scrollerW: CGFloat = 8
+    private let previewGap: CGFloat = 10
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         scroll.hasVerticalScroller = false
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
+        addSubview(preview)
         addSubview(scroll)
         scroll.documentView = doc
         addSubview(scroller)
@@ -5429,6 +5537,7 @@ final class PaletteCanvasView: NSView {
     @objc private func scrolled() { scroller.refresh() }
 
     private func wire() {
+        preview.model = model
         doc.colorCards.onEdit = { [weak self] target in self?.model?.selectForEdit(target) }
         doc.colorCards.onToggleLock = { [weak self] i in self?.model?.toggleLock(i) }
         doc.colorCards.onToggleSelect = { [weak self] i in self?.model?.toggleSelect(i) }
@@ -5487,11 +5596,13 @@ final class PaletteCanvasView: NSView {
         doc.pinnedCount = model.pinnedShadeCount()
         doc.onResetPins = { [weak self] in self?.model?.clearShadePins() }
         doc.needsDisplay = true
+        preview.needsDisplay = true
         needsDisplay = true
     }
 
     func refreshColors() {
         needsDisplay = true
+        preview.needsDisplay = true
         markTree(doc)
     }
 
@@ -5502,8 +5613,16 @@ final class PaletteCanvasView: NSView {
 
     override func layout() {
         super.layout()
-        scroll.frame = NSRect(x: 0, y: 0, width: max(0, bounds.width - scrollerW - 14), height: bounds.height)
-        scroller.frame = NSRect(x: bounds.width - scrollerW, y: 0, width: scrollerW, height: bounds.height)
+        // The preview is pinned: a palette edit is judged against the picture,
+        // so it must stay visible while the palette below scrolls. Capped so
+        // the palette always keeps a workable share of the column.
+        let natural = bounds.width / PreviewPaneView.screenAspect
+        previewH = max(120, min(natural, 360, bounds.height * 0.5))
+        preview.frame = NSRect(x: 0, y: max(0, bounds.height - previewH),
+                               width: bounds.width, height: previewH)
+        let scrollH = max(0, bounds.height - previewH - previewGap)
+        scroll.frame = NSRect(x: 0, y: 0, width: max(0, bounds.width - scrollerW - 14), height: scrollH)
+        scroller.frame = NSRect(x: bounds.width - scrollerW, y: 0, width: scrollerW, height: scrollH)
         scroller.refresh()
         let w = scroll.contentSize.width
         let clipH = scroll.contentSize.height
