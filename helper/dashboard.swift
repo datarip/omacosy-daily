@@ -171,6 +171,26 @@ func writeGlobalToolOpacity(_ value: Int?) {
     _ = setConfKey(TERM_AUTO_CONF, "tool_opacity", value.map(String.init) ?? "")
 }
 
+// Ghostty's own background-opacity, as a percent, from whichever of its config
+// files names it. It is the value in use when the theme sets nothing, so the
+// editor's sliders open showing it rather than an empty track.
+func readTerminalOpacity() -> Int? {
+    let paths = [HOME + "/Library/Application Support/com.mitchellh.ghostty/config",
+                 HOME + "/.config/ghostty/config"]
+    for path in paths {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+        for line in text.split(separator: "\n") {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            guard !t.hasPrefix("#"), let eq = t.firstIndex(of: "=") else { continue }
+            if t[..<eq].trimmingCharacters(in: .whitespaces) == "background-opacity",
+               let v = Double(t[t.index(after: eq)...].trimmingCharacters(in: .whitespaces)) {
+                return Int((max(0, min(1, v)) * 100).rounded())
+            }
+        }
+    }
+    return nil
+}
+
 func readSecret(_ key: String) -> String {
     guard let text = try? String(contentsOfFile: SECRETS, encoding: .utf8) else { return "" }
     for raw in text.split(separator: "\n") {
@@ -4711,8 +4731,9 @@ final class TemplateOverrideSectionView: NSView {
     var roles: [Role] = [] { didSet { needsDisplay = true } }
     var canReset = false { didSet { needsDisplay = true } }
     var editTarget: PaletteModel.EditTarget? { didSet { needsDisplay = true } }
-    var toolOpacity: Int? { didSet { needsDisplay = true; opacitySlider.value = toolOpacity ?? globalOpacity } }
-    var globalOpacity: Int? { didSet { needsDisplay = true; globalSlider.value = globalOpacity } }
+    var toolOpacity: Int? { didSet { needsDisplay = true; refreshSliders() } }
+    var globalOpacity: Int? { didSet { needsDisplay = true; refreshSliders() } }
+    var terminalOpacity: Int? { didSet { needsDisplay = true; refreshSliders() } }
     var onSelectApp: ((Int) -> Void)?
     var onEdit: ((String, String) -> Void)?
     var onReset: (() -> Void)?
@@ -4737,6 +4758,13 @@ final class TemplateOverrideSectionView: NSView {
         addSubview(globalSlider)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    // The sliders open showing the opacity actually in use, so they are never
+    // an empty track: edition -> global -> the terminal's own -> opaque.
+    private func refreshSliders() {
+        opacitySlider.value = toolOpacity ?? globalOpacity ?? terminalOpacity ?? 100
+        globalSlider.value = globalOpacity ?? terminalOpacity ?? 100
+    }
 
     static func height(roleCount: Int) -> CGFloat {
         let rows = max(1, (roleCount + 3) / 4)
@@ -4808,8 +4836,8 @@ final class TemplateOverrideSectionView: NSView {
         let sfont = nerdFont("Regular", 11)
         drawMidLeft("Opacity", nerdFont("Regular", 10), palette.muted,
                     x: 0, midTop: editRowTop + 14, height: bounds.height)
-        let effective = toolOpacity ?? globalOpacity
-        drawMidLeft(effective.map { "\($0)%" } ?? "—", sfont, palette.label,
+        let effective = toolOpacity ?? globalOpacity ?? terminalOpacity ?? 100
+        drawMidLeft("\(effective)%", sfont, palette.label,
                     x: opacitySlider.frame.maxX + 8, midTop: editRowTop + 14, height: bounds.height)
         let ir = inheritRect
         let ipath = NSBezierPath(roundedRect: ir, xRadius: 5, yRadius: 5)
@@ -4828,7 +4856,7 @@ final class TemplateOverrideSectionView: NSView {
                       centerX: ir.midX, midTop: bounds.height - ir.midY, height: bounds.height)
         drawMidLeft("Default", nerdFont("Regular", 10), palette.muted,
                     x: 0, midTop: globalRowTop + 14, height: bounds.height)
-        drawMidLeft(globalOpacity.map { "\($0)%" } ?? "—", sfont, palette.muted,
+        drawMidLeft("\(globalOpacity ?? terminalOpacity ?? 100)%", sfont, palette.muted,
                     x: globalSlider.frame.maxX + 8, midTop: globalRowTop + 14, height: bounds.height)
         for (i, rect) in appRects().enumerated() {
             let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
@@ -5853,6 +5881,7 @@ final class PreviewPaneView: NSView {
     // nil anywhere means opaque.
     var toolOpacity: Int?
     var globalOpacity: Int?
+    var terminalOpacity: Int?
 
     private let toggleMenuBar = PreviewIconButton()
     private let toggleTerminal = PreviewIconButton()
@@ -6172,7 +6201,7 @@ final class PreviewPaneView: NSView {
         // the window: Ghostty's 0.85 background, so the wallpaper shows through
         // exactly as it does on the desktop
         let body = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
-        termBG.withAlphaComponent(CGFloat(toolOpacity ?? globalOpacity ?? 100) / 100).setFill()
+        termBG.withAlphaComponent(CGFloat(toolOpacity ?? globalOpacity ?? terminalOpacity ?? 100) / 100).setFill()
         body.fill()
         cols[8].withAlphaComponent(0.6).setStroke()
         body.lineWidth = 1
@@ -6492,8 +6521,10 @@ final class PaletteCanvasView: NSView {
         doc.template.editTarget = model.editTarget
         doc.template.toolOpacity = model.toolOpacity
         doc.template.globalOpacity = readGlobalToolOpacity()
+        doc.template.terminalOpacity = readTerminalOpacity()
         preview.toolOpacity = model.toolOpacity
         preview.globalOpacity = readGlobalToolOpacity()
+        preview.terminalOpacity = readTerminalOpacity()
 
         doc.needsDisplay = true
         preview.needsDisplay = true
