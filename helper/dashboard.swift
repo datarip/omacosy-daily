@@ -12717,8 +12717,20 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
 
     @objc private func searchNowAction() { beginSearch(reset: true) }
 
+    // Clear the field's selection and give the first responder back to the
+    // dashboard, so the typed keyword is not left highlighted.
+    private func endSearchEditing() {
+        if let editor = field.currentEditor() {
+            editor.selectedRange = NSRange(location: (field.stringValue as NSString).length, length: 0)
+        }
+        window?.makeFirstResponder(window?.contentView)
+    }
+
     private func beginSearch(reset: Bool) {
         guard !config.bookmarkedOnly else { return }
+        // Drop the field's selection highlight and hand focus back to the
+        // gallery: a keyword left selected reads as unreadable.
+        if reset { DispatchQueue.main.async { [weak self] in self?.endSearchEditing() } }
         refreshKeyState()
         client.apiKey = readSecret("wallhaven")
         searchError = ""
