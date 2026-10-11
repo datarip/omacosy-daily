@@ -14,6 +14,7 @@
 //   omacosy-themecore theme list [--json]
 //   omacosy-themecore theme show <id>
 //   omacosy-themecore theme save [<file>|-] [--id ID] [--name NAME] [--replace]
+//                                [--media-from FILE] [--edited]
 //   omacosy-themecore theme delete <id>
 //   omacosy-themecore theme rename <id> <new name>
 //   omacosy-themecore theme duplicate <id> [--id ID] [--name NAME]
@@ -4308,6 +4309,10 @@ struct ThemeWallpaper {
     var media: String?
     var blur = false
     var edited = false
+    // The picture-editor recipe (filters, curve, crop), stored so reopening
+    // an edition restores the sliders. A schema-preserving addition: opaque
+    // here, round-tripped byte-stable, and validated only as an object.
+    var filters: [String: Any]?
 }
 
 struct Palette16 {
@@ -4574,6 +4579,10 @@ extension Theme {
                 guard let b = JSONField.bool(v) else { try bad("\"wallpaper.edited\" must be true or false") }
                 wallpaper.edited = b
             }
+            if let v = wallObj["filters"], !(v is NSNull) {
+                guard let d = JSONField.dict(v) else { try bad("\"wallpaper.filters\" must be an object") }
+                wallpaper.filters = d
+            }
         }
 
         var appOverrides: [String: [String: String]] = [:]
@@ -4718,6 +4727,8 @@ extension Theme {
         wall["media"] = jsonOrNull(wallpaper.media)
         wall["blur"] = wallpaper.blur
         wall["edited"] = wallpaper.edited
+        if let filters = wallpaper.filters { wall["filters"] = filters }
+        else { wall.removeValue(forKey: "filters") }
         if let wallhaven = wallpaper.wallhaven { wall["wallhaven"] = wallhaven }
         out["wallpaper"] = wall
 
@@ -5677,7 +5688,7 @@ func usage() -> Never {
            omacosy-themecore modes [--json]
            omacosy-themecore theme list [--json]
            omacosy-themecore theme show <id> [--json]
-           omacosy-themecore theme save [<file>|-] [--id ID] [--name NAME] [--replace] [--json]
+           omacosy-themecore theme save [<file>|-] [--id ID] [--name NAME] [--replace] [--json] [--media-from FILE] [--edited]
            omacosy-themecore theme delete <id> [--json]
            omacosy-themecore theme rename <id> <new name> [--json]
            omacosy-themecore theme duplicate <id> [--id ID] [--name NAME] [--json]
@@ -6190,6 +6201,8 @@ case "theme":
             let idFlag = takeFlag("--id")
             let nameFlag = takeFlag("--name")
             let replace = takeBool("--replace")
+            let mediaFromFlag = takeFlag("--media-from")
+            let editedFlag = takeBool("--edited")
             let input = args.first
             if input != nil { args.removeFirst() }
             noExtraArguments()
@@ -6218,10 +6231,21 @@ case "theme":
                 top["id"] = slugify(name)
             }
             var theme = try Theme.parse(top, label: label)
-            // First save captures the source into the edition's own image
-            // store (content-addressed, shared between editions). A source
-            // that no longer exists is left alone; an unreadable one fails.
-            if theme.wallpaper.media == nil, let path = theme.wallpaper.path, !path.isEmpty {
+            // An explicit --media-from captures a generated render (the picture
+            // editor's output) as the edition's own image, content-addressed
+            // like a first-save source capture. --edited records that the
+            // media is an edit of the provenance source.
+            if let mediaFromFlag {
+                let resolved = Wallpapers.resolved(mediaFromFlag)
+                guard FileManager.default.fileExists(atPath: resolved) else {
+                    throw ThemeError(message: "cannot read \(resolved)")
+                }
+                theme.wallpaper.media = try library.captureMedia(from: resolved)
+                theme.wallpaper.edited = editedFlag
+            } else if theme.wallpaper.media == nil, let path = theme.wallpaper.path, !path.isEmpty {
+                // First save captures the source into the edition's own image
+                // store (content-addressed, shared between editions). A source
+                // that no longer exists is left alone; an unreadable one fails.
                 let resolved = Wallpapers.resolved(path)
                 if FileManager.default.fileExists(atPath: resolved) {
                     theme.wallpaper.media = try library.captureMedia(from: resolved)
