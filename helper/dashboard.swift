@@ -3125,7 +3125,6 @@ final class EditorPanelDoc: NSView {
         addSubview(histogram)
         applyButton.title = "Apply to Palette"
         applyButton.toolTip = "Recompute the palette from this edit"
-        applyButton.secondary = true
         applyButton.onClick = { [weak self] in self?.onApply?() }
         addSubview(applyButton)
         for group in EditorFilterFields.groups {
@@ -3143,6 +3142,7 @@ final class EditorPanelDoc: NSView {
 
     func contentHeight() -> CGFloat {
         var h: CGFloat = 10
+        h += 24 + 12                                      // Apply to Palette
         h += AdjustmentSliderView.rowHeight + 10          // Strength
         h += 16 + 22 + 12                                 // AUTO ENHANCE + buttons
         h += HistogramView.viewHeight + 12
@@ -3152,7 +3152,6 @@ final class EditorPanelDoc: NSView {
             h += CGFloat(group.fields.count) * AdjustmentSliderView.rowHeight
             h += 10
         }
-        h += 22 + 12                                      // Apply to Palette
         return h
     }
 
@@ -3172,6 +3171,8 @@ final class EditorPanelDoc: NSView {
     override func layout() {
         super.layout()
         var top: CGFloat = 10
+        applyButton.frame = rect(top: top, h: 24, x: insetL, w: contentW)
+        top += 24 + 12
         strengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
                                     x: insetL, w: contentW)
         top += AdjustmentSliderView.rowHeight + 10
@@ -3203,7 +3204,6 @@ final class EditorPanelDoc: NSView {
             }
             top += 10
         }
-        applyButton.frame = rect(top: top, h: 22, x: insetL, w: min(180, contentW))
     }
 
     override func draw(_ dirtyRect: NSRect) {
