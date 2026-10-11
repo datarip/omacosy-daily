@@ -3248,11 +3248,17 @@ struct BarRoles {
     var ring: String
 }
 
-// Maps any 16-colour palette onto the values the bar reads, holding the
-// floors of docs/derived-themes.md 4.4 (pill vs bar >= 0.085, label vs pill
-// >= 0.50, muted >= 0.18 from both, accent >= 0.28/0.20 from bar and pill,
-// ring >= 0.10 from the bar) and then checking the text at WCAG 4.5:1 and
-// the accent at 3:1. The blend loops are derive.swift's.
+// Maps any 16-colour palette onto the values the bar reads. The Magic engine
+// runs first on a synthetic "picture" built from the palette's accent, so the
+// UI surface and pill carry the palette's own colour the way a Magic theme
+// carries the wallpaper's — a monochromatic green palette gets a dark green
+// dashboard, not the near-neutral #080004 of its slot 0. If that fails the
+// floors/contrast contract, the palette's own background (colors[0]) is
+// tried, and finally the old surface search. In every case the text roles
+// hold the floors of docs/derived-themes.md 4.4 (pill vs bar >= 0.085, label
+// vs pill >= 0.50, muted >= 0.18 from both, accent >= 0.28/0.20 from bar and
+// pill, ring >= 0.10 from the bar) and the WCAG checks (text 4.5:1, accent
+// 3:1). The blend loops are derive.swift's.
 func barRoles(_ colors: [String], accent accentHex: String) -> BarRoles {
     if colors.count != 16 { fail("bar roles need exactly 16 colours") }
     let p0 = DerivePort.RGB(hex: colors[0])
@@ -3260,42 +3266,9 @@ func barRoles(_ colors: [String], accent accentHex: String) -> BarRoles {
     let p8 = DerivePort.RGB(hex: colors[8])
     let accentSeed = DerivePort.RGB(hex: accentHex)
     let light = p0.lum > 0.45
-
-    // Surface search (derive.swift): the bar tone in the pill's hue where
-    // the label reads at 7:1, muted at 4.5:1 and the accent at 3:1.
-    let pillLch = DerivePort.toOKLCH(p8)
-    let prefer = light ? DerivePort.toOKLCH(p0).L : max(0.12, pillLch.L - 0.12)
-    let chroma = min(pillLch.C, 0.06)
-    func at(_ l: Double) -> DerivePort.RGB? { DerivePort.oklchFit(l, chroma, pillLch.h) }
-    func score(_ x: DerivePort.RGB) -> Double {
-        min(DerivePort.contrast(p7, x) / 7.0,
-            DerivePort.contrast(p8, x) / 4.5,
-            DerivePort.contrast(accentSeed, x) / 3.0)
-    }
-    var bar = p0
-    var pick: DerivePort.RGB? = nil
-    var pickDist = 9.0
-    var best: DerivePort.RGB? = nil
-    var bestScore = 0.0
-    var l = 0.04
-    while l <= 0.98 {
-        if let x = at(l) {
-            let sc = score(x)
-            if sc >= 1 && abs(l - prefer) < pickDist { pick = x; pickDist = abs(l - prefer) }
-            if sc > bestScore { best = x; bestScore = sc }
-        }
-        l += 0.01
-    }
-    bar = pick ?? best ?? p0
-
-    // The pill and the label are built as a pair on the ladder's side: on a
-    // light bar the pill sits below it with a dark label under that; on a
-    // dark bar above it with a light label over it. The luminance targets
-    // leave the 0.085 and 0.50 floors room by construction, and the WCAG
-    // pass below only has to fine-tune.
-    let barL = DerivePort.q8(bar).lum
     let up = !light
-    func separateDir(_ c: DerivePort.RGB, from ref: DerivePort.RGB, need: Double, up: Bool) -> DerivePort.RGB {
+
+    func separateDir(_ c: DerivePort.RGB, from ref: DerivePort.RGB, need: Double) -> DerivePort.RGB {
         let lr = DerivePort.q8(ref).lum
         if abs(DerivePort.q8(c).lum - lr) >= need { return c }
         let target = up ? DerivePort.white : DerivePort.black
@@ -3306,46 +3279,136 @@ func barRoles(_ colors: [String], accent accentHex: String) -> BarRoles {
         return target
     }
 
-    let pillL = light ? min(0.58, barL - 0.20) : min(0.20, max(barL + 0.10, 0.10))
-    var pill = DerivePort.towardLum(p8, pillL)
-    pill = separateDir(pill, from: bar, need: 0.085, up: up)
-    let labelL = light ? max(0.02, DerivePort.q8(pill).lum - 0.55)
-                       : min(0.98, DerivePort.q8(pill).lum + 0.55)
-    var label = DerivePort.towardLum(p7, labelL)
-    label = separateDir(label, from: pill, need: 0.50, up: up)
-    var muted = DerivePort.towardLum(p8, (DerivePort.q8(pill).lum + DerivePort.q8(label).lum) / 2)
-    var accent = DerivePort.clearOf(accentSeed, bar: bar, pill: pill, preferUp: !light)
+    // The pill and the label are built as a pair on the ladder's side: on a
+    // light bar the pill sits below it with a dark label under that; on a
+    // dark bar above it with a light label over it. The luminance targets
+    // leave the 0.085 and 0.50 floors room by construction, and the WCAG
+    // passes below only have to fine-tune.
+    func assemble(bar: DerivePort.RGB, pillSeed: DerivePort.RGB) -> BarRoles {
+        let barL = DerivePort.q8(bar).lum
+        let pillL = light ? min(0.58, barL - 0.20) : min(0.20, max(barL + 0.10, 0.10))
+        var pill = DerivePort.towardLum(pillSeed, pillL)
+        pill = separateDir(pill, from: bar, need: 0.085)
+        let labelL = light ? max(0.02, DerivePort.q8(pill).lum - 0.55)
+                           : min(0.98, DerivePort.q8(pill).lum + 0.55)
+        var label = DerivePort.towardLum(p7, labelL)
+        label = separateDir(label, from: pill, need: 0.50)
+        var muted = DerivePort.towardLum(p8, (DerivePort.q8(pill).lum + DerivePort.q8(label).lum) / 2)
+        var accent = DerivePort.clearOf(accentSeed, bar: bar, pill: pill, preferUp: !light)
 
-    // Text checks first, then the floors: separate() and clearOf() only move
-    // a colour further away, so re-flooring cannot give the contrast back.
-    func floorPass() {
-        if abs(DerivePort.q8(pill).lum - DerivePort.q8(bar).lum) < 0.085 {
-            pill = separateDir(pill, from: bar, need: 0.085, up: up)
+        // Text checks first, then the floors: separate() and clearOf() only
+        // move a colour further away, so re-flooring cannot give the
+        // contrast back.
+        func floorPass() {
+            if abs(DerivePort.q8(pill).lum - DerivePort.q8(bar).lum) < 0.085 {
+                pill = separateDir(pill, from: bar, need: 0.085)
+            }
+            if abs(DerivePort.q8(label).lum - DerivePort.q8(pill).lum) < 0.50 {
+                label = separateDir(label, from: pill, need: 0.50)
+            }
+            let lp = DerivePort.q8(pill).lum, ll = DerivePort.q8(label).lum
+            let lm = DerivePort.q8(muted).lum
+            if abs(lm - lp) < 0.18 || abs(lm - ll) < 0.18 {
+                muted = DerivePort.towardLum(muted, (lp + ll) / 2)
+            }
+            if abs(DerivePort.q8(accent).lum - DerivePort.q8(bar).lum) < 0.28 ||
+               abs(DerivePort.q8(accent).lum - DerivePort.q8(pill).lum) < 0.20 {
+                accent = DerivePort.clearOf(accent, bar: bar, pill: pill, preferUp: !light)
+            }
         }
-        if abs(DerivePort.q8(label).lum - DerivePort.q8(pill).lum) < 0.50 {
-            label = separateDir(label, from: pill, need: 0.50, up: up)
+
+        for _ in 0..<3 {
+            label = DerivePort.legible(label, against: [bar, pill], ratio: 4.5)
+            muted = DerivePort.legible(muted, against: [bar], ratio: 4.5)
+            accent = DerivePort.legible(accent, against: [bar, pill], ratio: 3.0)
+            floorPass()
         }
-        let lp = DerivePort.q8(pill).lum, ll = DerivePort.q8(label).lum
-        let lm = DerivePort.q8(muted).lum
-        if abs(lm - lp) < 0.18 || abs(lm - ll) < 0.18 {
-            muted = DerivePort.towardLum(muted, (lp + ll) / 2)
-        }
-        if abs(DerivePort.q8(accent).lum - DerivePort.q8(bar).lum) < 0.28 ||
-           abs(DerivePort.q8(accent).lum - DerivePort.q8(pill).lum) < 0.20 {
-            accent = DerivePort.clearOf(accent, bar: bar, pill: pill, preferUp: !light)
-        }
+
+        let ring = DerivePort.brighten(accent, from: bar, need: 0.10)
+        return BarRoles(bar: bar.hex, pill: pill.hex, muted: muted.hex,
+                        label: label.hex, accent: accent.hex, ring: ring.hex)
     }
 
-    for _ in 0..<3 {
-        label = DerivePort.legible(label, against: [bar, pill], ratio: 4.5)
-        muted = DerivePort.legible(muted, against: [bar], ratio: 4.5)
-        accent = DerivePort.legible(accent, against: [bar, pill], ratio: 3.0)
-        floorPass()
+    // The contract the tests and docs/derived-themes.md 4.4 state: every
+    // luminance floor holds and every WCAG text/accent check passes.
+    func passes(_ r: BarRoles) -> Bool {
+        func rgb(_ h: String) -> DerivePort.RGB { DerivePort.RGB(hex: h) }
+        func lum(_ h: String) -> Double { DerivePort.q8(rgb(h)).lum }
+        func gap(_ a: String, _ b: String) -> Double { abs(lum(a) - lum(b)) }
+        if gap(r.pill, r.bar) < 0.085 || gap(r.label, r.pill) < 0.50 { return false }
+        if gap(r.muted, r.pill) < 0.18 || gap(r.muted, r.label) < 0.18 { return false }
+        if gap(r.accent, r.bar) < 0.28 || gap(r.accent, r.pill) < 0.20 { return false }
+        if gap(r.ring, r.bar) < 0.10 { return false }
+        if DerivePort.contrast(rgb(r.label), rgb(r.pill)) < 4.5 { return false }
+        if DerivePort.contrast(rgb(r.label), rgb(r.bar)) < 4.5 { return false }
+        if DerivePort.contrast(rgb(r.muted), rgb(r.bar)) < 4.5 { return false }
+        if DerivePort.contrast(rgb(r.accent), rgb(r.bar)) < 3.0 { return false }
+        if DerivePort.contrast(rgb(r.accent), rgb(r.pill)) < 3.0 { return false }
+        return true
     }
 
-    let ring = DerivePort.brighten(accent, from: bar, need: 0.10)
-    return BarRoles(bar: bar.hex, pill: pill.hex, muted: muted.hex,
-                    label: label.hex, accent: accent.hex, ring: ring.hex)
+    // The old surface search: the tone in the pill's hue where label read at
+    // 7:1, muted at 4.5:1 and the accent at 3:1. It can never be satisfied
+    // on a normal dark palette (colors[8] is a "bright black", dark itself),
+    // so its fallback is often near black. That is why the anchor below is
+    // tried first; this remains for a palette whose slot 0 is no background.
+    func searchedBar() -> DerivePort.RGB {
+        let pillLch = DerivePort.toOKLCH(p8)
+        let prefer = light ? DerivePort.toOKLCH(p0).L : max(0.12, pillLch.L - 0.12)
+        let chroma = min(pillLch.C, 0.06)
+        func at(_ l: Double) -> DerivePort.RGB? { DerivePort.oklchFit(l, chroma, pillLch.h) }
+        func score(_ x: DerivePort.RGB) -> Double {
+            min(DerivePort.contrast(p7, x) / 7.0,
+                DerivePort.contrast(p8, x) / 4.5,
+                DerivePort.contrast(accentSeed, x) / 3.0)
+        }
+        var pick: DerivePort.RGB? = nil
+        var pickDist = 9.0
+        var best: DerivePort.RGB? = nil
+        var bestScore = 0.0
+        var l = 0.04
+        while l <= 0.98 {
+            if let x = at(l) {
+                let sc = score(x)
+                if sc >= 1 && abs(l - prefer) < pickDist { pick = x; pickDist = abs(l - prefer) }
+                if sc > bestScore { best = x; bestScore = sc }
+            }
+            l += 0.01
+        }
+        return pick ?? best ?? p0
+    }
+
+    // THE UI CARRIES THE PALETTE'S ACCENT.
+    //
+    // bar (BAR_BG_SOLID) fills the settings dashboard, the focused workspace
+    // chip and the popups; the pill sits behind every bar item. A palette's
+    // colors[0] is often a near-neutral near-black and colors[8] a grey, so
+    // deriving them straight from those slots painted every dark Aether mode
+    // #080004 / #1e1c1d — black and grey, off theme — while the terminal,
+    // which reads the whole palette, looked right.
+    //
+    // So the surfaces are built from the palette's ACCENT, the one colour
+    // that names the theme: the background is the accent's hue at a dark,
+    // muted lightness (a light one on a light palette), the pill the accent
+    // darkened to sit on it. That is what a Magic theme does with the
+    // wallpaper, so a monochromatic green palette gets a dark green
+    // dashboard and green pills, and Tokyo Night keeps its blue. The
+    // palette's own background and the old surface search remain as
+    // fallbacks for a palette this cannot make pass.
+    let aok = DerivePort.toOKLCH(accentSeed)
+    let surfaceL = light ? 0.90 : 0.21
+    let surfaceC = light ? min(aok.C * 0.30, 0.05) : min(aok.C * 0.80, 0.07)
+    let tinted = DerivePort.oklchFit(surfaceL, surfaceC, aok.h) ?? p0
+    let tintedRoles = assemble(bar: tinted, pillSeed: accentSeed)
+    if passes(tintedRoles) { return tintedRoles }
+
+    // Fallback 1: the palette's own background (colors[0]), when it can carry
+    // the UI — the four stock themes set BAR_BG_SOLID to exactly this.
+    let anchored = assemble(bar: p0, pillSeed: p8)
+    if passes(anchored) { return anchored }
+
+    // Fallback 2: the old surface search.
+    return assemble(bar: searchedBar(), pillSeed: p8)
 }
 
 // The Light/Dark suggestion: the same fill-crop band baseColour reads, before
