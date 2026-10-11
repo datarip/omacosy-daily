@@ -3248,12 +3248,13 @@ struct BarRoles {
     var ring: String
 }
 
-// Maps any 16-colour palette onto the values the bar reads. The Magic engine
-// runs first on a synthetic "picture" built from the palette's accent, so the
-// UI surface and pill carry the palette's own colour the way a Magic theme
-// carries the wallpaper's — a monochromatic green palette gets a dark green
-// dashboard, not the near-neutral #080004 of its slot 0. If that fails the
-// floors/contrast contract, the palette's own background (colors[0]) is
+// Maps any 16-colour palette onto the values the bar reads. The UI surfaces
+// are built from the palette's ACCENT, the one colour that names it: the
+// background is the accent's hue at a dark, muted lightness, the pill the
+// accent darkened to sit on it. That is how a Magic theme carries the
+// wallpaper's colour, so a monochromatic green palette gets a dark green
+// dashboard instead of the near-neutral #080004 of its slot 0. If that fails
+// the floors/contrast contract, the palette's own background (colors[0]) is
 // tried, and finally the old surface search. In every case the text roles
 // hold the floors of docs/derived-themes.md 4.4 (pill vs bar >= 0.085, label
 // vs pill >= 0.50, muted >= 0.18 from both, accent >= 0.28/0.20 from bar and
