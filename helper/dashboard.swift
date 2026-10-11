@@ -8833,65 +8833,57 @@ final class PreviewPaneView: NSView {
         NSRect(x: card.minX + pad, y: card.maxY - pad - 26, width: card.width - pad * 2,
                height: 1).fill()
 
-        struct Row { let head: String?; let key: String; let act: String }
-        let sections: [(String, [(String, String)])] = [
-            ("Workspaces", [
-                ("1…9", "Focus workspace"),
-                ("⇧1…9", "Move window there"),
-                ("Tab / ⇧Tab", "Next / previous"),
-            ]),
-            ("Window", [
-                ("← ↓ ↑ →", "Focus a window"),
-                ("⇧← ↓ ↑ →", "Move a window"),
-                ("F", "Fullscreen"),
-                ("W", "Close window"),
-            ]),
-            ("Layout", [
-                ("T", "Toggle floating"),
-                ("J", "Toggle split"),
-            ]),
-            ("Apps", [
-                ("Return", "Terminal"),
-                ("⇧Return", "Browser"),
-                ("Space", "Raycast"),
-                ("⇧F", "Files"),
-                ("⇧L", "Lock screen"),
-            ]),
-            ("Omacosy", [
-                (",", "Settings"),
-                ("K", "This cheat sheet"),
-            ]),
+        let rowH: CGFloat = 18
+        // Whole sections only: each stays in one column, never split across.
+        let columns: [[(String, [(String, String)])]] = [
+            [
+                ("Workspaces", [
+                    ("1…9", "Focus workspace"),
+                    ("⇧1…9", "Move window there"),
+                    ("Tab / ⇧Tab", "Next / previous"),
+                ]),
+            ],
+            [
+                ("Window", [
+                    ("← ↓ ↑ →", "Focus a window"),
+                    ("⇧← ↓ ↑ →", "Move a window"),
+                    ("F", "Fullscreen"),
+                    ("W", "Close window"),
+                    ("T", "Toggle floating"),
+                    ("J", "Toggle split"),
+                ]),
+            ],
+            [
+                ("Apps", [
+                    ("Return", "Terminal"),
+                    ("⇧Return", "Browser"),
+                    ("Space", "Raycast"),
+                    ("⇧F", "Files"),
+                ]),
+                ("Omacosy", [
+                    (",", "Settings"),
+                    ("K", "This cheat sheet"),
+                ]),
+            ],
         ]
-        var rows: [Row] = []
-        for (title, entries) in sections {
-            if !rows.isEmpty { rows.append(Row(head: nil, key: "", act: "")) }
-            rows.append(Row(head: title, key: "", act: ""))
-            for (k, a) in entries { rows.append(Row(head: nil, key: k, act: a)) }
-        }
-        let per = Int((Double(rows.count) / 3.0).rounded(.up))
-        let cols = stride(from: 0, to: rows.count, by: max(1, per))
-            .map { Array(rows[$0..<min($0 + per, rows.count)]) }
 
         let contentW = card.width - pad * 2
         let colGap: CGFloat = 24
         let colW = (contentW - colGap * 2) / 3
-        let topY = card.maxY - pad - 40
-        let rowH: CGFloat = 18
+        let topY = card.maxY - pad - 42
         var colX = card.minX + pad
-        for col in cols {
+        for col in columns {
             var y = topY
-            let keyW = col.map { advance($0.key, keyFont) }.max() ?? 0
-            for row in col {
-                if let head = row.head {
-                    drawBaseline(head.uppercased(), headFont, r.accent, x: colX, baseline: y)
-                    r.accent.withAlphaComponent(0.45).setFill()
-                    NSRect(x: colX, y: y - 5, width: advance(head.uppercased(), headFont),
-                           height: 1.5).fill()
-                    y -= rowH + 7
-                } else if row.key.isEmpty {
-                    y -= 7
-                } else {
-                    let kw = advance(row.key, keyFont) + 12
+            let keyW = col.flatMap { $0.1 }.map { advance($0.0, keyFont) }.max() ?? 0
+            for (si, section) in col.enumerated() {
+                if si > 0 { y -= 8 }
+                drawBaseline(section.0.uppercased(), headFont, r.accent, x: colX, baseline: y)
+                r.accent.withAlphaComponent(0.45).setFill()
+                NSRect(x: colX, y: y - 5, width: advance(section.0.uppercased(), headFont),
+                       height: 1.5).fill()
+                y -= rowH + 7
+                for (k, a) in section.1 {
+                    let kw = advance(k, keyFont) + 12
                     let cap = NSRect(x: colX, y: y - 4, width: kw, height: 16)
                     let capPath = NSBezierPath(roundedRect: cap, xRadius: 4, yRadius: 4)
                     r.pill.setFill()
@@ -8899,9 +8891,9 @@ final class PreviewPaneView: NSView {
                     r.muted.withAlphaComponent(0.4).setStroke()
                     capPath.lineWidth = 1
                     capPath.stroke()
-                    drawBaseline(row.key, keyFont, r.label, x: cap.minX + 6, baseline: y)
+                    drawBaseline(k, keyFont, r.label, x: cap.minX + 6, baseline: y)
                     let actX = colX + keyW + 12
-                    drawBaseline(truncate(row.act, actFont, colX + colW - actX),
+                    drawBaseline(truncate(a, actFont, colX + colW - actX),
                                  actFont, r.muted, x: actX, baseline: y)
                     y -= rowH
                 }
