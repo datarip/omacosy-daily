@@ -3189,7 +3189,7 @@ final class EditorPanelDoc: NSView {
                 MethodPicker.Row(header: nil, value: $0.name, label: $0.name)
             }
             MethodPicker.present(from: self.presetsButton, rows: rows, strips: [:],
-                                 currentMethod: "") { [weak self] name in
+                                 currentMethod: "", title: "Presets") { [weak self] name in
                 self?.presetsButton.title = name
                 self?.presetsButton.needsDisplay = true
                 self?.onPreset?(name)
@@ -5671,7 +5671,7 @@ final class MethodPicker: NSObject {
     private let H: CGFloat = 430
 
     private init(rows: [Row], strips: [String: [String]], currentMethod: String,
-                 completion: @escaping (String) -> Void) {
+                 title: String, completion: @escaping (String) -> Void) {
         self.rows = rows
         self.completion = completion
         window = PickerWindow(contentRect: NSRect(x: 0, y: 0, width: W, height: H),
@@ -5686,6 +5686,7 @@ final class MethodPicker: NSObject {
         window.contentView = root
         root.rows = rows
         root.strips = strips
+        root.header = title
         root.onPick = { [weak self] value in self?.pick(value) }
         selected = rows.firstIndex { $0.value == currentMethod }
             ?? rows.firstIndex { $0.value != nil } ?? 0
@@ -5693,10 +5694,11 @@ final class MethodPicker: NSObject {
     }
 
     static func present(from view: NSView, rows: [Row], strips: [String: [String]],
-                        currentMethod: String, completion: @escaping (String) -> Void) {
+                        currentMethod: String, title: String = "Method",
+                        completion: @escaping (String) -> Void) {
         active?.close()
         let p = MethodPicker(rows: rows, strips: strips, currentMethod: currentMethod,
-                             completion: completion)
+                             title: title, completion: completion)
         guard let host = view.window else { return }
         let btn = host.convertToScreen(view.convert(view.bounds, to: nil))
         var x = btn.minX
@@ -5775,6 +5777,7 @@ final class MethodPickerRoot: NSView {
     let list = MethodPickerList()
     var rows: [MethodPicker.Row] = []
     var strips: [String: [String]] = [:]
+    var header = "Method"
     var selected = 0
     var onPick: ((String) -> Void)?
 
@@ -5795,7 +5798,7 @@ final class MethodPickerRoot: NSView {
         palette.accent.setStroke()
         r.lineWidth = 1
         r.stroke()
-        drawTopLeft("Method", nerdFont("Bold", 12), palette.accent,
+        drawTopLeft(header, nerdFont("Bold", 12), palette.accent,
                     x: 12, top: 9, height: bounds.height)
     }
 
@@ -5865,10 +5868,12 @@ final class MethodPickerList: NSView {
             drawMidLeft(truncate(row.label, nerdFont("Regular", 12), bounds.width - 170),
                         nerdFont("Regular", 12), ink,
                         x: 10, midTop: tops[i] + Self.rowH / 2, height: bounds.height)
-            if let strip = strips[row.value ?? ""] {
-                drawStrip(strip, in: r, selected: i == selected)
-            } else {
-                drawStripPlaceholder(in: r, selected: i == selected)
+            if !strips.isEmpty {
+                if let strip = strips[row.value ?? ""] {
+                    drawStrip(strip, in: r, selected: i == selected)
+                } else {
+                    drawStripPlaceholder(in: r, selected: i == selected)
+                }
             }
             if i == selected {
                 drawMidLeft("\u{f00c}", nerdFont("Regular", 10), palette.barBG,
