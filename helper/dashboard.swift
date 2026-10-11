@@ -3319,14 +3319,14 @@ final class EditorPanelDoc: NSView {
         h += 24 + 12                                      // Apply to Palette
         h += AdjustmentSliderView.rowHeight + 10          // Strength
         h += 16 + 22 + 12                                 // AUTO ENHANCE + buttons
-        h += 34                                           // Presets
+        h += 34 + 12                                      // Presets + gap
         h += 26 + HistogramView.viewHeight + 12           // Histogram
         h += 26 + CurveEditorView.viewHeight + 12         // Curves
         h += 24 + 10                                      // Blur Desktop toggle
         for group in EditorFilterFields.groups {
             h += 30
             h += CGFloat(group.fields.count) * AdjustmentSliderView.rowHeight
-            h += 10
+            h += 24
         }
         h += 26 + 24 + 8 + AdjustmentSliderView.rowHeight + 12   // Palette Grade
         h += 294                                                 // Transform
@@ -3425,7 +3425,7 @@ final class EditorPanelDoc: NSView {
         presetTop = top
         presetsButton.frame = rect(top: top + 3, h: 26,
                                    x: insetL + max(0, contentW - 170), w: min(170, contentW))
-        top += 34
+        top += 34 + 12
         histTop = top
         top += 26
         histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
@@ -3454,7 +3454,7 @@ final class EditorPanelDoc: NSView {
                 i += 1
             }
             groupFrames.append((blockTop, top))
-            top += 10
+            top += 24
         }
         // Palette Grade: 2-4 colour stops plus a strength slider.
         gradeTop = top
@@ -7614,6 +7614,7 @@ final class PaletteBuilderDoc: NSView {
         h += 24                                             // Adjustments
         h += CurveEditorView.viewHeight + 14
         h += CGFloat(sliders.count) * AdjustmentSliderView.rowHeight
+        h += 12                                             // gap under the frame
         h += 38 + CGFloat(contrast.count) * 26              // Accessibility
         h += 10
         return h
@@ -7674,7 +7675,7 @@ final class PaletteBuilderDoc: NSView {
             top += AdjustmentSliderView.rowHeight
         }
         adjSliderBottom = top
-        top += 8
+        top += 20
         contrastTop = top
     }
 
