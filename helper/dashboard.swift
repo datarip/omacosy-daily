@@ -3107,6 +3107,8 @@ final class EditorPanelDoc: NSView {
     let flipVButton = ButtonView()
     let resizeWField = NSTextField()
     let resizeHField = NSTextField()
+    let resizeLinkButton = ButtonView()
+    let cropResetButton = ButtonView()
     let transformResetButton = ButtonView()
     var onSlider: ((String, Double) -> Void)?
     var onAuto: ((String) -> Void)?
@@ -3115,6 +3117,7 @@ final class EditorPanelDoc: NSView {
     var onGradeStops: (([String]) -> Void)?
     var onCropToggle: ((Bool) -> Void)?
     var onCropPreset: ((Double) -> Void)?
+    var onCropReset: (() -> Void)?
     var onRotate: ((Double) -> Void)?
     var onFlip: ((String) -> Void)?
     var onResize: ((Double, Double) -> Void)?
@@ -3131,6 +3134,11 @@ final class EditorPanelDoc: NSView {
     private var transformTop: CGFloat = 0
     private var gradeStops: [String] = []
     private var cropOn = false
+    private var resizeLinked = true
+    private var originalSize = CGSize.zero
+    private var rotLabelTop: CGFloat = 0
+    private var cropLabelTop: CGFloat = 0
+    private var resizeLabelTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -3182,7 +3190,7 @@ final class EditorPanelDoc: NSView {
         cropButton.onClick = { [weak self] in
             guard let self else { return }
             self.cropOn.toggle()
-            self.cropButton.title = self.cropOn ? "Crop On" : "Crop"
+            self.cropButton.title = self.cropOn ? "Done" : "Crop"
             self.onCropToggle?(self.cropOn)
         }
         addSubview(cropButton)
@@ -3194,7 +3202,7 @@ final class EditorPanelDoc: NSView {
                 guard let self else { return }
                 if !self.cropOn {
                     self.cropOn = true
-                    self.cropButton.title = "Crop On"
+                    self.cropButton.title = "Done"
                     self.onCropToggle?(true)
                 }
                 self.onCropPreset?(spec.value)
@@ -3233,8 +3241,23 @@ final class EditorPanelDoc: NSView {
         transformResetButton.secondary = true
         transformResetButton.onClick = { [weak self] in self?.onTransformReset?() }
         addSubview(transformResetButton)
-        resizeWField.placeholderString = "W"
-        resizeHField.placeholderString = "H"
+        resizeWField.placeholderString = "Width"
+        resizeHField.placeholderString = "Height"
+        cropResetButton.title = "Reset Crop"
+        cropResetButton.fontSize = 10
+        cropResetButton.secondary = true
+        cropResetButton.onClick = { [weak self] in self?.onCropReset?() }
+        addSubview(cropResetButton)
+        resizeLinkButton.title = "\u{f023}"
+        resizeLinkButton.fontSize = 11
+        resizeLinkButton.toolTip = "Keep the original aspect ratio"
+        resizeLinkButton.onClick = { [weak self] in
+            guard let self else { return }
+            self.resizeLinked.toggle()
+            self.resizeLinkButton.title = self.resizeLinked ? "\u{f023}" : "\u{f09c}"
+            self.resizeLinkButton.needsDisplay = true
+        }
+        addSubview(resizeLinkButton)
         for group in EditorFilterFields.groups {
             for f in group.fields {
                 let s = AdjustmentSliderView(spec: f)
@@ -3261,7 +3284,7 @@ final class EditorPanelDoc: NSView {
             h += 10
         }
         h += 26 + 24 + 8 + AdjustmentSliderView.rowHeight + 12   // Palette Grade
-        h += 26 + 22 + 6 + 22 + 6 + 20 + 12                      // Transform
+        h += 280                                                 // Transform
         return h
     }
 
@@ -3303,8 +3326,16 @@ final class EditorPanelDoc: NSView {
 
     @objc private func resizeCommit() {
         let w = Double(resizeWField.stringValue) ?? 0
-        let h = Double(resizeHField.stringValue) ?? 0
+        var h = Double(resizeHField.stringValue) ?? 0
+        if resizeLinked, originalSize.width > 0, originalSize.height > 0, w > 0 {
+            h = (w / (originalSize.width / originalSize.height)).rounded()
+        }
         onResize?(w, h)
+    }
+
+    func setOriginalSize(_ size: CGSize) {
+        originalSize = size
+        needsDisplay = true
     }
 
     // The resize fields and the crop toggle follow the state; the crop MODE
@@ -3321,7 +3352,7 @@ final class EditorPanelDoc: NSView {
 
     func setCropOn(_ on: Bool) {
         cropOn = on
-        cropButton.title = on ? "Crop On" : "Crop"
+        cropButton.title = on ? "Done" : "Crop"
         needsDisplay = true
     }
 
@@ -3380,23 +3411,36 @@ final class EditorPanelDoc: NSView {
         gradeStrengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
                                          x: insetL, w: contentW)
         top += AdjustmentSliderView.rowHeight + 12
-        // Transform: crop toggle, ratio presets, rotate, flip, resize.
+        // Transform, in Aether's order: ROTATE & FLIP, CROP, RESIZE.
         transformTop = top
         top += 26
-        let rw = max(28, contentW / 8)
-        for (i, b) in ratioButtons.enumerated() {
-            b.frame = rect(top: top, h: 22, x: insetL + CGFloat(i) * rw, w: rw - 2)
+        rotLabelTop = top
+        top += 18
+        let q = (contentW - 18) / 4
+        for (i, b) in [rotateCCWButton, rotateCWButton, flipHButton, flipVButton].enumerated() {
+            b.frame = rect(top: top, h: 24, x: insetL + CGFloat(i) * (q + 6), w: q)
         }
-        top += 22 + 6
-        cropButton.frame = rect(top: top, h: 22, x: insetL, w: 64)
-        rotateCCWButton.frame = rect(top: top, h: 22, x: insetL + 70, w: 24)
-        rotateCWButton.frame = rect(top: top, h: 22, x: insetL + 98, w: 24)
-        flipHButton.frame = rect(top: top, h: 22, x: insetL + 128, w: 56)
-        flipVButton.frame = rect(top: top, h: 22, x: insetL + 188, w: 56)
-        top += 22 + 6
-        resizeWField.frame = rect(top: top, h: 20, x: insetL, w: 50)
-        resizeHField.frame = rect(top: top, h: 20, x: insetL + 60, w: 50)
-        transformResetButton.frame = rect(top: top, h: 20, x: insetL + contentW - 60, w: 60)
+        top += 24 + 12
+        cropLabelTop = top
+        cropButton.frame = rect(top: top - 3, h: 20, x: insetL + contentW - 60, w: 60)
+        top += 20
+        let rc = (contentW - 12) / 4
+        for (i, b) in ratioButtons.enumerated() {
+            let row = i / 4, col = i % 4
+            b.frame = rect(top: top + CGFloat(row) * 26, h: 22,
+                           x: insetL + CGFloat(col) * (rc + 4), w: rc)
+        }
+        top += 26 * 2 + 2
+        cropResetButton.frame = rect(top: top, h: 20, x: insetL, w: 84)
+        top += 20 + 14
+        resizeLabelTop = top
+        top += 18
+        resizeWField.frame = rect(top: top, h: 22, x: insetL, w: 74)
+        resizeHField.frame = rect(top: top, h: 22, x: insetL + 86, w: 74)
+        resizeLinkButton.frame = rect(top: top, h: 22, x: insetL + 168, w: 24)
+        top += 22 + 4
+        top += 16                                        // "Original: W × H"
+        transformResetButton.frame = rect(top: top, h: 20, x: insetL, w: 70)
         top += 20 + 12
     }
 
@@ -3413,6 +3457,17 @@ final class EditorPanelDoc: NSView {
                     x: insetL, top: gradeTop, height: bounds.height)
         drawTopLeft("Transform", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: transformTop, height: bounds.height)
+        drawTopLeft("ROTATE & FLIP", nerdFont("Bold", 10), palette.muted,
+                    x: insetL, top: rotLabelTop, height: bounds.height)
+        drawTopLeft("CROP", nerdFont("Bold", 10), palette.muted,
+                    x: insetL, top: cropLabelTop, height: bounds.height)
+        drawTopLeft("RESIZE", nerdFont("Bold", 10), palette.muted,
+                    x: insetL, top: resizeLabelTop, height: bounds.height)
+        if originalSize.width > 0 {
+            drawTopLeft("Original: \(Int(originalSize.width)) × \(Int(originalSize.height))",
+                        nerdFont("Regular", 10), palette.muted,
+                        x: insetL, top: resizeLabelTop + 48, height: bounds.height)
+        }
     }
 }
 
@@ -3429,6 +3484,7 @@ final class EditorColumnView: NSView {
     var onGradeStops: (([String]) -> Void)? { didSet { doc.onGradeStops = onGradeStops } }
     var onCropToggle: ((Bool) -> Void)? { didSet { doc.onCropToggle = onCropToggle } }
     var onCropPreset: ((Double) -> Void)? { didSet { doc.onCropPreset = onCropPreset } }
+    var onCropReset: (() -> Void)? { didSet { doc.onCropReset = onCropReset } }
     var onRotate: ((Double) -> Void)? { didSet { doc.onRotate = onRotate } }
     var onFlip: ((String) -> Void)? { didSet { doc.onFlip = onFlip } }
     var onResize: ((Double, Double) -> Void)? { didSet { doc.onResize = onResize } }
@@ -3494,6 +3550,7 @@ final class EditorColumnView: NSView {
         doc.onGradeStops = onGradeStops
         doc.onCropToggle = onCropToggle
         doc.onCropPreset = onCropPreset
+        doc.onCropReset = onCropReset
         doc.onRotate = onRotate
         doc.onFlip = onFlip
         doc.onResize = onResize
@@ -3521,6 +3578,8 @@ final class EditorColumnView: NSView {
     func setHistogram(_ lum: [Int], _ r: [Int], _ g: [Int], _ b: [Int]) {
         doc.setHistogram(lum, r, g, b)
     }
+
+    func setOriginalSize(_ size: CGSize) { doc.setOriginalSize(size) }
 
     override func layout() {
         super.layout()
@@ -8866,6 +8925,11 @@ final class ThemeEditor {
                 $0.cropW = rect.width; $0.cropH = rect.height
             }
         }
+        root.wallpaperEditor.onCropReset = { [weak self] in
+            guard let self else { return }
+            self.editorState.edit(nil) { $0.cropX = 0; $0.cropY = 0; $0.cropW = 1; $0.cropH = 1 }
+            self.root.paletteCanvas.setCrop(CGRect(x: 0, y: 0, width: 1, height: 1), aspect: 0)
+        }
         root.paletteCanvas.onCropChange = { [weak self] r in
             self?.editorState.edit("crop") {
                 $0.cropX = r.minX; $0.cropY = r.minY; $0.cropW = r.width; $0.cropH = r.height
@@ -8960,6 +9024,7 @@ final class ThemeEditor {
             DispatchQueue.main.async {
                 guard let self, self.editBaseGeneration == gen else { return }
                 self.editBase = ci
+                if let ci { self.root.wallpaperEditor.setOriginalSize(ci.extent.size) }
                 if let hist {
                     self.root.wallpaperEditor.setHistogram(hist.lum, hist.r, hist.g, hist.b)
                 }
