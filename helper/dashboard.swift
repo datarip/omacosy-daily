@@ -3026,6 +3026,26 @@ enum EditorFilterFields {
     ]
 }
 
+// The 12 quick presets of docs/wallpaper-editor.md, verbatim from Aether's
+// FilterControls.svelte (mirrors themecore's ImagePresets). Each is a delta
+// over the current state, so absent fields keep whatever the user chose.
+enum EditorPresets {
+    static let all: [(name: String, values: [String: Double])] = [
+        ("Muted", ["brightness": 95, "contrast": 85, "saturation": 60, "exposure": -10]),
+        ("Dramatic", ["brightness": 90, "contrast": 130, "saturation": 110]),
+        ("Soft", ["brightness": 105, "contrast": 90, "saturation": 95, "exposure": 10]),
+        ("Vintage", ["brightness": 95, "contrast": 110, "saturation": 70, "sepia": 30]),
+        ("Vibrant", ["brightness": 105, "contrast": 115, "saturation": 140, "exposure": 10]),
+        ("Faded", ["brightness": 110, "contrast": 75, "saturation": 65, "exposure": 20]),
+        ("Cool", ["contrast": 105, "saturation": 95, "hueRotate": 200]),
+        ("Warm", ["contrast": 105, "saturation": 95, "hueRotate": 20]),
+        ("Cinematic", ["contrast": 120, "saturation": 85, "shadows": 20, "highlights": -15, "vignette": 35]),
+        ("Film", ["contrast": 95, "saturation": 90, "grain": 3, "sepia": 15, "vignette": 20]),
+        ("Crisp", ["contrast": 110, "saturation": 105, "sharpen": 40, "exposure": 5]),
+        ("Portrait", ["brightness": 102, "contrast": 95, "saturation": 92, "shadows": 15, "vignette": 25]),
+    ]
+}
+
 // The editor's histogram: the luminance as a filled backdrop, R/G/B as
 // coloured traces, each series normalised to its own peak.
 final class HistogramView: NSView {
@@ -3095,6 +3115,7 @@ final class EditorPanelDoc: NSView {
     let gradeAddButton = ButtonView()
     let gradeRemoveButton = ButtonView()
     let gradeWells = (0..<4).map { _ in ColorWellView() }
+    let presetButtons = (0..<12).map { _ in ButtonView() }
     let cropButton = ButtonView()
     static let ratios: [(label: String, value: Double)] = [
         ("Free", 0), ("1:1", 1), ("16:9", 16.0 / 9), ("4:3", 4.0 / 3),
@@ -3115,6 +3136,7 @@ final class EditorPanelDoc: NSView {
     var onCurve: (([[Double]]) -> Void)?
     var onCurveReset: (() -> Void)?
     var onGradeStops: (([String]) -> Void)?
+    var onPreset: ((String) -> Void)?
     var onCropToggle: ((Bool) -> Void)?
     var onCropPreset: ((Double) -> Void)?
     var onCropReset: (() -> Void)?
@@ -3139,6 +3161,7 @@ final class EditorPanelDoc: NSView {
     private var rotLabelTop: CGFloat = 0
     private var cropLabelTop: CGFloat = 0
     private var resizeLabelTop: CGFloat = 0
+    private var presetTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -3157,6 +3180,13 @@ final class EditorPanelDoc: NSView {
             b.title = title
             b.fontSize = 10
             b.onClick = { [weak self] in self?.onAuto?(op) }
+            addSubview(b)
+        }
+        for (i, preset) in EditorPresets.all.enumerated() {
+            let b = presetButtons[i]
+            b.title = preset.name
+            b.fontSize = 9
+            b.onClick = { [weak self] in self?.onPreset?(preset.name) }
             addSubview(b)
         }
         addSubview(histogram)
@@ -3275,6 +3305,7 @@ final class EditorPanelDoc: NSView {
         h += 24 + 12                                      // Apply to Palette
         h += AdjustmentSliderView.rowHeight + 10          // Strength
         h += 16 + 22 + 12                                 // AUTO ENHANCE + buttons
+        h += 18 + 24 * 3 + 4                              // Presets (4x3)
         h += HistogramView.viewHeight + 12
         h += 26 + CurveEditorView.viewHeight + 12         // Curves
         for group in EditorFilterFields.groups {
@@ -3374,6 +3405,15 @@ final class EditorPanelDoc: NSView {
         autoContrastButton.frame = rect(top: top, h: 22, x: insetL + bw + gap, w: bw)
         autoWBButton.frame = rect(top: top, h: 22, x: insetL + (bw + gap) * 2, w: bw)
         top += 22 + 12
+        presetTop = top
+        top += 18
+        let pc = (contentW - 3 * 4) / 4
+        for (i, b) in presetButtons.enumerated() {
+            let row = i / 4, col = i % 4
+            b.frame = rect(top: top + CGFloat(row) * 24, h: 22,
+                           x: insetL + CGFloat(col) * (pc + 4), w: pc)
+        }
+        top += 24 * 3 + 4
         histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
         top += HistogramView.viewHeight + 12
         curveTop = top
@@ -3446,6 +3486,8 @@ final class EditorPanelDoc: NSView {
     override func draw(_ dirtyRect: NSRect) {
         drawTopLeft("AUTO ENHANCE", nerdFont("Bold", 11), palette.muted,
                     x: insetL, top: autoTop, height: bounds.height)
+        drawTopLeft("Presets", nerdFont("Bold", 12), palette.accent,
+                    x: insetL, top: presetTop, height: bounds.height)
         drawTopLeft("Curves", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: curveTop, height: bounds.height)
         for (title, top) in groupTops {
@@ -3481,6 +3523,7 @@ final class EditorColumnView: NSView {
     var onCurve: (([[Double]]) -> Void)? { didSet { doc.onCurve = onCurve } }
     var onCurveReset: (() -> Void)? { didSet { doc.onCurveReset = onCurveReset } }
     var onGradeStops: (([String]) -> Void)? { didSet { doc.onGradeStops = onGradeStops } }
+    var onPreset: ((String) -> Void)? { didSet { doc.onPreset = onPreset } }
     var onCropToggle: ((Bool) -> Void)? { didSet { doc.onCropToggle = onCropToggle } }
     var onCropPreset: ((Double) -> Void)? { didSet { doc.onCropPreset = onCropPreset } }
     var onCropReset: (() -> Void)? { didSet { doc.onCropReset = onCropReset } }
@@ -3547,6 +3590,7 @@ final class EditorColumnView: NSView {
         doc.onCurve = onCurve
         doc.onCurveReset = onCurveReset
         doc.onGradeStops = onGradeStops
+        doc.onPreset = onPreset
         doc.onCropToggle = onCropToggle
         doc.onCropPreset = onCropPreset
         doc.onCropReset = onCropReset
@@ -7661,6 +7705,9 @@ final class PreviewPaneView: NSView {
     // picture. The central pane is the edit surface, so the picture behind the
     // mock desktop reflects the edit.
     var editedImage: CGImage? { didSet { needsDisplay = true } }
+    // Press and hold anywhere on the picture to see the original.
+    var showingOriginal = false { didSet { needsDisplay = true } }
+    private var compareDrag = false
     // Crop mode (step 1's interactive crop): the central pane shows the whole
     // picture with a draggable rect. cropRect is fractions of the source with a
     // top-left origin, exactly the engine's cropX/Y/W/H.
@@ -8224,9 +8271,9 @@ final class PreviewPaneView: NSView {
             }
         } else if screen.width > 1, screen.height > 1, !path.isEmpty {
             ensureImage(path: path, screen: screen)
-            if let cg = editedImage {
-                drawWallpaper(cg, in: screen)
-            } else if cachePath == path, let cg = cacheImage {
+            let shown = showingOriginal ? cacheImage
+                : (editedImage ?? (cachePath == path ? cacheImage : nil))
+            if let cg = shown {
                 drawWallpaper(cg, in: screen)
             } else {
                 drawMidCenter("Loading preview…", nerdFont("Regular", 11), palette.muted,
@@ -8261,7 +8308,11 @@ final class PreviewPaneView: NSView {
             dragging = true
             dragStart = p
             dragOrigin = termOrigin
+            return
         }
+        // press and hold anywhere else to compare with the original
+        compareDrag = true
+        showingOriginal = true
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -8282,6 +8333,7 @@ final class PreviewPaneView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         if cropDrag != nil { cropDrag = nil; return }
+        if compareDrag { compareDrag = false; showingOriginal = false; return }
         dragging = false
     }
 
@@ -8899,6 +8951,13 @@ final class ThemeEditor {
         }
         root.wallpaperEditor.onGradeStops = { [weak self] stops in
             self?.editorState.edit("palette") { $0.paletteStops = stops }
+        }
+        root.wallpaperEditor.onPreset = { [weak self] name in
+            self?.editorState.edit("preset:" + name) { f in
+                if let preset = EditorPresets.all.first(where: { $0.name == name }) {
+                    for (k, v) in preset.values { f[k] = v }
+                }
+            }
         }
         root.wallpaperEditor.onCropToggle = { [weak self] on in
             guard let self else { return }
