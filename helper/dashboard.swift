@@ -3937,8 +3937,9 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         }
         for f in [resizeWField, resizeHField] {
             f.isBezeled = false
-            f.drawsBackground = true
-            f.backgroundColor = palette.itemBG.withAlphaComponent(0.35)
+            // the box and the centred placeholder are drawn by the panel (draw),
+            // so the field itself stays transparent
+            f.drawsBackground = false
             f.textColor = palette.label
             f.font = nerdFont("Regular", 11)
             f.alignment = .center
@@ -3953,19 +3954,10 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         transformResetButton.secondary = true
         transformResetButton.onClick = { [weak self] in self?.onTransformReset?() }
         addSubview(transformResetButton)
-        // centred placeholders: NSTextFieldCell does not centre a plain
-        // placeholderString, so use an attributed one with a centred paragraph
-        let centerStyle = NSMutableParagraphStyle()
-        centerStyle.alignment = .center
-        func placeholder(_ s: String) -> NSAttributedString {
-            NSAttributedString(string: s, attributes: [
-                .foregroundColor: palette.muted,
-                .font: nerdFont("Regular", 11),
-                .paragraphStyle: centerStyle,
-            ])
-        }
-        resizeWField.placeholderAttributedString = placeholder("Width")
-        resizeHField.placeholderAttributedString = placeholder("Height")
+        // Placeholders are drawn centred by us in draw() — NSTextFieldCell
+        // does not centre a placeholderString reliably.
+        resizeWField.placeholderString = nil
+        resizeHField.placeholderString = nil
         cropResetButton.title = "Reset Crop"
         cropResetButton.fontSize = 10
         cropResetButton.secondary = true
@@ -4261,6 +4253,19 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
             drawTopLeft("Original: \(Int(originalSize.width)) × \(Int(originalSize.height))",
                         nerdFont("Regular", 10), palette.muted,
                         x: insetL, top: resizeLabelTop + 48, height: bounds.height)
+        }
+        // the resize fields' boxes and centred placeholders (the fields are
+        // transparent; NSTextFieldCell will not centre a placeholder itself)
+        let phFont = nerdFont("Regular", 11)
+        for (f, t) in [(resizeWField, "Width"), (resizeHField, "Height")] {
+            let box = NSBezierPath(roundedRect: f.frame, xRadius: 4, yRadius: 4)
+            palette.itemBG.withAlphaComponent(0.35).setFill()
+            box.fill()
+            if f.stringValue.isEmpty && f.currentEditor() == nil {
+                drawMidCenter(t, phFont, palette.muted.withAlphaComponent(0.7),
+                              centerX: f.frame.midX,
+                              midTop: bounds.height - f.frame.midY, height: bounds.height)
+            }
         }
     }
 }
