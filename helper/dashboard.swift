@@ -3769,8 +3769,19 @@ final class HistogramView: NSView {
 // The scrollable editor body: the histogram and its Auto buttons, the four
 // slider groups, then the picture history's own Undo / Redo / Reset (separate
 // from the palette's). The edited picture is shown in the central pane.
-final class EditorPanelDoc: NSView, NSTextFieldDelegate {
-    let histogram = HistogramView()
+// A text field whose text stays centred even while the shared field editor has
+// it. AppKit does not copy the cell's alignment onto the field editor, so an
+// editing field left-aligns; set it where the editor is configured.
+final class CenteredTextField: NSTextField {
+    override func select(withFrame rect: NSRect, editor textObj: NSText,
+                         delegate: Any?, start selStart: Int, length selLength: Int) {
+        super.select(withFrame: rect, editor: textObj, delegate: delegate,
+                     start: selStart, length: selLength)
+        (textObj as? NSTextView)?.alignment = .center
+    }
+}
+
+final class EditorPanelDoc: NSView, NSTextFieldDelegate {    let histogram = HistogramView()
     let strengthSlider = AdjustmentSliderView(
         spec: SliderField(key: "strength", label: "Strength", min: 0, max: 100, step: 1, def: 100))
     let curveView = CurveEditorView()
@@ -3796,8 +3807,8 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     let rotateCWButton = ButtonView()
     let flipHButton = ButtonView()
     let flipVButton = ButtonView()
-    let resizeWField = NSTextField()
-    let resizeHField = NSTextField()
+    let resizeWField = CenteredTextField()
+    let resizeHField = CenteredTextField()
     let resizeLinkButton = ButtonView()
     let cropResetButton = ButtonView()
     let transformResetButton = ButtonView()
@@ -4002,7 +4013,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
             h += 24
         }
         h += 26 + 24 + 8 + AdjustmentSliderView.rowHeight + 12   // Palette Grade
-        h += 294                                                 // Transform
+        h += 262                                                 // Transform
         return h
     }
 
@@ -4199,10 +4210,11 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         resizeWField.frame = rect(top: top, h: 22, x: insetL, w: 74)
         resizeHField.frame = rect(top: top, h: 22, x: insetL + 86, w: 74)
         resizeLinkButton.frame = rect(top: top, h: 22, x: insetL + 168, w: 24)
+        // the transform Reset rides the same line, right of the lock
+        transformResetButton.frame = rect(top: top, h: 22, x: insetL + 200, w: 70)
         top += 22 + 4
-        top += 16                                        // "Original: W × H"
-        transformResetButton.frame = rect(top: top, h: 20, x: insetL, w: 70)
-        top += 20 + 12
+        // "Original: W × H" is drawn at a fixed offset (see draw)
+        top += 16
     }
 
     // A hairline 6 pt above a section's heading: long scrolling panels read
