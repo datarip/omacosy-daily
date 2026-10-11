@@ -3115,7 +3115,7 @@ final class EditorPanelDoc: NSView {
     let gradeAddButton = ButtonView()
     let gradeRemoveButton = ButtonView()
     let gradeWells = (0..<4).map { _ in ColorWellView() }
-    let presetButtons = (0..<12).map { _ in ButtonView() }
+    let presetsButton = PopupButtonView()
     let cropButton = ButtonView()
     static let ratios: [(label: String, value: Double)] = [
         ("Free", 0), ("1:1", 1), ("16:9", 16.0 / 9), ("4:3", 4.0 / 3),
@@ -3182,13 +3182,20 @@ final class EditorPanelDoc: NSView {
             b.onClick = { [weak self] in self?.onAuto?(op) }
             addSubview(b)
         }
-        for (i, preset) in EditorPresets.all.enumerated() {
-            let b = presetButtons[i]
-            b.title = preset.name
-            b.fontSize = 9
-            b.onClick = { [weak self] in self?.onPreset?(preset.name) }
-            addSubview(b)
+        presetsButton.title = "Choose…"
+        presetsButton.onClick = { [weak self] in
+            guard let self else { return }
+            let rows = EditorPresets.all.map {
+                MethodPicker.Row(header: nil, value: $0.name, label: $0.name)
+            }
+            MethodPicker.present(from: self.presetsButton, rows: rows, strips: [:],
+                                 currentMethod: "") { [weak self] name in
+                self?.presetsButton.title = name
+                self?.presetsButton.needsDisplay = true
+                self?.onPreset?(name)
+            }
         }
+        addSubview(presetsButton)
         addSubview(histogram)
         applyButton.title = "Apply to Palette"
         applyButton.toolTip = "Recompute the palette from this edit"
@@ -3305,7 +3312,7 @@ final class EditorPanelDoc: NSView {
         h += 24 + 12                                      // Apply to Palette
         h += AdjustmentSliderView.rowHeight + 10          // Strength
         h += 16 + 22 + 12                                 // AUTO ENHANCE + buttons
-        h += 18 + 24 * 3 + 4                              // Presets (4x3)
+        h += 18 + 26 + 8                                  // Presets
         h += HistogramView.viewHeight + 12
         h += 26 + CurveEditorView.viewHeight + 12         // Curves
         for group in EditorFilterFields.groups {
@@ -3407,13 +3414,8 @@ final class EditorPanelDoc: NSView {
         top += 22 + 12
         presetTop = top
         top += 18
-        let pc = (contentW - 3 * 4) / 4
-        for (i, b) in presetButtons.enumerated() {
-            let row = i / 4, col = i % 4
-            b.frame = rect(top: top + CGFloat(row) * 24, h: 22,
-                           x: insetL + CGFloat(col) * (pc + 4), w: pc)
-        }
-        top += 24 * 3 + 4
+        presetsButton.frame = rect(top: top, h: 26, x: insetL, w: min(180, contentW))
+        top += 26 + 8
         histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
         top += HistogramView.viewHeight + 12
         curveTop = top
