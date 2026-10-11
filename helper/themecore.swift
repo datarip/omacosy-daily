@@ -43,8 +43,6 @@
 //   omacosy-themecore image histogram <path> [--json]
 //   omacosy-themecore image render <path> [--filters JSON|@FILE] [--preset NAME]
 //                                           [--out FILE] [--max N] [--quality Q] [--json]
-//   omacosy-themecore image save <path> [--filters JSON|@FILE] [--preset NAME]
-//                                       [--name NAME] [--dir DIR] [--quality Q] [--json]
 //   omacosy-themecore image auto levels|contrast|white-balance <path> [--json]
 //   omacosy-themecore image presets [--json]
 //   omacosy-themecore version [--json]
@@ -3858,8 +3856,7 @@ enum ImagePipeline {
         return RGBAImage(width: width, height: height, pixels: buffer)
     }
 
-    static func encode(_ image: RGBAImage, to url: URL, jpegQuality: Double = 0.92,
-                       forceType: String? = nil) throws {
+    static func encode(_ image: RGBAImage, to url: URL, jpegQuality: Double = 0.92) throws {
         // Test-support: a ".rgba" target is the raw width*height*4 bytes, so
         // the fixture harness can compare pixels without a PNG decoder.
         if url.pathExtension.lowercased() == "rgba" {
@@ -3876,9 +3873,8 @@ enum ImagePipeline {
             return ctx.makeImage()
         }
         guard let cg else { throw ThemeError(message: "cannot make an image buffer") }
-        let isJPEG = forceType.map { $0 == "public.jpeg" }
-            ?? (url.pathExtension.lowercased() == "jpg" || url.pathExtension.lowercased() == "jpeg")
-        let type = forceType ?? (isJPEG ? "public.jpeg" : "public.png")
+        let isJPEG = url.pathExtension.lowercased() == "jpg" || url.pathExtension.lowercased() == "jpeg"
+        let type = isJPEG ? "public.jpeg" : "public.png"
         guard let dest = CGImageDestinationCreateWithURL(url as CFURL, type as CFString, 1, nil) else {
             throw ThemeError(message: "cannot write \(url.path)")
         }
@@ -5796,8 +5792,6 @@ func usage() -> Never {
            omacosy-themecore image histogram <path> [--json]
            omacosy-themecore image render <path> [--filters JSON|@FILE] [--preset NAME]
                                            [--out FILE] [--max N] [--quality Q] [--json]
-           omacosy-themecore image save <path> [--filters JSON|@FILE] [--preset NAME]
-                                           [--name NAME] [--dir DIR] [--quality Q] [--json]
            omacosy-themecore image auto levels|contrast|white-balance <path> [--json]
            omacosy-themecore image presets [--json]
            omacosy-themecore version [--json]
@@ -5975,40 +5969,6 @@ func takeImageFilterFlags(_ f: inout ImageFilters) {
     }
     if takeBool("--flip-h") { f.flipH = true }
     if takeBool("--flip-v") { f.flipV = true }
-}
-
-// The wallhaven download rules, reused for Save as New Wallpaper: a name made
-// safe to write (reserved path characters become '-', a leading dot or dash
-// never allowed, an extension forced and never doubled) and a free path in a
-// directory (name, else name-2, name-3, …).
-func safeWallpaperName(_ raw: String, ext: String) -> String {
-    var safe = ""
-    for ch in raw.unicodeScalars {
-        let v = ch.value
-        if (48...57).contains(v) || (65...90).contains(v) || (97...122).contains(v) ||
-           ch == "." || ch == "_" || ch == "-" {
-            safe.unicodeScalars.append(ch)
-        } else {
-            safe.append("-")
-        }
-    }
-    while safe.hasPrefix(".") || safe.hasPrefix("-") { safe.removeFirst() }
-    if safe.isEmpty || !safe.contains(where: { $0.isLetter || $0.isNumber }) { safe = "wallpaper" }
-    if (safe as NSString).pathExtension.lowercased() != ext.lowercased() { safe += "." + ext }
-    return safe
-}
-
-func uniqueWallpaperPath(_ dir: String, _ name: String) -> String {
-    let fm = FileManager.default
-    let base = (name as NSString).deletingPathExtension
-    let ext = (name as NSString).pathExtension
-    var dest = (dir as NSString).appendingPathComponent(name)
-    var n = 2
-    while fm.fileExists(atPath: dest) {
-        dest = (dir as NSString).appendingPathComponent("\(base)-\(n)" + (ext.isEmpty ? "" : ".\(ext)"))
-        n += 1
-    }
-    return dest
 }
 
 func noExtraArguments() {
@@ -7180,64 +7140,6 @@ case "image":
                            "bytes": (try? FileManager.default.attributesOfItem(atPath: out)[.size] as? Int) ?? 0])
             }
             print(out)
-            exit(0)
-        } catch { themeError(error) }
-
-    // Save as New Wallpaper: render the recipe at full resolution and land it
-    // in the configured wallpaper folder under a sanitised name (the wallhaven
-    // rules), name-2 on a clash. The picture is written to a hidden .part
-    // beside the target then renamed, so a reader never sees half a file and
-    // the Themes watcher never lists the scratch name.
-    case "save":
-        do {
-            guard let raw = args.first else { throw ThemeError(message: "image save needs a path") }
-            args.removeFirst()
-            let presetName = takeFlag("--preset")
-            let filtersRaw = takeFlag("--filters")
-            let nameRaw = takeFlag("--name")
-            let dirRaw = takeFlag("--dir")
-            let quality = takeNumber("--quality") ?? 0.92
-            var filters = ImageFilters()
-            if let presetName {
-                guard let preset = ImagePresets.named(presetName) else {
-                    throw ThemeError(message: "unknown preset: \(presetName)")
-                }
-                filters = ImageFilters(json: preset.values)
-            }
-            if let filtersRaw { filters = ImageFilters(json: imageFiltersJSON(filtersRaw)) }
-            takeImageFilterFlags(&filters)
-            noExtraArguments()
-            let path = Wallpapers.resolved(raw)
-            var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {
-                throw ThemeError(message: "no such image: \(path)")
-            }
-            let dir = dirRaw.map { Wallpapers.resolved($0) } ?? Wallpapers.resolved(Wallpapers.configuredDir())
-            do { try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true) }
-            catch { throw ThemeError(message: "cannot create \(dir): \(error.localizedDescription)") }
-            let srcExt = (path as NSString).pathExtension.lowercased()
-            let ext = (srcExt == "png" || srcExt == "webp" || srcExt == "heic" || srcExt == "gif") ? "png" : "jpg"
-            let type = ext == "png" ? "public.png" : "public.jpeg"
-            let srcBase = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
-            let fileName = safeWallpaperName(nameRaw ?? srcBase, ext: ext)
-            let dest = uniqueWallpaperPath(dir, fileName)
-            let image = try ImagePipeline.render(url: URL(fileURLWithPath: path), filters: filters)
-            let tmp = (dir as NSString).appendingPathComponent(
-                ".omacosy-save-\(ProcessInfo.processInfo.processIdentifier).part")
-            try? FileManager.default.removeItem(atPath: tmp)
-            try ImagePipeline.encode(image, to: URL(fileURLWithPath: tmp),
-                                     jpegQuality: quality, forceType: type)
-            do { try FileManager.default.moveItem(atPath: tmp, toPath: dest) }
-            catch {
-                try? FileManager.default.removeItem(atPath: tmp)
-                throw ThemeError(message: "cannot move the render into \(dest): \(error.localizedDescription)")
-            }
-            if jsonOut {
-                printJSON(["source": path, "path": dest, "name": (dest as NSString).lastPathComponent,
-                           "width": image.width, "height": image.height,
-                           "bytes": (try? FileManager.default.attributesOfItem(atPath: dest)[.size] as? Int) ?? 0])
-            }
-            print(dest)
             exit(0)
         } catch { themeError(error) }
 

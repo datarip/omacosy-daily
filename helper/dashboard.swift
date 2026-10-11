@@ -3107,7 +3107,6 @@ final class EditorPanelDoc: NSView {
     let curveView = CurveEditorView()
     let curveResetButton = ButtonView()
     let applyButton = ButtonView()
-    let saveWallpaperButton = ButtonView()
     let blurToggle = ToggleView()
     let autoLevelsButton = ButtonView()
     let autoContrastButton = ButtonView()
@@ -3147,7 +3146,6 @@ final class EditorPanelDoc: NSView {
     var onResize: ((Double, Double) -> Void)?
     var onTransformReset: (() -> Void)?
     var onApply: (() -> Void)?
-    var onSaveWallpaper: (() -> Void)?
     var onBlur: ((Bool) -> Void)?
     private(set) var sliders: [AdjustmentSliderView] = []
 
@@ -3206,10 +3204,6 @@ final class EditorPanelDoc: NSView {
         applyButton.toolTip = "Recompute the palette from this edit"
         applyButton.onClick = { [weak self] in self?.onApply?() }
         addSubview(applyButton)
-        saveWallpaperButton.title = "Save as New Wallpaper"
-        saveWallpaperButton.toolTip = "Render this edit full size into the wallpaper folder"
-        saveWallpaperButton.onClick = { [weak self] in self?.onSaveWallpaper?() }
-        addSubview(saveWallpaperButton)
         blurToggle.onChange = { [weak self] on in self?.onBlur?(on) }
         addSubview(blurToggle)
         gradeStrengthSlider.onChange = { [weak self] v in self?.onSlider?("paletteStrength", v) }
@@ -3321,7 +3315,6 @@ final class EditorPanelDoc: NSView {
     func contentHeight() -> CGFloat {
         var h: CGFloat = 10
         h += 24 + 10                                      // Blur Desktop toggle
-        h += 24 + 8                                       // Save as New Wallpaper
         h += 24 + 12                                      // Apply to Palette
         h += AdjustmentSliderView.rowHeight + 10          // Strength
         h += 16 + 22 + 12                                 // AUTO ENHANCE + buttons
@@ -3417,8 +3410,6 @@ final class EditorPanelDoc: NSView {
         blurTop = top
         blurToggle.frame = rect(top: top, h: 24, x: insetL + contentW - 46, w: 46)
         top += 24 + 10
-        saveWallpaperButton.frame = rect(top: top, h: 24, x: insetL, w: contentW)
-        top += 24 + 8
         applyButton.frame = rect(top: top, h: 24, x: insetL, w: contentW)
         top += 24 + 12
         strengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
@@ -3556,7 +3547,6 @@ final class EditorColumnView: NSView {
     var onResize: ((Double, Double) -> Void)? { didSet { doc.onResize = onResize } }
     var onTransformReset: (() -> Void)? { didSet { doc.onTransformReset = onTransformReset } }
     var onApply: (() -> Void)? { didSet { doc.onApply = onApply } }
-    var onSaveWallpaper: (() -> Void)? { didSet { doc.onSaveWallpaper = onSaveWallpaper } }
     var onBlur: ((Bool) -> Void)? { didSet { doc.onBlur = onBlur } }
 
     let doc = EditorPanelDoc()
@@ -8729,7 +8719,7 @@ final class EditorFooterView: NSView {
         saveAsButton.title = "Save As…"
         saveAsButton.secondary = true
         saveButton.title = "Save"
-        applyButton.title = "Apply Theme"
+        applyButton.title = "Apply & Save"
         addSubview(saveAsButton)
         addSubview(saveButton)
         addSubview(applyButton)
@@ -9068,7 +9058,6 @@ final class ThemeEditor {
             self.root.paletteCanvas.setCrop(CGRect(x: 0, y: 0, width: 1, height: 1), aspect: 0)
         }
         root.wallpaperEditor.onApply = { [weak self] in self?.applyToPalette() }
-        root.wallpaperEditor.onSaveWallpaper = { [weak self] in self?.saveNewWallpaper() }
         root.wallpaperEditor.onBlur = { [weak self] on in
             guard let self else { return }
             self.blurOn = on
@@ -9255,33 +9244,6 @@ final class ThemeEditor {
         let (code, _) = shell(cmd)
         guard code == 0, FileManager.default.fileExists(atPath: out) else { return nil }
         return out
-    }
-
-    // Save as New Wallpaper: the current edit rendered full size and landed in
-    // the wallpaper folder under the theme's name (the wallhaven rules). The
-    // Themes watcher lists it as the next Wallpaper #N; nothing auto-switches.
-    private func saveNewWallpaper() {
-        let source = editSource.isEmpty ? model.imagePath : editSource
-        guard !source.isEmpty else { return }
-        let name = root.nameValue.isEmpty ? "wallpaper" : root.nameValue
-        guard let data = try? JSONSerialization.data(withJSONObject: editorState.filters.jsonObject()),
-              let recipe = String(data: data, encoding: .utf8) else { return }
-        showMessage("Saving wallpaper…", red: false)
-        DispatchQueue.global().async { [weak self] in
-            guard let self else { return }
-            let cmd = "\(themecoreBin()) image save \(shellQuote(source)) "
-                + "--filters \(shellQuote(recipe)) --name \(shellQuote(name))"
-            let (code, out) = shell(cmd)
-            DispatchQueue.main.async {
-                guard code == 0 else {
-                    self.showMessage("Couldn't save the wallpaper.", red: true)
-                    return
-                }
-                let dest = out.split(separator: "\n").last.map(String.init)?
-                    .trimmingCharacters(in: .whitespaces) ?? ""
-                self.showMessage("Saved \((dest as NSString).lastPathComponent)", red: false)
-            }
-        }
     }
 
     private static var panelWatchInstalled = false
