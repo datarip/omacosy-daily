@@ -2511,6 +2511,17 @@ func allEditions() -> [ThemeEdition] {
     }
 }
 
+// "<name> #N" for a duplicate, N from 2: the smallest number that is free
+// among the library's names with that base.
+func nextDuplicateName(_ base: String) -> String {
+    var maxN = 1
+    for e in allEditions() {
+        guard e.name.hasPrefix(base + " #") else { continue }
+        if let n = Int(e.name.dropFirst(base.count + 2)) { maxN = max(maxN, n) }
+    }
+    return "\(base) #\(maxN + 1)"
+}
+
 // The edition's own snapshot wins; the recorded source is the fallback. A
 // record with neither left in place cannot be applied, so it gets no cell.
 func editionImage(_ e: ThemeEdition) -> String? {
@@ -2831,8 +2842,13 @@ final class ThemeGridView: NSView {
     var onApplied: ((String) -> Void)?
     // the Edit pill's click: opens the Theme Editor on this cell
     var onEdit: ((ThemeCell) -> Void)?
-    // the hover trash's click: asks before removing this cell
-    var onDelete: ((ThemeCell) -> Void)?
+    // bulk selection: custom cells only. The tab owns the Select toggle and
+    // the Delete bar; the grid draws and hit-tests the checkboxes.
+    var selectionMode = false { didSet { needsDisplay = true } }
+    var selected: Set<Int> = [] { didSet { needsDisplay = true } }
+    var onToggleSelect: ((Int) -> Void)?
+    // right-click "Duplicate Theme" on a named edition
+    var onDuplicate: ((ThemeCell) -> Void)?
     // Off-screen review only.
     func debugSetHover(_ i: Int?) { hoveredIndex = i; needsDisplay = true }
     private var hoveredIndex: Int?
@@ -2988,7 +3004,7 @@ final class ThemeGridView: NSView {
 
         // the focus-ring accent, drawn on the thumbnail's own outline: no gap
         // to the picture, and it inherits the radius from windowCornerRadius()
-        if i == hoveredIndex {
+        if i == hoveredIndex || (selectionMode && selected.contains(i)) {
             thumb.lineWidth = 2
             palette.accent.setStroke()
             thumb.stroke()
@@ -3022,24 +3038,36 @@ final class ThemeGridView: NSView {
             NSRect(x: f.minX, y: f.minY, width: f.width, height: cellPaletteH).fill()
         }
 
-        // the Edit pill, drawn only on the hovered custom cell: the door into
-        // the Theme Editor. No scrim — the picture stays fully visible.
-        if i == hoveredIndex, cells[i].isCustom {
-            let label = pillLabel(cells[i])
-            let pill = editPillRect(f, label: label)
-            let shape = NSBezierPath(roundedRect: pill, xRadius: 6, yRadius: 6)
-            palette.accent.setFill()
-            shape.fill()
-            let ink = relativeLuminance(palette.accent) > 0.179 ? palette.barBG : palette.label
-            drawMidCenter(label, nerdFont("Bold", 11), ink,
-                          centerX: pill.midX, midTop: bounds.height - pill.midY, height: bounds.height)
+        // In selection mode every custom cell carries a checkbox; otherwise
+        // the hovered custom cell carries the Edit/Customize pill, the door
+        // into the Theme Editor. No scrim either way: the picture stays whole.
+        if cells[i].isCustom {
+            if selectionMode {
+                drawCheckbox(selected.contains(i), in: checkRect(f))
+            } else if i == hoveredIndex {
+                let label = pillLabel(cells[i])
+                let pill = editPillRect(f, label: label)
+                let shape = NSBezierPath(roundedRect: pill, xRadius: 6, yRadius: 6)
+                palette.accent.setFill()
+                shape.fill()
+                let ink = relativeLuminance(palette.accent) > 0.179 ? palette.barBG : palette.label
+                drawMidCenter(label, nerdFont("Bold", 11), ink,
+                              centerX: pill.midX, midTop: bounds.height - pill.midY, height: bounds.height)
+            }
+        }
+    }
 
-            // a trash on the top-right: opens the delete confirmation
-            let tr = trashRect(f)
-            let box = NSBezierPath(roundedRect: tr, xRadius: 6, yRadius: 6)
+    // The selection checkbox sits at the thumbnail's top-right corner.
+    private func drawCheckbox(_ on: Bool, in cr: NSRect) {
+        let box = NSBezierPath(roundedRect: cr, xRadius: 6, yRadius: 6)
+        if on {
+            palette.accent.setFill(); box.fill()
+            let ink = relativeLuminance(palette.accent) > 0.179 ? palette.barBG : palette.label
+            whDrawGlyphCentered("\u{f00c}", in: cr, color: ink, size: 11)
+        } else {
             NSColor(srgbRed: 0.05, green: 0.05, blue: 0.07, alpha: 0.5).setFill(); box.fill()
-            NSColor.white.withAlphaComponent(0.14).setStroke(); box.lineWidth = 1; box.stroke()
-            whDrawGlyphCentered("\u{f1f8}", in: tr, color: NSColor.systemRed, size: 12)
+            NSColor.white.withAlphaComponent(0.18).setStroke(); box.lineWidth = 1; box.stroke()
+            whDrawGlyphCentered("\u{f096}", in: cr, color: .white, size: 11)
         }
     }
 
@@ -3061,9 +3089,9 @@ final class ThemeGridView: NSView {
                       width: w, height: pillH)
     }
 
-    // The hover trash sits at the thumbnail's top-right corner; drawCell and
-    // mouseDown share this rect.
-    private func trashRect(_ f: NSRect) -> NSRect {
+    // The selection checkbox sits at the thumbnail's top-right corner;
+    // drawCell and mouseDown share this rect.
+    private func checkRect(_ f: NSRect) -> NSRect {
         let thumbRect = NSRect(x: f.minX, y: f.minY + cellPaletteH + cellLabelH + cellThumbGap,
                                width: f.width, height: f.height - cellPaletteH - cellLabelH - cellThumbGap)
         let s: CGFloat = pillH
@@ -3089,12 +3117,13 @@ final class ThemeGridView: NSView {
         let p = convert(event.locationInWindow, from: nil)
         for (i, f) in cellFrames where f.contains(p) {
             let c = cells[i]
-            // a visible Edit/Customize pill or trash takes the click; anywhere
-            // else applies the theme as before
-            if i == hoveredIndex, c.isCustom, trashRect(f).contains(p) {
-                onDelete?(c)
+            // in selection mode a click anywhere on a custom cell toggles it
+            if selectionMode {
+                if c.isCustom { onToggleSelect?(i) }
                 return
             }
+            // a visible Edit/Customize pill takes the click; anywhere else
+            // applies the theme as before
             if i == hoveredIndex, c.isCustom, editPillRect(f, label: pillLabel(c)).contains(p) {
                 onEdit?(c)
                 return
@@ -3104,6 +3133,25 @@ final class ThemeGridView: NSView {
         }
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    // Right-click on a named edition offers Duplicate Theme. Raw Wallpaper #N
+    // cells have no record to copy, so they get no menu.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let p = convert(event.locationInWindow, from: nil)
+        guard let i = cellFrames.first(where: { $0.value.contains(p) })?.key,
+              cells.indices.contains(i), cells[i].isCustom, cells[i].editionID != nil else { return nil }
+        let menu = NSMenu()
+        let item = NSMenuItem(title: "Duplicate Theme", action: #selector(duplicateClicked(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = i
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func duplicateClicked(_ sender: NSMenuItem) {
+        guard let i = sender.representedObject as? Int, cells.indices.contains(i) else { return }
+        onDuplicate?(cells[i])
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -3138,6 +3186,10 @@ func truncate(_ s: String, _ font: NSFont, _ maxW: CGFloat) -> String {
 }
 
 final class ThemesTabView: NSView, ScrollStepTab {
+    // the one live Themes tab, so the dashboard's Esc/Delete keys can reach a
+    // running selection. nil unless a selection is in progress.
+    static weak var selecting: ThemesTabView?
+
     private let scroll = NSScrollView()
     private let grid = ThemeGridView()
     func scrollStep(_ dy: CGFloat) { scrollBy(scroll, dy) }
@@ -3145,9 +3197,15 @@ final class ThemesTabView: NSView, ScrollStepTab {
         needsDisplay = true
         grid.needsDisplay = true
         scroller.refresh()
+        selectButton.needsDisplay = true
+        deleteButton.needsDisplay = true
     }
     private let scroller = CustomScroller()
     private let scrollerW: CGFloat = 8
+    private let selectButton = ButtonView()
+    private let deleteButton = ButtonView()
+    private var selectionMode = false
+    private let bottomBand: CGFloat = 30
     private var status = ""
     private var needsGridRebuild = true
     var onApplied: (() -> Void)?
@@ -3161,6 +3219,17 @@ final class ThemesTabView: NSView, ScrollStepTab {
         scroll.documentView = grid
         addSubview(scroller)
         scroller.scrollView = scroll
+        selectButton.title = "Select"
+        selectButton.secondary = true
+        selectButton.fontSize = 12
+        selectButton.onClick = { [weak self] in self?.toggleSelection() }
+        addSubview(selectButton)
+        deleteButton.title = "Delete"
+        deleteButton.danger = true
+        deleteButton.fontSize = 12
+        deleteButton.isHidden = true
+        deleteButton.onClick = { [weak self] in self?.confirmDeleteSelection() }
+        addSubview(deleteButton)
         grid.onApplied = { [weak self] title in
             self?.status = "Applied \(title)"
             self?.needsDisplay = true
@@ -3174,7 +3243,8 @@ final class ThemesTabView: NSView, ScrollStepTab {
                 self?.onApplied?()
             }
         }
-        grid.onDelete = { [weak self] cell in self?.confirmDelete(cell) }
+        grid.onToggleSelect = { [weak self] i in self?.toggleCell(i) }
+        grid.onDuplicate = { [weak self] cell in self?.duplicate(cell) }
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(visibleChanged),
             name: NSView.boundsDidChangeNotification, object: scroll.contentView)
@@ -3185,10 +3255,11 @@ final class ThemesTabView: NSView, ScrollStepTab {
     deinit { NotificationCenter.default.removeObserver(self) }
 
     // re-read when the tab is shown, so a wallpaper added or removed while
-    // the modal is closed is picked up
+    // the modal is closed is picked up. Leaving the tab drops any selection,
+    // so Esc on another tab is not swallowed by a stale selection.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { reload() }
+        if window != nil { reload() } else { exitSelection() }
     }
 
     // Off-screen review only.
@@ -3196,47 +3267,124 @@ final class ThemesTabView: NSView, ScrollStepTab {
         if let i = grid.cells.firstIndex(where: { $0.isCustom }) { grid.debugSetHover(i) }
     }
 
-    // Ask before removing. An edition is a record; a raw wallpaper is a file
-    // that goes to the Trash, with its editions as an option.
-    private func confirmDelete(_ cell: ThemeCell) {
-        let name = cell.title
-        if let id = cell.editionID {
-            DeleteConfirm.present(from: self,
-                                  title: "Delete \(name)?",
-                                  subtitle: "The theme is removed. Its wallpaper stays in place.",
-                                  onDelete: { _ in
-                _ = shell("\(HOME)/.local/bin/omacosy-themecore theme delete \(shellQuote(id)) 2>&1")
-                self.status = "Deleted \(name)"
-                self.reload()
-            })
-            return
+    // --- bulk selection ----------------------------------------------------
+
+    private func toggleSelection() {
+        selectionMode.toggle()
+        if selectionMode {
+            ThemesTabView.selecting = self
+        } else {
+            grid.selected.removeAll()
+            if ThemesTabView.selecting === self { ThemesTabView.selecting = nil }
         }
-        let variations = cell.variations
-        var labels = ["Move the wallpaper file to Trash"]
-        var defaults = [true]
-        if variations > 0 {
-            labels.append("Also delete the \(variations) theme\(variations == 1 ? "" : "s") built from it")
+        grid.selectionMode = selectionMode
+        selectButton.title = selectionMode ? "Done" : "Select"
+        deleteButton.isHidden = !selectionMode
+        updateDeleteButton()
+        needsLayout = true
+    }
+
+    func exitSelection() { if selectionMode { toggleSelection() } }
+
+    private func toggleCell(_ i: Int) {
+        guard grid.cells.indices.contains(i), grid.cells[i].isCustom else { return }
+        if grid.selected.contains(i) { grid.selected.remove(i) } else { grid.selected.insert(i) }
+        updateDeleteButton()
+    }
+
+    private func updateDeleteButton() {
+        let n = grid.selected.count
+        deleteButton.title = n == 0 ? "Delete" : "Delete \(n)"
+    }
+
+    // Esc / Delete reach here from the dashboard's key monitor while a
+    // selection is live, so the keys do not fall through to the dashboard.
+    @discardableResult
+    func handleEscapeKey() -> Bool {
+        guard selectionMode else { return false }
+        exitSelection()
+        return true
+    }
+
+    @discardableResult
+    func handleDeleteKey() -> Bool {
+        guard selectionMode, !grid.selected.isEmpty else { return false }
+        confirmDeleteSelection()
+        return true
+    }
+
+    // Ask before removing the selection. Named editions are records; raw
+    // wallpapers are files that go to the Trash, with their editions as a
+    // convenience option. Nothing is hard-deleted.
+    private func confirmDeleteSelection() {
+        let picked = grid.selected.compactMap { grid.cells.indices.contains($0) ? grid.cells[$0] : nil }
+        guard !picked.isEmpty else { return }
+        let editions = picked.filter { $0.editionID != nil }
+        let seeds = picked.filter { $0.editionID == nil }
+        let variations = seeds.reduce(0) { $0 + $1.variations }
+        var parts: [String] = []
+        if !editions.isEmpty { parts.append("\(editions.count) theme\(editions.count == 1 ? "" : "s")") }
+        if !seeds.isEmpty { parts.append("\(seeds.count) wallpaper\(seeds.count == 1 ? "" : "s")") }
+        var labels: [String] = []
+        var defaults: [Bool] = []
+        if !seeds.isEmpty {
+            labels.append(seeds.count == 1 ? "Move the wallpaper file to Trash"
+                                           : "Move the wallpaper files to Trash")
             defaults.append(true)
         }
+        if variations > 0 {
+            labels.append("Also delete the \(variations) theme\(variations == 1 ? "" : "s") built from them")
+            defaults.append(true)
+        }
+        let subtitle = seeds.isEmpty
+            ? "Themes are removed. Their wallpapers stay in place."
+            : "Wallpaper files move to the Trash, so they can be recovered."
         DeleteConfirm.present(from: self,
-                              title: "Delete \(name)?",
-                              subtitle: "The file goes to the Trash, so it can be recovered.",
-                              labels: labels, defaults: defaults,
+                              title: "Delete \(parts.joined(separator: " and "))?",
+                              subtitle: subtitle, labels: labels, defaults: defaults,
                               onDelete: { vals in
-            let trash = vals.first ?? true
-            let delEditions = vals.count > 1 ? vals[1] : false
-            if delEditions {
-                let target = canonicalPath(cell.wallpaper)
-                for e in allEditions() where e.sourcePath.map({ canonicalPath($0) == target }) == true {
-                    _ = shell("\(HOME)/.local/bin/omacosy-themecore theme delete \(shellQuote(e.id)) 2>&1")
+            let trashSeeds = seeds.isEmpty ? false : (vals.first ?? true)
+            let delEditions = variations > 0 ? (vals.count > 1 ? vals[1] : false) : false
+            let count = picked.count
+            DispatchQueue.global().async {
+                for c in editions {
+                    if let id = c.editionID {
+                        _ = shell("\(HOME)/.local/bin/omacosy-themecore theme delete \(shellQuote(id)) 2>&1")
+                    }
+                }
+                if delEditions {
+                    let targets = Set(seeds.map { canonicalPath($0.wallpaper) })
+                    for e in allEditions() where e.sourcePath.map({ targets.contains(canonicalPath($0)) }) == true {
+                        _ = shell("\(HOME)/.local/bin/omacosy-themecore theme delete \(shellQuote(e.id)) 2>&1")
+                    }
+                }
+                if trashSeeds {
+                    for c in seeds {
+                        _ = shell("\(HOME)/.local/bin/omacosy-themecore wallpaper trash \(shellQuote(c.wallpaper)) 2>&1")
+                    }
+                }
+                DispatchQueue.main.async {
+                    self.exitSelection()
+                    self.status = "Deleted \(count) item\(count == 1 ? "" : "s")"
+                    self.reload()
                 }
             }
-            if trash {
-                _ = shell("\(HOME)/.local/bin/omacosy-themecore wallpaper trash \(shellQuote(cell.wallpaper)) 2>&1")
-            }
-            self.status = "Deleted \(name)"
-            self.reload()
         })
+    }
+
+    // Right-click Duplicate Theme: a copy under "<name> #N", N from 2.
+    private func duplicate(_ cell: ThemeCell) {
+        guard let id = cell.editionID else { return }
+        let name = nextDuplicateName(cell.title)
+        status = "Duplicating \(cell.title)…"
+        needsDisplay = true
+        DispatchQueue.global().async { [weak self] in
+            _ = shell("\(HOME)/.local/bin/omacosy-themecore theme duplicate \(shellQuote(id)) --name \(shellQuote(name)) 2>&1")
+            DispatchQueue.main.async {
+                self?.status = "Duplicated \(name)"
+                self?.reload()
+            }
+        }
     }
 
     private var watchedPaths: [String] = []
@@ -3296,10 +3444,14 @@ final class ThemesTabView: NSView, ScrollStepTab {
 
     override func layout() {
         super.layout()
-        let scrollH = max(0, bounds.height - 18)
-        scroll.frame = NSRect(x: 0, y: 18, width: max(0, bounds.width - scrollerW - 14), height: scrollH)
-        scroller.frame = NSRect(x: bounds.width - scrollerW, y: 18, width: scrollerW, height: scrollH)
+        let band = bottomBand
+        let scrollH = max(0, bounds.height - band)
+        scroll.frame = NSRect(x: 0, y: band, width: max(0, bounds.width - scrollerW - 14), height: scrollH)
+        scroller.frame = NSRect(x: bounds.width - scrollerW, y: band, width: scrollerW, height: scrollH)
         scroller.refresh()
+        let by = (band - 24) / 2
+        selectButton.frame = NSRect(x: bounds.width - 96, y: by, width: 96, height: 24)
+        deleteButton.frame = NSRect(x: selectButton.frame.minX - 8 - 96, y: by, width: 96, height: 24)
         let w = scroll.contentSize.width
         if w > 0 {
             if abs(grid.frame.width - w) > 0.5 {
@@ -3322,8 +3474,10 @@ final class ThemesTabView: NSView, ScrollStepTab {
 
     override func draw(_ dirtyRect: NSRect) {
         if !status.isEmpty {
-            drawTopLeft(status, nerdFont("Regular", 11), palette.muted,
-                        x: 0, top: bounds.height - 14, height: bounds.height)
+            let f = nerdFont("Regular", 11)
+            let left = deleteButton.isHidden ? selectButton.frame.minX : deleteButton.frame.minX
+            drawMidLeft(truncate(status, f, max(0, left - 12)), f, palette.muted,
+                        x: 0, midTop: bounds.height - bottomBand / 2, height: bounds.height)
         }
     }
 }
@@ -13154,6 +13308,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // a live Theme Editor owns the session: Esc closes it and
                 // returns to Themes, never the dashboard under it
                 if e.keyCode == 53, e.window === self.window, ThemeEditor.closeIfOpen() { return nil }
+                // a live grid selection eats Esc (leave selection) and Delete
+                // (open the confirm) before the dashboard acts on them
+                if e.window === self.window, let sel = ThemesTabView.selecting {
+                    if e.keyCode == 53, sel.handleEscapeKey() { return nil }
+                    if e.keyCode == 51 || e.keyCode == 117, sel.handleDeleteKey() { return nil }
+                }
                 guard self.window?.hideSuppressed != true else { return e }
                 // only Esc aimed at the dashboard: while the app picker is
                 // up it is the key window and handles its own Esc
