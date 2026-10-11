@@ -3446,8 +3446,10 @@ final class EditorPanelDoc: NSView {
             top += 30
             let blockTop = top
             for _ in group.fields {
+                // inset inside the frame so the label and value never touch
+                // its line; the frame itself keeps the column edges
                 sliders[i].frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
-                                        x: insetL, w: contentW)
+                                        x: insetL + 10, w: contentW - 20)
                 top += AdjustmentSliderView.rowHeight
                 i += 1
             }
@@ -7666,7 +7668,9 @@ final class PaletteBuilderDoc: NSView {
         top += CurveEditorView.viewHeight + 14
         adjSliderTop = top
         for s in sliders {
-            s.frame = rect(top: top, h: AdjustmentSliderView.rowHeight, x: insetL, w: contentW)
+            // inset inside the frame so the label and value never touch its line
+            s.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
+                           x: insetL + 10, w: contentW - 20)
             top += AdjustmentSliderView.rowHeight
         }
         adjSliderBottom = top
