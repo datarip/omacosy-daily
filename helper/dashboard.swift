@@ -4393,6 +4393,28 @@ func editorPreviewRender(_ input: CIImage, raw: EditorFilters, maxSize: Int) -> 
     return editorCIContext.createCGImage(ci, from: ci.extent)
 }
 
+// The engine's blurred variant is what the desktop shows when wallpaper.blur
+// is on, so the preview must show it too. Same shape as `blurredVariant`:
+// work at the 640 px long side with sigma 32, then scale to the preview —
+// equivalent at preview resolution to sigma 32 × previewLong / workLong.
+func editorBlurredPreview(_ input: CIImage, maxSize: Int) -> CGImage? {
+    let extent = input.extent
+    let long = max(extent.width, extent.height)
+    guard long > 0 else { return nil }
+    let scale = maxSize > 0 ? min(1.0, Double(maxSize) / Double(long)) : 1.0
+    let scaled = scale < 1
+        ? input.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) : input
+    let previewLong = long * scale
+    let workLong = min(long, 640.0)
+    let sigma = max(1.0, 32.0 * previewLong / workLong)
+    let blurred = scaled.clampedToExtent()
+        .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: sigma])
+        .cropped(to: scaled.extent)
+    return editorCIContext.createCGImage(
+        blurred, from: blurred.extent, format: .RGBA8,
+        colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+}
+
 // --- palette builder --------------------------------------------------------
 
 // The engine's binary. OMACOSY_THEMECORE_BIN is the test seam: a /tmp build
@@ -9063,6 +9085,7 @@ final class ThemeEditor {
             self.blurOn = on
             self.dirty = true
             self.root.dirty = true
+            self.refreshEditedPreview()
         }
         editorState.onChange = { [weak self] in
             guard let self else { return }
@@ -9186,13 +9209,24 @@ final class ThemeEditor {
 
     private func renderEditedPreview() {
         let filters = editorState.filters
-        guard let base = editBase, !filters.isIdentity else {
+        let blur = blurOn
+        // The blurred variant is what the desktop will show, so it is what the
+        // preview shows; the edit base and the palette extraction stay sharp.
+        guard let base = editBase, !filters.isIdentity || blur else {
             root.paletteCanvas.setEditedImage(nil)
             return
         }
         let gen = editBaseGeneration
         DispatchQueue.global().async { [weak self] in
-            let cg = editorPreviewRender(base, raw: filters, maxSize: 1280)
+            var cg: CGImage?
+            if filters.isIdentity {
+                cg = editorBlurredPreview(base, maxSize: 1280)
+            } else if blur {
+                cg = editorPreviewRender(base, raw: filters, maxSize: 1280)
+                    .flatMap { editorBlurredPreview(CIImage(cgImage: $0), maxSize: 1280) }
+            } else {
+                cg = editorPreviewRender(base, raw: filters, maxSize: 1280)
+            }
             DispatchQueue.main.async {
                 guard let self, self.editBaseGeneration == gen else { return }
                 self.root.paletteCanvas.setEditedImage(cg)
@@ -12679,8 +12713,9 @@ if CommandLine.arguments.contains("--image-editor-selftest") {
 
 // The wallpaper editor's preview door (Phase 8b): render the in-process
 // CoreImage preview headlessly so its output can be compared, by hand, with
-// the engine's `image render --max 960`. Like the wallhaven doors, it runs
-// before the window opens.
+// the engine's `image render --max 960`. `--blur` renders the wallpaper.blur
+// variant instead, for comparison with the engine's blurredVariant. Like the
+// wallhaven doors, it runs before the window opens.
 if CommandLine.arguments.count >= 5, CommandLine.arguments[1] == "--image-preview" {
     let src = CommandLine.arguments[2]
     let filtersRaw = CommandLine.arguments[3]
@@ -12689,8 +12724,16 @@ if CommandLine.arguments.count >= 5, CommandLine.arguments[1] == "--image-previe
         print("--image-preview: filters must be a JSON object or @file")
         exit(2)
     }
-    guard let cg = imagePreviewCGImage(source: URL(fileURLWithPath: src),
-                                       raw: EditorFilters(json: obj), maxSize: 960) else {
+    var cg: CGImage?
+    if CommandLine.arguments.contains("--blur") {
+        let url = URL(fileURLWithPath: src)
+        cg = CIImage(contentsOf: url, options: [.applyOrientationProperty: true])
+            .flatMap { editorBlurredPreview($0, maxSize: 960) }
+    } else {
+        cg = imagePreviewCGImage(source: URL(fileURLWithPath: src),
+                                 raw: EditorFilters(json: obj), maxSize: 960)
+    }
+    guard let cg else {
         print("--image-preview: cannot render \(src)")
         exit(1)
     }

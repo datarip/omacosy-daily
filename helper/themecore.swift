@@ -5326,7 +5326,14 @@ enum Materialise {
         URL(fileURLWithPath: Wallpapers.stateDir).appendingPathComponent("studio/blur")
     }
 
-    private static let blurContext = CIContext(options: [.useSoftwareRenderer: false])
+    // Gamma-space blur, matching Aether's Go implementation (which blurs the
+    // 8-bit sRGB values directly) and the dashboard's preview. CoreImage's
+    // default working space is linear sRGB, and blurring a dark picture there
+    // lifts its midtones; a blur must not change the average colour.
+    private static let blurContext = CIContext(options: [
+        .useSoftwareRenderer: false,
+        .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+    ])
 
     static func blurredVariant(of image: URL, cacheDir: URL) throws -> URL {
         let data: Data
@@ -5353,20 +5360,19 @@ enum Materialise {
         let upScale = targetLong / max(small.width, small.height)
         let out = upScale == 1 ? blurred
             : blurred.transformed(by: CGAffineTransform(scaleX: upScale, y: upScale))
-        guard let cg = blurContext.createCGImage(out, from: out.extent) else {
-            throw ThemeError(message: "cannot render the blur of \(image.path)")
-        }
         do { try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true) }
         catch { throw ThemeError(message: "cannot create \(cacheDir.path): \(error.localizedDescription)") }
         let tmp = cacheDir.appendingPathComponent(".blur-\(digest.prefix(16)).tmp-\(ProcessInfo.processInfo.processIdentifier).jpg")
-        guard let dst = CGImageDestinationCreateWithURL(tmp as CFURL, "public.jpeg" as CFString, 1, nil) else {
-            throw ThemeError(message: "cannot write \(tmp.path)")
-        }
-        CGImageDestinationAddImage(dst, cg,
-            [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
-        guard CGImageDestinationFinalize(dst) else {
+        // CoreImage's own JPEG writer. Scaling the CIImage to a fixed cache
+        // size and writing with ImageIO instead came back ~12/255 brighter on
+        // a dark 4K wallpaper; this writer colour-manages correctly.
+        do {
+            try blurContext.writeJPEGRepresentation(
+                of: out, to: tmp, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+                options: [kCGImageDestinationLossyCompressionQuality: 0.92] as [CIImageRepresentationOption: Any])
+        } catch {
             try? FileManager.default.removeItem(at: tmp)
-            throw ThemeError(message: "cannot write \(tmp.path)")
+            throw ThemeError(message: "cannot write \(tmp.path): \(error.localizedDescription)")
         }
         if FileManager.default.fileExists(atPath: dest.path) {
             try? FileManager.default.removeItem(at: tmp)   // lost a race
