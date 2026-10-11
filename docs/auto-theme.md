@@ -362,7 +362,23 @@ source-file -q ~/.config/omacosy/tmux-theme.conf
 `-q` keeps tmux silent while the file does not exist: on a stock theme, and
 while the terminal keeps its own colours.
 
-## 7. What it does not touch
+## 7. Exporting the generated configs
+
+`omacosy-themecore theme export <id> --bundle DIR` writes a shareable copy of a
+saved theme: its record, a flat `colors.toml`, and the app configs — the ones
+this command generates, plus Zed, VS Code and `neovim.lua`. It runs the **same
+writers**, but into `DIR` and with every live action suppressed: no window is
+repainted, no Ghostty or tmux reload fires, `btop.conf` is untouched, and the
+machine's own tool opacity is not baked in. Every app is written whether or not
+it is installed here, so a bundle is complete.
+
+`omacosy-term-auto-theme export-theme <dir> <out-dir>` is the writer-facing
+half; run it directly with a directory holding a `colors.toml` (and an
+`overrides.env` when the theme has overrides). The exported `term-env.sh` and
+`tmux-theme.conf` are self-contained — colour exports and a `status-style` — so
+a bundle never points back at the machine that made it.
+
+## 8. What it does not touch
 
 Any other program with colours of its own. `omacosy-term-auto-theme off`
 deletes the generated files; the next window reads your own colours again.
