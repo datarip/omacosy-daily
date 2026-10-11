@@ -3107,6 +3107,8 @@ final class EditorPanelDoc: NSView {
     let curveView = CurveEditorView()
     let curveResetButton = ButtonView()
     let applyButton = ButtonView()
+    let saveWallpaperButton = ButtonView()
+    let blurToggle = ToggleView()
     let autoLevelsButton = ButtonView()
     let autoContrastButton = ButtonView()
     let autoWBButton = ButtonView()
@@ -3145,6 +3147,8 @@ final class EditorPanelDoc: NSView {
     var onResize: ((Double, Double) -> Void)?
     var onTransformReset: (() -> Void)?
     var onApply: (() -> Void)?
+    var onSaveWallpaper: (() -> Void)?
+    var onBlur: ((Bool) -> Void)?
     private(set) var sliders: [AdjustmentSliderView] = []
 
     private let insetL: CGFloat = 12
@@ -3162,6 +3166,7 @@ final class EditorPanelDoc: NSView {
     private var cropLabelTop: CGFloat = 0
     private var resizeLabelTop: CGFloat = 0
     private var presetTop: CGFloat = 0
+    private var blurTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -3201,6 +3206,12 @@ final class EditorPanelDoc: NSView {
         applyButton.toolTip = "Recompute the palette from this edit"
         applyButton.onClick = { [weak self] in self?.onApply?() }
         addSubview(applyButton)
+        saveWallpaperButton.title = "Save as New Wallpaper"
+        saveWallpaperButton.toolTip = "Render this edit full size into the wallpaper folder"
+        saveWallpaperButton.onClick = { [weak self] in self?.onSaveWallpaper?() }
+        addSubview(saveWallpaperButton)
+        blurToggle.onChange = { [weak self] on in self?.onBlur?(on) }
+        addSubview(blurToggle)
         gradeStrengthSlider.onChange = { [weak self] v in self?.onSlider?("paletteStrength", v) }
         addSubview(gradeStrengthSlider)
         for (i, w) in gradeWells.enumerated() {
@@ -3309,6 +3320,8 @@ final class EditorPanelDoc: NSView {
 
     func contentHeight() -> CGFloat {
         var h: CGFloat = 10
+        h += 24 + 10                                      // Blur Desktop toggle
+        h += 24 + 8                                       // Save as New Wallpaper
         h += 24 + 12                                      // Apply to Palette
         h += AdjustmentSliderView.rowHeight + 10          // Strength
         h += 16 + 22 + 12                                 // AUTO ENHANCE + buttons
@@ -3375,6 +3388,8 @@ final class EditorPanelDoc: NSView {
         needsDisplay = true
     }
 
+    func setBlur(_ on: Bool) { blurToggle.isOn = on }
+
     // The resize fields and the crop toggle follow the state; the crop MODE
     // itself is the user's (set through onCropToggle), not derived from a rect.
     func setTransform(_ f: EditorFilters) {
@@ -3399,6 +3414,11 @@ final class EditorPanelDoc: NSView {
     override func layout() {
         super.layout()
         var top: CGFloat = 10
+        blurTop = top
+        blurToggle.frame = rect(top: top, h: 24, x: insetL + contentW - 46, w: 46)
+        top += 24 + 10
+        saveWallpaperButton.frame = rect(top: top, h: 24, x: insetL, w: contentW)
+        top += 24 + 8
         applyButton.frame = rect(top: top, h: 24, x: insetL, w: contentW)
         top += 24 + 12
         strengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
@@ -3486,6 +3506,8 @@ final class EditorPanelDoc: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        drawMidLeft("Blur Desktop", nerdFont("Bold", 12), palette.label,
+                    x: insetL, midTop: blurTop + 12, height: bounds.height)
         drawTopLeft("AUTO ENHANCE", nerdFont("Bold", 11), palette.muted,
                     x: insetL, top: autoTop, height: bounds.height)
         drawMidLeft("Presets", nerdFont("Bold", 12), palette.label,
@@ -3534,6 +3556,8 @@ final class EditorColumnView: NSView {
     var onResize: ((Double, Double) -> Void)? { didSet { doc.onResize = onResize } }
     var onTransformReset: (() -> Void)? { didSet { doc.onTransformReset = onTransformReset } }
     var onApply: (() -> Void)? { didSet { doc.onApply = onApply } }
+    var onSaveWallpaper: (() -> Void)? { didSet { doc.onSaveWallpaper = onSaveWallpaper } }
+    var onBlur: ((Bool) -> Void)? { didSet { doc.onBlur = onBlur } }
 
     let doc = EditorPanelDoc()
     private let undoButton = ButtonView()
@@ -3625,6 +3649,8 @@ final class EditorColumnView: NSView {
     }
 
     func setOriginalSize(_ size: CGSize) { doc.setOriginalSize(size) }
+
+    func setBlur(_ on: Bool) { doc.setBlur(on) }
 
     override func layout() {
         super.layout()
@@ -3926,6 +3952,16 @@ final class EditorState {
         pushHistory(nil)
         filters = EditorFilters()
         onChange?()
+    }
+
+    // Reopening a saved edition: adopt its stored recipe as the baseline,
+    // with no history behind it (undo walks only the edits made this session).
+    func restore(_ f: EditorFilters) {
+        filters = f
+        undoStack.removeAll()
+        redoStack.removeAll()
+        lastPushKey = nil
+        lastPushTime = .distantPast
     }
 
     func undo() {
@@ -8931,6 +8967,14 @@ final class ThemeEditor {
     private(set) var record: [String: Any]?
     // set on any user change; Save/Apply clear it
     private(set) var dirty = false
+    // The picture the editor renders from: the provenance source while it still
+    // exists, so the stored recipe stays non-destructive; otherwise the
+    // edition's own media (apply-only). `editSourceIsSource` records which.
+    private var editSource = ""
+    private var editSourceIsSource = true
+    // wallpaper.blur: the desktop shows a heavy-blur variant while the editor
+    // and the palette extraction keep the sharp image.
+    private var blurOn = false
 
     private init(subject: EditorSubject, size: NSSize, status: ((String) -> Void)?) {
         self.subject = subject
@@ -9024,6 +9068,13 @@ final class ThemeEditor {
             self.root.paletteCanvas.setCrop(CGRect(x: 0, y: 0, width: 1, height: 1), aspect: 0)
         }
         root.wallpaperEditor.onApply = { [weak self] in self?.applyToPalette() }
+        root.wallpaperEditor.onSaveWallpaper = { [weak self] in self?.saveNewWallpaper() }
+        root.wallpaperEditor.onBlur = { [weak self] on in
+            guard let self else { return }
+            self.blurOn = on
+            self.dirty = true
+            self.root.dirty = true
+        }
         editorState.onChange = { [weak self] in
             guard let self else { return }
             self.dirty = true
@@ -9073,7 +9124,10 @@ final class ThemeEditor {
     // Decode the subject's picture once when it changes; the central pane
     // draws the edited render on top of it while a filter is active.
     private func loadEditBase() {
-        let path = model.imagePath
+        // The sharp provenance source when it still exists; the edition's media
+        // otherwise. The palette's own extraction path is separate and may use
+        // the media even when this does not.
+        let path = editSource.isEmpty ? model.imagePath : editSource
         guard path != editBasePath else { return }
         editBasePath = path
         editBaseGeneration += 1
@@ -9161,7 +9215,7 @@ final class ThemeEditor {
     // record) into a content-addressed working file, then re-derives the
     // palette from it. The original picture is never written.
     private func applyToPalette() {
-        let source = model.imagePath
+        let source = editSource.isEmpty ? model.imagePath : editSource
         let filters = editorState.filters
         guard !source.isEmpty else { return }
         guard !filters.isIdentity else {
@@ -9169,28 +9223,63 @@ final class ThemeEditor {
             showMessage("Palette back to the original", red: false)
             return
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: filters.jsonObject()),
-              let recipe = String(data: data, encoding: .utf8) else { return }
-        let ext = (source as NSString).pathExtension.isEmpty
-            ? "png" : (source as NSString).pathExtension.lowercased()
-        let dir = HOME + "/.config/omacosy/studio/edits"
-        let name = String(sha256Hex(source + "\n" + recipe).prefix(16))
-        let out = dir + "/" + name + "." + ext
         DispatchQueue.global().async { [weak self] in
             guard let self else { return }
-            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            if !FileManager.default.fileExists(atPath: out) {
-                let cmd = "\(themecoreBin()) image render \(shellQuote(source)) "
-                    + "--filters \(shellQuote(recipe)) --out \(shellQuote(out))"
-                let (code, _) = shell(cmd)
-                guard code == 0, FileManager.default.fileExists(atPath: out) else {
-                    DispatchQueue.main.async { self.showMessage("Apply to Palette failed", red: true) }
-                    return
-                }
+            guard let out = self.renderWorkingImage(source: source, filters: filters) else {
+                DispatchQueue.main.async { self.showMessage("Apply to Palette failed", red: true) }
+                return
             }
             DispatchQueue.main.async {
                 self.model.applyEditedSource(out)
                 self.showMessage("Palette updated from the edit", red: false)
+            }
+        }
+    }
+
+    // The one door to a full-resolution working render: content-addressed by
+    // (source + recipe) under the scratch studio/edits directory, so the same
+    // recipe is a cache hit and the original is never written. Returns nil on
+    // any failure (the caller reports it).
+    private func renderWorkingImage(source: String, filters: EditorFilters) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: filters.jsonObject()),
+              let recipe = String(data: data, encoding: .utf8) else { return nil }
+        let ext = (source as NSString).pathExtension.isEmpty
+            ? "png" : (source as NSString).pathExtension.lowercased()
+        let dir = HOME + "/.local/state/omacosy/studio/edits"
+        let name = String(sha256Hex(source + "\n" + recipe).prefix(16))
+        let out = dir + "/" + name + "." + ext
+        if FileManager.default.fileExists(atPath: out) { return out }
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let cmd = "\(themecoreBin()) image render \(shellQuote(source)) "
+            + "--filters \(shellQuote(recipe)) --out \(shellQuote(out))"
+        let (code, _) = shell(cmd)
+        guard code == 0, FileManager.default.fileExists(atPath: out) else { return nil }
+        return out
+    }
+
+    // Save as New Wallpaper: the current edit rendered full size and landed in
+    // the wallpaper folder under the theme's name (the wallhaven rules). The
+    // Themes watcher lists it as the next Wallpaper #N; nothing auto-switches.
+    private func saveNewWallpaper() {
+        let source = editSource.isEmpty ? model.imagePath : editSource
+        guard !source.isEmpty else { return }
+        let name = root.nameValue.isEmpty ? "wallpaper" : root.nameValue
+        guard let data = try? JSONSerialization.data(withJSONObject: editorState.filters.jsonObject()),
+              let recipe = String(data: data, encoding: .utf8) else { return }
+        showMessage("Saving wallpaper…", red: false)
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            let cmd = "\(themecoreBin()) image save \(shellQuote(source)) "
+                + "--filters \(shellQuote(recipe)) --name \(shellQuote(name))"
+            let (code, out) = shell(cmd)
+            DispatchQueue.main.async {
+                guard code == 0 else {
+                    self.showMessage("Couldn't save the wallpaper.", red: true)
+                    return
+                }
+                let dest = out.split(separator: "\n").last.map(String.init)?
+                    .trimmingCharacters(in: .whitespaces) ?? ""
+                self.showMessage("Saved \((dest as NSString).lastPathComponent)", red: false)
             }
         }
     }
@@ -9298,12 +9387,35 @@ final class ThemeEditor {
             return
         }
         let base = saveBase(newID: newID)
+        let source = editSource.isEmpty ? model.imagePath : editSource
+        let filters = editorState.filters
+        let hasEdits = editorState.hasEdits
+        let usesSource = editSourceIsSource
         root.footer.saveButton.busy = true
         root.footer.saveAsButton.busy = true
         root.footer.message = nil
         DispatchQueue.global().async { [weak self] in
             guard let self else { return }
-            let (error, fresh) = self.runSave(base: base, name: name, newID: newID)
+            // The edition's own image always matches the current edit: the
+            // render when a recipe is active, the source snapshot otherwise.
+            var mediaFrom: String?
+            var edited = false
+            var renderError: String?
+            if usesSource {
+                if hasEdits {
+                    if let render = self.renderWorkingImage(source: source, filters: filters) {
+                        mediaFrom = render
+                        edited = true
+                    } else {
+                        renderError = "Couldn't render the edit."
+                    }
+                } else if FileManager.default.fileExists(atPath: source) {
+                    mediaFrom = source
+                }
+            }
+            let (error, fresh) = renderError == nil
+                ? self.runSave(base: base, name: name, newID: newID, mediaFrom: mediaFrom, edited: edited)
+                : (renderError, nil)
             DispatchQueue.main.async {
                 self.root.footer.saveButton.busy = false
                 self.root.footer.saveAsButton.busy = false
@@ -9334,6 +9446,18 @@ final class ThemeEditor {
                    "wallpaper": ["path": model.imagePath, "source": "local",
                                  "blur": false, "edited": false]]
         }
+        // The wallpaper block carries the provenance path, the desktop blur
+        // flag and the picture recipe. The media/edited pair is set by the
+        // engine's --media-from capture, not here.
+        var wall = top["wallpaper"] as? [String: Any] ?? [:]
+        if wall["path"] == nil || newID {
+            wall["path"] = editSourceIsSource ? editSource : model.imagePath
+        }
+        if wall["source"] == nil { wall["source"] = "local" }
+        wall["blur"] = blurOn
+        if editorState.hasEdits { wall["filters"] = editorState.filters.jsonObject() }
+        else { wall.removeValue(forKey: "filters") }
+        top["wallpaper"] = wall
         top["palette"] = palettePayload()
         if model.appOverrides.isEmpty {
             top.removeValue(forKey: "appOverrides")
@@ -9359,7 +9483,8 @@ final class ThemeEditor {
                 "adjustments": model.adjustments.values, "curve": model.curve]
     }
 
-    private func runSave(base: [String: Any], name: String, newID: Bool)
+    private func runSave(base: [String: Any], name: String, newID: Bool,
+                         mediaFrom: String?, edited: Bool)
         -> (error: String?, record: [String: Any]?) {
         var top = base
         top["name"] = name
@@ -9369,7 +9494,10 @@ final class ThemeEditor {
               (try? data.write(to: URL(fileURLWithPath: tmp))) != nil else {
             return ("Couldn't prepare the theme file.", nil)
         }
-        let (code, out) = shell("\(themecoreBin()) theme save \(shellQuote(tmp)) --json 2>&1")
+        var extra = ""
+        if let mediaFrom { extra += " --media-from \(shellQuote(mediaFrom))" }
+        if edited { extra += " --edited" }
+        let (code, out) = shell("\(themecoreBin()) theme save \(shellQuote(tmp)) --json\(extra) 2>&1")
         try? FileManager.default.removeItem(atPath: tmp)
         guard code == 0, let od = out.data(using: .utf8),
               let obj = (try? JSONSerialization.jsonObject(with: od)) as? [String: Any],
@@ -9480,11 +9608,39 @@ final class ThemeEditor {
                     guard let self else { return }
                     self.record = rec
                     if let name = rec["name"] as? String, !name.isEmpty { self.root.setName(name) }
+                    let wall = rec["wallpaper"] as? [String: Any] ?? [:]
+                    self.blurOn = (wall["blur"] as? Bool) ?? false
+                    self.root.wallpaperEditor.setBlur(self.blurOn)
+                    // Resume non-destructively from the provenance source while
+                    // it still exists; otherwise the edition's own media
+                    // (apply-only, no recipe).
+                    var base = image
+                    self.editSourceIsSource = false
+                    if let p = wall["path"] as? String, !p.isEmpty {
+                        let resolved = (p as NSString).expandingTildeInPath
+                        if FileManager.default.fileExists(atPath: resolved) {
+                            base = resolved
+                            self.editSourceIsSource = true
+                        }
+                    }
+                    self.editSource = base
+                    if self.editSourceIsSource, let f = wall["filters"] as? [String: Any] {
+                        self.editorState.restore(EditorFilters(json: f))
+                    } else {
+                        self.editorState.restore(EditorFilters())
+                    }
                     guard !image.isEmpty else { return }
                     self.model.seedEdition(record: rec, image: image)
+                    self.root.wallpaperEditor.syncFromState()
                 }
             }
         case .draft(let wallpaper):
+            // A fresh draft always edits the wallpaper itself, blurred or not.
+            editSource = wallpaper
+            editSourceIsSource = true
+            blurOn = false
+            root.wallpaperEditor.setBlur(false)
+            editorState.restore(EditorFilters())
             let q = shellQuote(wallpaper)
             DispatchQueue.global().async { [weak self] in
                 guard let self else { return }
