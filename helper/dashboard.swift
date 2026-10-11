@@ -3165,6 +3165,7 @@ final class EditorPanelDoc: NSView {
     private var cropLabelTop: CGFloat = 0
     private var resizeLabelTop: CGFloat = 0
     private var presetTop: CGFloat = 0
+    private var histTop: CGFloat = 0
     private var blurTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
@@ -3319,7 +3320,7 @@ final class EditorPanelDoc: NSView {
         h += AdjustmentSliderView.rowHeight + 10          // Strength
         h += 16 + 22 + 12                                 // AUTO ENHANCE + buttons
         h += 34                                           // Presets
-        h += HistogramView.viewHeight + 12
+        h += 26 + HistogramView.viewHeight + 12           // Histogram
         h += 26 + CurveEditorView.viewHeight + 12         // Curves
         h += 24 + 10                                      // Blur Desktop toggle
         for group in EditorFilterFields.groups {
@@ -3425,6 +3426,8 @@ final class EditorPanelDoc: NSView {
         presetsButton.frame = rect(top: top + 3, h: 26,
                                    x: insetL + max(0, contentW - 170), w: min(170, contentW))
         top += 34
+        histTop = top
+        top += 26
         histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
         top += HistogramView.viewHeight + 12
         curveTop = top
@@ -3508,10 +3511,12 @@ final class EditorPanelDoc: NSView {
     }
 
     // A rounded 1 px frame around a multi-slider block: the heading stays
-    // above it, the controls sit inside, as in Aether's own panels.
+    // above it, the controls sit inside. The frame shares the content column's
+    // left and right edges (the same edges as the buttons and popups above),
+    // so nothing sticks out of the column.
     private func drawGroupFrame(top: CGFloat, bottom: CGFloat) {
-        let r = NSRect(x: insetL - 8, y: bounds.height - bottom - 6,
-                       width: contentW + 16, height: (bottom - top) + 12)
+        let r = NSRect(x: insetL, y: bounds.height - bottom - 6,
+                       width: contentW, height: (bottom - top) + 12)
         let path = NSBezierPath(roundedRect: r, xRadius: 8, yRadius: 8)
         palette.muted.withAlphaComponent(0.4).setStroke()
         path.lineWidth = 1
@@ -3525,6 +3530,9 @@ final class EditorPanelDoc: NSView {
         drawRule(presetTop)
         drawMidLeft("Presets", nerdFont("Bold", 12), palette.label,
                     x: insetL, midTop: presetTop + 16, height: bounds.height)
+        drawRule(histTop)
+        drawTopLeft("Histogram", nerdFont("Bold", 12), palette.accent,
+                    x: insetL, top: histTop, height: bounds.height)
         drawRule(curveTop)
         drawTopLeft("Curves", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: curveTop, height: bounds.height)
@@ -7690,9 +7698,10 @@ final class PaletteBuilderDoc: NSView {
         drawRule(adjTop)
         drawTopLeft("Adjustments", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: adjTop, height: bounds.height)
-        // a rounded 1 px frame around the twelve slider rows, as in Aether
-        let frame = NSRect(x: insetL - 8, y: bounds.height - adjSliderBottom - 6,
-                           width: contentW + 16, height: (adjSliderBottom - adjSliderTop) + 12)
+        // a rounded 1 px frame around the twelve slider rows; it shares the
+        // column's left and right edges with the controls above it
+        let frame = NSRect(x: insetL, y: bounds.height - adjSliderBottom - 6,
+                           width: contentW, height: (adjSliderBottom - adjSliderTop) + 12)
         let path = NSBezierPath(roundedRect: frame, xRadius: 8, yRadius: 8)
         palette.muted.withAlphaComponent(0.4).setStroke()
         path.lineWidth = 1
