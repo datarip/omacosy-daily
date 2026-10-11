@@ -3095,11 +3095,30 @@ final class EditorPanelDoc: NSView {
     let gradeAddButton = ButtonView()
     let gradeRemoveButton = ButtonView()
     let gradeWells = (0..<4).map { _ in ColorWellView() }
+    let cropButton = ButtonView()
+    static let ratios: [(label: String, value: Double)] = [
+        ("Free", 0), ("1:1", 1), ("16:9", 16.0 / 9), ("4:3", 4.0 / 3),
+        ("3:2", 3.0 / 2), ("9:16", 9.0 / 16), ("3:4", 3.0 / 4), ("2:3", 2.0 / 3),
+    ]
+    let ratioButtons = (0..<8).map { _ in ButtonView() }
+    let rotateCCWButton = ButtonView()
+    let rotateCWButton = ButtonView()
+    let flipHButton = ButtonView()
+    let flipVButton = ButtonView()
+    let resizeWField = NSTextField()
+    let resizeHField = NSTextField()
+    let transformResetButton = ButtonView()
     var onSlider: ((String, Double) -> Void)?
     var onAuto: ((String) -> Void)?
     var onCurve: (([[Double]]) -> Void)?
     var onCurveReset: (() -> Void)?
     var onGradeStops: (([String]) -> Void)?
+    var onCropToggle: ((Bool) -> Void)?
+    var onCropPreset: ((Double) -> Void)?
+    var onRotate: ((Double) -> Void)?
+    var onFlip: ((String) -> Void)?
+    var onResize: ((Double, Double) -> Void)?
+    var onTransformReset: (() -> Void)?
     var onApply: (() -> Void)?
     private(set) var sliders: [AdjustmentSliderView] = []
 
@@ -3109,7 +3128,9 @@ final class EditorPanelDoc: NSView {
     private var autoTop: CGFloat = 0
     private var curveTop: CGFloat = 0
     private var gradeTop: CGFloat = 0
+    private var transformTop: CGFloat = 0
     private var gradeStops: [String] = []
+    private var cropOn = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -3156,6 +3177,64 @@ final class EditorPanelDoc: NSView {
         gradeRemoveButton.fontSize = 13
         gradeRemoveButton.onClick = { [weak self] in self?.removeGradeStop() }
         addSubview(gradeRemoveButton)
+        cropButton.title = "Crop"
+        cropButton.fontSize = 11
+        cropButton.onClick = { [weak self] in
+            guard let self else { return }
+            self.cropOn.toggle()
+            self.cropButton.title = self.cropOn ? "Crop On" : "Crop"
+            self.onCropToggle?(self.cropOn)
+        }
+        addSubview(cropButton)
+        for (i, spec) in Self.ratios.enumerated() {
+            let b = ratioButtons[i]
+            b.title = spec.label
+            b.fontSize = 9
+            b.onClick = { [weak self] in
+                guard let self else { return }
+                if !self.cropOn {
+                    self.cropOn = true
+                    self.cropButton.title = "Crop On"
+                    self.onCropToggle?(true)
+                }
+                self.onCropPreset?(spec.value)
+            }
+            addSubview(b)
+        }
+        rotateCCWButton.title = "\u{f2ea}"
+        rotateCWButton.title = "\u{f2f9}"
+        for b in [rotateCCWButton, rotateCWButton] {
+            b.centeredByBounds = true
+            b.fontSize = 12
+            addSubview(b)
+        }
+        rotateCCWButton.onClick = { [weak self] in self?.onRotate?(-90) }
+        rotateCWButton.onClick = { [weak self] in self?.onRotate?(90) }
+        for (b, title, which) in [(flipHButton, "Flip H", "h"), (flipVButton, "Flip V", "v")] {
+            b.title = title
+            b.fontSize = 10
+            b.onClick = { [weak self] in self?.onFlip?(which) }
+            addSubview(b)
+        }
+        for f in [resizeWField, resizeHField] {
+            f.isBezeled = false
+            f.drawsBackground = true
+            f.backgroundColor = palette.itemBG.withAlphaComponent(0.35)
+            f.textColor = palette.label
+            f.font = nerdFont("Regular", 11)
+            f.alignment = .center
+            f.focusRingType = .none
+            f.target = self
+            f.action = #selector(resizeCommit)
+            addSubview(f)
+        }
+        transformResetButton.title = "Reset"
+        transformResetButton.fontSize = 10
+        transformResetButton.secondary = true
+        transformResetButton.onClick = { [weak self] in self?.onTransformReset?() }
+        addSubview(transformResetButton)
+        resizeWField.placeholderString = "W"
+        resizeHField.placeholderString = "H"
         for group in EditorFilterFields.groups {
             for f in group.fields {
                 let s = AdjustmentSliderView(spec: f)
@@ -3182,6 +3261,7 @@ final class EditorPanelDoc: NSView {
             h += 10
         }
         h += 26 + 24 + 8 + AdjustmentSliderView.rowHeight + 12   // Palette Grade
+        h += 26 + 22 + 6 + 22 + 6 + 20 + 12                      // Transform
         return h
     }
 
@@ -3219,6 +3299,30 @@ final class EditorPanelDoc: NSView {
         gradeStops.removeLast()
         setGradeStops(gradeStops)
         onGradeStops?(gradeStops)
+    }
+
+    @objc private func resizeCommit() {
+        let w = Double(resizeWField.stringValue) ?? 0
+        let h = Double(resizeHField.stringValue) ?? 0
+        onResize?(w, h)
+    }
+
+    // The resize fields and the crop toggle follow the state; the crop MODE
+    // itself is the user's (set through onCropToggle), not derived from a rect.
+    func setTransform(_ f: EditorFilters) {
+        if resizeWField.currentEditor() == nil {
+            resizeWField.stringValue = f.resizeW > 0 ? "\(Int(f.resizeW))" : ""
+        }
+        if resizeHField.currentEditor() == nil {
+            resizeHField.stringValue = f.resizeH > 0 ? "\(Int(f.resizeH))" : ""
+        }
+        needsDisplay = true
+    }
+
+    func setCropOn(_ on: Bool) {
+        cropOn = on
+        cropButton.title = on ? "Crop On" : "Crop"
+        needsDisplay = true
     }
 
     private func rect(top: CGFloat, h: CGFloat, x: CGFloat, w: CGFloat) -> NSRect {
@@ -3275,6 +3379,25 @@ final class EditorPanelDoc: NSView {
         top += sw + 8
         gradeStrengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
                                          x: insetL, w: contentW)
+        top += AdjustmentSliderView.rowHeight + 12
+        // Transform: crop toggle, ratio presets, rotate, flip, resize.
+        transformTop = top
+        top += 26
+        let rw = max(28, contentW / 8)
+        for (i, b) in ratioButtons.enumerated() {
+            b.frame = rect(top: top, h: 22, x: insetL + CGFloat(i) * rw, w: rw - 2)
+        }
+        top += 22 + 6
+        cropButton.frame = rect(top: top, h: 22, x: insetL, w: 64)
+        rotateCCWButton.frame = rect(top: top, h: 22, x: insetL + 70, w: 24)
+        rotateCWButton.frame = rect(top: top, h: 22, x: insetL + 98, w: 24)
+        flipHButton.frame = rect(top: top, h: 22, x: insetL + 128, w: 56)
+        flipVButton.frame = rect(top: top, h: 22, x: insetL + 188, w: 56)
+        top += 22 + 6
+        resizeWField.frame = rect(top: top, h: 20, x: insetL, w: 50)
+        resizeHField.frame = rect(top: top, h: 20, x: insetL + 60, w: 50)
+        transformResetButton.frame = rect(top: top, h: 20, x: insetL + contentW - 60, w: 60)
+        top += 20 + 12
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -3288,6 +3411,8 @@ final class EditorPanelDoc: NSView {
         }
         drawTopLeft("Palette Grade", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: gradeTop, height: bounds.height)
+        drawTopLeft("Transform", nerdFont("Bold", 12), palette.accent,
+                    x: insetL, top: transformTop, height: bounds.height)
     }
 }
 
@@ -3302,6 +3427,12 @@ final class EditorColumnView: NSView {
     var onCurve: (([[Double]]) -> Void)? { didSet { doc.onCurve = onCurve } }
     var onCurveReset: (() -> Void)? { didSet { doc.onCurveReset = onCurveReset } }
     var onGradeStops: (([String]) -> Void)? { didSet { doc.onGradeStops = onGradeStops } }
+    var onCropToggle: ((Bool) -> Void)? { didSet { doc.onCropToggle = onCropToggle } }
+    var onCropPreset: ((Double) -> Void)? { didSet { doc.onCropPreset = onCropPreset } }
+    var onRotate: ((Double) -> Void)? { didSet { doc.onRotate = onRotate } }
+    var onFlip: ((String) -> Void)? { didSet { doc.onFlip = onFlip } }
+    var onResize: ((Double, Double) -> Void)? { didSet { doc.onResize = onResize } }
+    var onTransformReset: (() -> Void)? { didSet { doc.onTransformReset = onTransformReset } }
     var onApply: (() -> Void)? { didSet { doc.onApply = onApply } }
 
     let doc = EditorPanelDoc()
@@ -3361,6 +3492,12 @@ final class EditorColumnView: NSView {
         doc.onCurve = onCurve
         doc.onCurveReset = onCurveReset
         doc.onGradeStops = onGradeStops
+        doc.onCropToggle = onCropToggle
+        doc.onCropPreset = onCropPreset
+        doc.onRotate = onRotate
+        doc.onFlip = onFlip
+        doc.onResize = onResize
+        doc.onTransformReset = onTransformReset
         doc.onApply = onApply
         undoButton.onClick = { [weak state] in state?.undo() }
         redoButton.onClick = { [weak state] in state?.redo() }
@@ -3377,6 +3514,7 @@ final class EditorColumnView: NSView {
         doc.curveView.points = state.filters.curvePoints
         doc.setGradeStops(state.filters.paletteStops)
         doc.gradeStrengthSlider.setValue(state.filters["paletteStrength"], notify: false)
+        doc.setTransform(state.filters)
     }
 
     // The editor hands the source's histograms here once it has decoded it.
@@ -3857,6 +3995,16 @@ func editorHistograms(from cg: CGImage, maxWidth: Int = 512)
     return (lum, r, g, b)
 }
 
+// The largest centred crop rect (fractions of the source) whose pixel aspect is
+// `ratio`, for the ratio presets.
+func editorCropRect(ratio: Double, imageSize: CGSize) -> CGRect {
+    let a = imageSize.width / max(1, imageSize.height)
+    let r = CGFloat(ratio)
+    var w: CGFloat = 1, h: CGFloat = 1
+    if r > a { h = a / r } else { w = r / a }
+    return CGRect(x: (1 - w) / 2, y: (1 - h) / 2, width: w, height: h)
+}
+
 // themecore's buildPaletteLUT, mirrored for the preview's gradient: stops
 // sorted by HSL lightness, interpolated in HSL, the output lightness pinned to
 // the LUT axis. 256 RGB triplets. The engine remains the source of truth.
@@ -3961,11 +4109,13 @@ func editorPreviewRender(_ input: CIImage, raw: EditorFilters, maxSize: Int) -> 
         outW = (outW * s).rounded(); outH = (outH * s).rounded()
     }
     if abs(outW - ow) > 0.5 || abs(outH - oh) > 0.5 {
-        let scale = outW / ow
+        // CILanczosScaleTransform scales the height by `scale` and the width by
+        // scale*aspect, so the height carries the scale and the width the ratio.
+        let scale = outH / oh
         if let lanczos = CIFilter(name: "CILanczosScaleTransform") {
             lanczos.setValue(ci, forKey: kCIInputImageKey)
             lanczos.setValue(scale, forKey: kCIInputScaleKey)
-            lanczos.setValue((outH / oh) / scale, forKey: kCIInputAspectRatioKey)
+            lanczos.setValue((outW / ow) / scale, forKey: kCIInputAspectRatioKey)
             ci = lanczos.outputImage ?? ci
         }
     }
@@ -7453,6 +7603,14 @@ final class PreviewPaneView: NSView {
     // picture. The central pane is the edit surface, so the picture behind the
     // mock desktop reflects the edit.
     var editedImage: CGImage? { didSet { needsDisplay = true } }
+    // Crop mode (step 1's interactive crop): the central pane shows the whole
+    // picture with a draggable rect. cropRect is fractions of the source with a
+    // top-left origin, exactly the engine's cropX/Y/W/H.
+    var cropMode = false { didSet { needsDisplay = true } }
+    var cropRect = CGRect(x: 0, y: 0, width: 1, height: 1) { didSet { needsDisplay = true } }
+    var cropAspect: CGFloat = 0          // 0 = free; otherwise the crop's pixel W/H
+    var onCropChange: ((CGRect) -> Void)?
+    private var cropDrag: (mode: Int, start: NSPoint, orig: CGRect)?
 
     private let toggleMenuBar = PreviewIconButton()
     private let toggleTerminal = PreviewIconButton()
@@ -7871,6 +8029,123 @@ final class PreviewPaneView: NSView {
         NSGraphicsContext.restoreGraphicsState()
     }
 
+    // --- crop mode ------------------------------------------------------
+
+    private func cropFit(_ cg: CGImage) -> NSRect {
+        let pane = bounds.insetBy(dx: 8, dy: 8)
+        let size = CGSize(width: cg.width, height: cg.height)
+        guard size.width > 0, size.height > 0 else { return pane }
+        let s = min(pane.width / size.width, pane.height / size.height)
+        let w = size.width * s, h = size.height * s
+        return NSRect(x: pane.midX - w / 2, y: pane.midY - h / 2, width: w, height: h)
+    }
+
+    private func cropScreenRect(_ fit: NSRect) -> NSRect {
+        let w = cropRect.width * fit.width
+        let h = cropRect.height * fit.height
+        let x = fit.minX + cropRect.minX * fit.width
+        let y = fit.maxY - cropRect.minY * fit.height - h
+        return NSRect(x: x, y: y, width: w, height: h)
+    }
+
+    private func cropFromScreen(_ p: NSPoint, _ fit: NSRect) -> CGPoint {
+        CGPoint(x: (p.x - fit.minX) / fit.width, y: (fit.maxY - p.y) / fit.height)
+    }
+
+    private func drawCropOverlay(_ fit: NSRect) {
+        let cr = cropScreenRect(fit)
+        palette.barBG.withAlphaComponent(0.6).setFill()
+        let outside = NSBezierPath(rect: fit)
+        outside.append(NSBezierPath(rect: cr))
+        outside.windingRule = .evenOdd
+        outside.fill()
+        palette.label.withAlphaComponent(0.25).setStroke()
+        for i in 1..<3 {
+            let x = cr.minX + cr.width * CGFloat(i) / 3
+            let y = cr.minY + cr.height * CGFloat(i) / 3
+            NSBezierPath.strokeLine(from: NSPoint(x: x, y: cr.minY), to: NSPoint(x: x, y: cr.maxY))
+            NSBezierPath.strokeLine(from: NSPoint(x: cr.minX, y: y), to: NSPoint(x: cr.maxX, y: y))
+        }
+        palette.accent.setStroke()
+        let border = NSBezierPath(rect: cr)
+        border.lineWidth = 1.5
+        border.stroke()
+        palette.accent.setFill()
+        for c in [NSPoint(x: cr.minX, y: cr.minY), NSPoint(x: cr.maxX, y: cr.minY),
+                  NSPoint(x: cr.maxX, y: cr.maxY), NSPoint(x: cr.minX, y: cr.maxY)] {
+            NSBezierPath(ovalIn: NSRect(x: c.x - 4, y: c.y - 4, width: 8, height: 8)).fill()
+        }
+    }
+
+    func setCrop(_ rect: CGRect, aspect: CGFloat) {
+        cropAspect = aspect
+        cropRect = rect
+    }
+
+    private func cropHandleHit(_ p: NSPoint, _ cr: NSRect) -> Int {
+        let r: CGFloat = 10
+        let corners = [NSPoint(x: cr.minX, y: cr.minY), NSPoint(x: cr.maxX, y: cr.minY),
+                       NSPoint(x: cr.maxX, y: cr.maxY), NSPoint(x: cr.minX, y: cr.maxY)]
+        for (i, c) in corners.enumerated() where hypot(p.x - c.x, p.y - c.y) <= r { return i + 1 }
+        return cr.contains(p) ? 0 : 5
+    }
+
+    private func updateCrop(_ drag: (mode: Int, start: NSPoint, orig: CGRect),
+                            _ p: NSPoint, _ fit: NSRect) {
+        var r = drag.orig
+        let s = cropFromScreen(drag.start, fit)
+        let e = cropFromScreen(p, fit)
+        switch drag.mode {
+        case 0:                                   // move
+            r.origin.x = drag.orig.minX + (e.x - s.x)
+            r.origin.y = drag.orig.minY + (e.y - s.y)
+        case 1:                                   // top-left
+            r.origin.x = min(drag.orig.maxX - 0.05, drag.orig.minX + (e.x - s.x))
+            r.origin.y = min(drag.orig.maxY - 0.05, drag.orig.minY + (e.y - s.y))
+            r.size.width = drag.orig.maxX - r.origin.x
+            r.size.height = drag.orig.maxY - r.origin.y
+        case 2:                                   // top-right
+            r.origin.y = min(drag.orig.maxY - 0.05, drag.orig.minY + (e.y - s.y))
+            r.size.width = max(0.05, drag.orig.width + (e.x - s.x))
+            r.size.height = drag.orig.maxY - r.origin.y
+        case 3:                                   // bottom-right
+            r.size.width = max(0.05, drag.orig.width + (e.x - s.x))
+            r.size.height = max(0.05, drag.orig.height + (e.y - s.y))
+        case 4:                                   // bottom-left
+            r.origin.x = min(drag.orig.maxX - 0.05, drag.orig.minX + (e.x - s.x))
+            r.size.width = drag.orig.maxX - r.origin.x
+            r.size.height = max(0.05, drag.orig.height + (e.y - s.y))
+        default:                                  // a fresh rect
+            r = CGRect(x: min(s.x, e.x), y: min(s.y, e.y),
+                       width: abs(e.x - s.x), height: abs(e.y - s.y))
+        }
+        if cropAspect > 0 { r = constrainedCrop(r) }
+        r = clampedCrop(r)
+        cropRect = r
+        onCropChange?(r)
+    }
+
+    private func clampedCrop(_ r: CGRect) -> CGRect {
+        var out = r
+        out.size.width = max(0.02, min(1, out.size.width))
+        out.size.height = max(0.02, min(1, out.size.height))
+        out.origin.x = max(0, min(1 - out.size.width, out.origin.x))
+        out.origin.y = max(0, min(1 - out.size.height, out.origin.y))
+        return out
+    }
+
+    // Keep the crop's pixel aspect at cropAspect: h = w * (imgW/imgH) / aspect.
+    private func constrainedCrop(_ r: CGRect) -> CGRect {
+        guard let cg = cacheImage, cg.height > 0, cropAspect > 0 else { return r }
+        let imgAspect = CGFloat(cg.width) / CGFloat(cg.height)
+        var out = r
+        out.size.height = out.size.width * imgAspect / cropAspect
+        if out.size.height > 1 { out.size.height = 1; out.size.width = cropAspect / imgAspect }
+        out.origin.y = min(out.origin.y, 1 - out.size.height)
+        out.origin.x = min(out.origin.x, 1 - out.size.width)
+        return out
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         // A dark frame fills the whole column (Aether's preview panel) and the
         // wallpaper is centred inside it, so the picture never floats on the
@@ -7880,7 +8155,16 @@ final class PreviewPaneView: NSView {
 
         let path = model?.imagePath ?? ""
         let screen = self.screen
-        if screen.width > 1, screen.height > 1, !path.isEmpty {
+        if cropMode {
+            // The whole picture, fit, with the crop rect over it.
+            if screen.width > 1, !path.isEmpty { ensureImage(path: path, screen: screen) }
+            if cachePath == path, let cg = cacheImage {
+                let fit = cropFit(cg)
+                NSGraphicsContext.current?.imageInterpolation = .high
+                NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height)).draw(in: fit)
+                drawCropOverlay(fit)
+            }
+        } else if screen.width > 1, screen.height > 1, !path.isEmpty {
             ensureImage(path: path, screen: screen)
             if let cg = editedImage {
                 drawWallpaper(cg, in: screen)
@@ -7891,12 +8175,8 @@ final class PreviewPaneView: NSView {
                               centerX: screen.midX, midTop: bounds.height - screen.midY,
                               height: bounds.height)
             }
-        }
-        if showMenuBar, screen.width > 1, screen.height > 1 {
-            drawMenuBar(in: screen)
-        }
-        if showTerminal, screen.width > 1, screen.height > 1 {
-            drawTerminal(in: screen)
+            if showMenuBar { drawMenuBar(in: screen) }
+            if showTerminal { drawTerminal(in: screen) }
         }
         // the frame line, drawn on every edge so the panel reads as a frame
         palette.muted.withAlphaComponent(0.3).setStroke()
@@ -7910,6 +8190,11 @@ final class PreviewPaneView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        if cropMode, cachePath == (model?.imagePath ?? ""), let cg = cacheImage {
+            let fit = cropFit(cg)
+            cropDrag = (cropHandleHit(p, cropScreenRect(fit)), p, cropRect)
+            return
+        }
         if showTerminal, showCode, let i = tabRects.firstIndex(where: { $0.contains(p) }) {
             if i != selectedLanguage { selectedLanguage = i; needsDisplay = true }
             return
@@ -7922,8 +8207,12 @@ final class PreviewPaneView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard dragging else { return }
         let p = convert(event.locationInWindow, from: nil)
+        if let d = cropDrag, let cg = cacheImage {
+            updateCrop(d, p, cropFit(cg))
+            return
+        }
+        guard dragging else { return }
         let s = screen
         guard s.width > 0, s.height > 0 else { return }
         termOrigin.x = min(max(0, dragOrigin.x + (p.x - dragStart.x) / s.width),
@@ -7933,7 +8222,10 @@ final class PreviewPaneView: NSView {
         needsDisplay = true
     }
 
-    override func mouseUp(with event: NSEvent) { dragging = false }
+    override func mouseUp(with event: NSEvent) {
+        if cropDrag != nil { cropDrag = nil; return }
+        dragging = false
+    }
 
     // Decode only when the picture or the needed pixel size changes; a size
     // change reuses the same path and re-decodes to the new cap.
@@ -8115,6 +8407,15 @@ final class PaletteCanvasView: NSView {
     // picture again. The central pane is the edit surface.
     func setEditedImage(_ cg: CGImage?) {
         preview.editedImage = cg
+    }
+
+    // The wallpaper editor's crop mode lives on the central preview.
+    func setCropMode(_ on: Bool) { preview.cropMode = on }
+    func setCrop(_ rect: CGRect, aspect: CGFloat) { preview.setCrop(rect, aspect: aspect) }
+    func syncCrop(_ rect: CGRect) { preview.cropRect = rect }
+    var onCropChange: ((CGRect) -> Void)? {
+        get { preview.onCropChange }
+        set { preview.onCropChange = newValue }
     }
 
     private func markTree(_ view: NSView) {
@@ -8541,12 +8842,67 @@ final class ThemeEditor {
         root.wallpaperEditor.onGradeStops = { [weak self] stops in
             self?.editorState.edit("palette") { $0.paletteStops = stops }
         }
+        root.wallpaperEditor.onCropToggle = { [weak self] on in
+            guard let self else { return }
+            self.root.paletteCanvas.setCropMode(on)
+            if on {
+                let f = self.editorState.filters
+                self.root.paletteCanvas.setCrop(CGRect(x: f.cropX, y: f.cropY,
+                                                       width: f.cropW, height: f.cropH), aspect: 0)
+            }
+        }
+        root.wallpaperEditor.onCropPreset = { [weak self] ratio in
+            guard let self else { return }
+            if ratio == 0 {
+                self.root.paletteCanvas.setCrop(CGRect(x: 0, y: 0, width: 1, height: 1), aspect: 0)
+                self.editorState.edit("crop") { $0.cropX = 0; $0.cropY = 0; $0.cropW = 1; $0.cropH = 1 }
+                return
+            }
+            let size = self.editBase?.extent.size ?? CGSize(width: 1, height: 1)
+            let rect = editorCropRect(ratio: ratio, imageSize: size)
+            self.root.paletteCanvas.setCrop(rect, aspect: CGFloat(ratio))
+            self.editorState.edit("crop") {
+                $0.cropX = rect.minX; $0.cropY = rect.minY
+                $0.cropW = rect.width; $0.cropH = rect.height
+            }
+        }
+        root.paletteCanvas.onCropChange = { [weak self] r in
+            self?.editorState.edit("crop") {
+                $0.cropX = r.minX; $0.cropY = r.minY; $0.cropW = r.width; $0.cropH = r.height
+            }
+        }
+        root.wallpaperEditor.onRotate = { [weak self] delta in
+            self?.editorState.edit("rotate") {
+                $0.rotate = ((($0.rotate + delta).truncatingRemainder(dividingBy: 360)) + 360)
+                    .truncatingRemainder(dividingBy: 360)
+            }
+        }
+        root.wallpaperEditor.onFlip = { [weak self] which in
+            self?.editorState.edit("flip") {
+                if which == "h" { $0.flipH.toggle() } else { $0.flipV.toggle() }
+            }
+        }
+        root.wallpaperEditor.onResize = { [weak self] w, h in
+            self?.editorState.edit("resize") { $0.resizeW = w; $0.resizeH = h }
+        }
+        root.wallpaperEditor.onTransformReset = { [weak self] in
+            guard let self else { return }
+            self.editorState.edit(nil) {
+                $0.cropX = 0; $0.cropY = 0; $0.cropW = 1; $0.cropH = 1
+                $0.rotate = 0; $0.flipH = false; $0.flipV = false
+                $0.resizeW = 0; $0.resizeH = 0
+            }
+            self.root.paletteCanvas.setCrop(CGRect(x: 0, y: 0, width: 1, height: 1), aspect: 0)
+        }
         root.wallpaperEditor.onApply = { [weak self] in self?.applyToPalette() }
         editorState.onChange = { [weak self] in
             guard let self else { return }
             self.dirty = true
             self.root.dirty = true
             self.root.wallpaperEditor.syncFromState()
+            let f = self.editorState.filters
+            self.root.paletteCanvas.syncCrop(CGRect(x: f.cropX, y: f.cropY,
+                                                    width: f.cropW, height: f.cropH))
             self.refreshEditedPreview()
         }
         model.onUpdate = { [weak self] in
