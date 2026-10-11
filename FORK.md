@@ -77,6 +77,13 @@ requests are where they can become everyone's. See
   the same wall is by design — see [docs/why-aerospace.md](docs/why-aerospace.md)
   — and `omacosy-float` (`Super+S`) surfaces a buried float. The focus ring no
   longer paints over a window that covers the focused one.
+- **The Theme Studio wallpaper editor does not (yet) include Aether's "Detail"
+  extras** — pixelate, oil paint (`oilPaint`), colour noise (`noise`), fade,
+  clarity and posterize. They are deliberately out of scope while the editor
+  lands: a recipe that carries them still round-trips and renders (the engine
+  keeps unknown fields), but the editor shows no control for them. Adding them
+  needs the engine maths plus a best-effort preview each. Tracked in
+  `notes/PLAN-theme-studio.md`.
 
 ## Your settings
 
