@@ -8787,21 +8787,26 @@ final class PreviewPaneView: NSView {
         }
     }
 
-    // A fake Super+K cheat sheet: the one surface that shows MUTED as the
-    // descriptions, LABEL as the keys, ACCENT as the headings and ITEM_BG as
-    // the keycaps, on the BAR_BG_SOLID card. Sized to the preview and clipped
-    // to it, so it never spills onto the editor's own panels. The keys drop
-    // the "Super+" prefix (the header carries it), which is what lets three
-    // columns stay readable in the narrower preview.
+    // A fake Super+K cheat sheet: MUTED descriptions, LABEL keys, ACCENT
+    // headings and ITEM_BG keycaps on the BAR_BG_SOLID card. Fitted between
+    // the menu bar and the toolbar with a gap top and bottom, and clipped to
+    // the preview so it never spills onto the editor's panels. The keys drop
+    // the "Super+" prefix (the header carries it). The terminal stands down
+    // while the sheet is up (see the draw dispatch).
     private func drawCheatsheet(in screen: NSRect) {
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: screen).addClip()
         defer { NSGraphicsContext.restoreGraphicsState() }
 
         let r = resolvedRoles()
-        let w = screen.width * 0.95
-        let h = screen.height * 0.93
-        let card = NSRect(x: screen.midX - w / 2, y: screen.midY - h / 2, width: w, height: h)
+        let margin: CGFloat = 16
+        let gap: CGFloat = 12
+        let menuBarH: CGFloat = 34
+        let toolbarTop = screen.minY + 8 + 22
+        let cardTop = screen.maxY - menuBarH - gap
+        let cardBottom = toolbarTop + gap
+        let card = NSRect(x: screen.minX + margin, y: cardBottom,
+                          width: screen.width - margin * 2, height: max(80, cardTop - cardBottom))
         let cardPath = NSBezierPath(roundedRect: card, xRadius: 10, yRadius: 10)
         r.bar.setFill()
         cardPath.fill()
@@ -8809,7 +8814,7 @@ final class PreviewPaneView: NSView {
         cardPath.lineWidth = 1.5
         cardPath.stroke()
 
-        let pad: CGFloat = 20
+        let pad: CGFloat = 18
         let titleFont = nerdFont("Bold", 13)
         let subFont = nerdFont("Regular", 9)
         let headFont = nerdFont("Bold", 10)
@@ -8825,7 +8830,7 @@ final class PreviewPaneView: NSView {
                      x: titleX + advance("Keyboard Shortcuts", titleFont) + 12,
                      baseline: card.maxY - pad - titleFont.capHeight - 1)
         r.muted.withAlphaComponent(0.3).setFill()
-        NSRect(x: card.minX + pad, y: card.maxY - pad - 28, width: card.width - pad * 2,
+        NSRect(x: card.minX + pad, y: card.maxY - pad - 26, width: card.width - pad * 2,
                height: 1).fill()
 
         struct Row { let head: String?; let key: String; let act: String }
@@ -8834,33 +8839,23 @@ final class PreviewPaneView: NSView {
                 ("1…9", "Focus workspace"),
                 ("⇧1…9", "Move window there"),
                 ("Tab / ⇧Tab", "Next / previous"),
-                ("B", "Back and forth"),
             ]),
             ("Window", [
                 ("← ↓ ↑ →", "Focus a window"),
                 ("⇧← ↓ ↑ →", "Move a window"),
                 ("F", "Fullscreen"),
-                ("N", "Native fullscreen"),
                 ("W", "Close window"),
             ]),
             ("Layout", [
                 ("T", "Toggle floating"),
                 ("J", "Toggle split"),
-                ("− / +", "Resize"),
             ]),
             ("Apps", [
                 ("Return", "Terminal"),
                 ("⇧Return", "Browser"),
                 ("Space", "Raycast"),
                 ("⇧F", "Files"),
-                ("⇧M", "Music"),
-                ("⇧G", "Messenger"),
-                ("⇧E", "Mail"),
                 ("⇧L", "Lock screen"),
-            ]),
-            ("Themes", [
-                ("⇧T", "Next theme"),
-                ("⇧B", "Next wallpaper"),
             ]),
             ("Omacosy", [
                 (",", "Settings"),
@@ -8880,8 +8875,8 @@ final class PreviewPaneView: NSView {
         let contentW = card.width - pad * 2
         let colGap: CGFloat = 24
         let colW = (contentW - colGap * 2) / 3
-        let topY = card.maxY - pad - 44
-        let rowH: CGFloat = 19
+        let topY = card.maxY - pad - 40
+        let rowH: CGFloat = 18
         var colX = card.minX + pad
         for col in cols {
             var y = topY
@@ -8892,9 +8887,9 @@ final class PreviewPaneView: NSView {
                     r.accent.withAlphaComponent(0.45).setFill()
                     NSRect(x: colX, y: y - 5, width: advance(head.uppercased(), headFont),
                            height: 1.5).fill()
-                    y -= rowH + 8
+                    y -= rowH + 7
                 } else if row.key.isEmpty {
-                    y -= 8
+                    y -= 7
                 } else {
                     let kw = advance(row.key, keyFont) + 12
                     let cap = NSRect(x: colX, y: y - 4, width: kw, height: 16)
@@ -9293,7 +9288,9 @@ final class PreviewPaneView: NSView {
                               height: bounds.height)
             }
             if showMenuBar { drawMenuBar(in: screen) }
-            if showTerminal { drawTerminal(in: screen) }
+            // the cheat sheet takes the terminal's place, so it never sits
+            // behind the sheet
+            if showTerminal, !showCheatsheet { drawTerminal(in: screen) }
             if showCheatsheet { drawCheatsheet(in: screen) }
         }
         // the frame line, drawn on every edge so the panel reads as a frame
