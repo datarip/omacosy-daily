@@ -5307,6 +5307,23 @@ enum Materialise {
         "0xff" + (hex.hasPrefix("#") ? hex.dropFirst() : Substring(hex))
     }
 
+    // The per-app overrides (and the tool opacity) as shell assignments, the
+    // same file a materialised edition carries. Empty when the record has none.
+    static func overridesEnv(_ theme: Theme) -> String {
+        var overrides = ""
+        if let op = theme.toolOpacity {
+            overrides += "OMACOSY_TOOL_OPACITY='\(op)'\n"
+        }
+        for app in theme.appOverrides.keys.sorted() {
+            let roles = theme.appOverrides[app]!
+            for role in roles.keys.sorted() {
+                overrides += "OMACOSY_OVR_\(Templates.sanitize(app))_"
+                    + "\(Templates.sanitize(role))='\(roles[role]!)'\n"
+            }
+        }
+        return overrides
+    }
+
     // Omarchy's 22-key palette, written verbatim next to a materialised theme
     // and into an export bundle where a flat colors.toml is expected.
     static func colorsToml(_ rendered: (colors: [String], extended: Extended)) -> String {
@@ -5460,17 +5477,7 @@ enum Materialise {
         // The per-app overrides, shell-sourceable, next to colors.toml. The
         // terminal appliers source it (only when terminal = on) and consult it
         // role by role; an edition with none writes nothing.
-        var overrides = ""
-        if let op = theme.toolOpacity {
-            overrides += "OMACOSY_TOOL_OPACITY='\(op)'\n"
-        }
-        for app in theme.appOverrides.keys.sorted() {
-            let roles = theme.appOverrides[app]!
-            for role in roles.keys.sorted() {
-                overrides += "OMACOSY_OVR_\(Templates.sanitize(app))_"
-                    + "\(Templates.sanitize(role))='\(roles[role]!)'\n"
-            }
-        }
+        let overrides = overridesEnv(theme)
         if !overrides.isEmpty {
             try overrides.write(to: dir.appendingPathComponent("overrides.env"),
                                 atomically: true, encoding: .utf8)
@@ -6077,11 +6084,21 @@ func repoTemplatesDir(_ override: String?) -> String {
     fail("cannot find the theme templates; pass --templates DIR or set OMACOSY_TEMPLATES_DIR")
 }
 
+// The shell pipeline that owns the terminal-tool writers, or nil when it is
+// not installed. OMACOSY_TERM_AUTO_THEME_BIN wins for tests.
+func termAutoThemeBin() -> String? {
+    let env = ProcessInfo.processInfo.environment
+    if let bin = env["OMACOSY_TERM_AUTO_THEME_BIN"], !bin.isEmpty { return bin }
+    let path = NSHomeDirectory() + "/.local/bin/omacosy-term-auto-theme"
+    return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+}
+
 // Phase 9: write the shareable bundle into a directory — the theme record,
-// its flat colors.toml and the Aether-derived app configs (Zed, the VS Code
-// extension, neovim.lua). The terminal-app configs come from
-// omacosy-term-auto-theme in a later step. Ported from Aether's GenerateOnly /
-// applier_zed / applier_vscode (https://github.com/omacom/aether, MIT).
+// its flat colors.toml, the Aether-derived app configs (Zed, the VS Code
+// extension, neovim.lua) and, via omacosy-term-auto-theme's own writers, the
+// terminal-tool configs so an export matches what an apply produces. Ported
+// from Aether's GenerateOnly / applier_zed / applier_vscode
+// (https://github.com/omacom/aether, MIT).
 func exportBundle(_ theme: Theme, to path: String, templates: String?) throws -> String {
     let dir = Wallpapers.resolved(path)
     try FileManager.default.createDirectory(at: URL(fileURLWithPath: dir),
@@ -6093,6 +6110,11 @@ func exportBundle(_ theme: Theme, to path: String, templates: String?) throws ->
     let rendered = theme.palette.rendered()
     try Materialise.colorsToml(rendered)
         .write(toFile: dir + "/colors.toml", atomically: true, encoding: .utf8)
+
+    let overrides = Materialise.overridesEnv(theme)
+    if !overrides.isEmpty {
+        try overrides.write(toFile: dir + "/overrides.env", atomically: true, encoding: .utf8)
+    }
 
     let root = repoTemplatesDir(templates)
     var base = ThemeVariables.build(colors: rendered.colors, extended: rendered.extended,
@@ -6122,6 +6144,26 @@ func exportBundle(_ theme: Theme, to path: String, templates: String?) throws ->
 
     try render("neovim.lua", app: "nvim")
         .write(toFile: dir + "/neovim.lua", atomically: true, encoding: .utf8)
+
+    // The terminal-tool configs come from the shell pipeline's own writers, so
+    // an export matches what an apply produces. Absent or failing, the bundle
+    // still carries the JSON and the editor configs.
+    if let script = termAutoThemeBin() {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: script)
+        proc.arguments = ["export-theme", dir, dir, theme.name]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            if proc.terminationStatus != 0 {
+                warn("the terminal app export failed (status \(proc.terminationStatus))")
+            }
+        } catch {
+            warn("could not run \(script): \(error.localizedDescription)")
+        }
+    }
 
     return dir
 }
