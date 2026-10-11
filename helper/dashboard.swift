@@ -3152,6 +3152,7 @@ final class EditorPanelDoc: NSView {
     private let insetL: CGFloat = 12
     private let insetR: CGFloat = 12
     private var groupTops: [(title: String, top: CGFloat)] = []
+    private var groupFrames: [(top: CGFloat, bottom: CGFloat)] = []
     private var autoTop: CGFloat = 0
     private var curveTop: CGFloat = 0
     private var gradeTop: CGFloat = 0
@@ -3435,16 +3436,19 @@ final class EditorPanelDoc: NSView {
         blurToggle.frame = rect(top: top, h: 24, x: insetL + contentW - 46, w: 46)
         top += 24 + 10
         groupTops.removeAll()
+        groupFrames.removeAll()
         var i = 0
         for group in EditorFilterFields.groups {
             groupTops.append((group.title, top))
             top += 30
+            let blockTop = top
             for _ in group.fields {
                 sliders[i].frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
                                         x: insetL, w: contentW)
                 top += AdjustmentSliderView.rowHeight
                 i += 1
             }
+            groupFrames.append((blockTop, top))
             top += 10
         }
         // Palette Grade: 2-4 colour stops plus a strength slider.
@@ -3503,6 +3507,17 @@ final class EditorPanelDoc: NSView {
         NSRect(x: insetL, y: bounds.height - (top - 6), width: contentW, height: 1).fill()
     }
 
+    // A rounded 1 px frame around a multi-slider block: the heading stays
+    // above it, the controls sit inside, as in Aether's own panels.
+    private func drawGroupFrame(top: CGFloat, bottom: CGFloat) {
+        let r = NSRect(x: insetL - 8, y: bounds.height - bottom - 6,
+                       width: contentW + 16, height: (bottom - top) + 12)
+        let path = NSBezierPath(roundedRect: r, xRadius: 8, yRadius: 8)
+        palette.muted.withAlphaComponent(0.4).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         drawRule(autoTop)
         drawTopLeft("AUTO ENHANCE", nerdFont("Bold", 11), palette.muted,
@@ -3517,9 +3532,11 @@ final class EditorPanelDoc: NSView {
         drawMidLeft("Blur Desktop", nerdFont("Bold", 12), palette.label,
                     x: insetL, midTop: blurTop + 12, height: bounds.height)
         for (title, top) in groupTops {
-            drawRule(top)
             drawTopLeft(title, nerdFont("Bold", 12), palette.accent,
                         x: insetL, top: top, height: bounds.height)
+        }
+        for (top, bottom) in groupFrames {
+            drawGroupFrame(top: top, bottom: bottom)
         }
         drawRule(gradeTop)
         drawTopLeft("Palette Grade", nerdFont("Bold", 12), palette.accent,
@@ -7524,6 +7541,8 @@ final class PaletteBuilderDoc: NSView {
     private var gradientTop: CGFloat = 0
     private var editorTop: CGFloat = 0
     private var adjTop: CGFloat = 0
+    private var adjSliderTop: CGFloat = 0
+    private var adjSliderBottom: CGFloat = 0
     private var contrastTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
@@ -7583,7 +7602,7 @@ final class PaletteBuilderDoc: NSView {
         h += 34 + 10 + 60 + 60                              // Presets, From Colour, Gradient
         if editorVisible { h += ColorInspectorView.viewHeight + 20 }
         h += 24                                             // Adjustments
-        h += CurveEditorView.viewHeight + 8
+        h += CurveEditorView.viewHeight + 14
         h += CGFloat(sliders.count) * AdjustmentSliderView.rowHeight
         h += 38 + CGFloat(contrast.count) * 26              // Accessibility
         h += 10
@@ -7636,11 +7655,13 @@ final class PaletteBuilderDoc: NSView {
         adjTop = top
         top += 24
         curveView.frame = rect(top: top, h: CurveEditorView.viewHeight, x: insetL, w: contentW)
-        top += CurveEditorView.viewHeight + 8
+        top += CurveEditorView.viewHeight + 14
+        adjSliderTop = top
         for s in sliders {
             s.frame = rect(top: top, h: AdjustmentSliderView.rowHeight, x: insetL, w: contentW)
             top += AdjustmentSliderView.rowHeight
         }
+        adjSliderBottom = top
         top += 8
         contrastTop = top
     }
@@ -7655,10 +7676,8 @@ final class PaletteBuilderDoc: NSView {
     override func draw(_ dirtyRect: NSRect) {
         drawMidLeft("Mode", nerdFont("Bold", 12), palette.label,
                     x: insetL, midTop: modeTop + 16, height: bounds.height)
-        drawRule(methodTop)
         drawMidLeft("Method", nerdFont("Bold", 12), palette.label,
                     x: insetL, midTop: methodTop + 16, height: bounds.height)
-        drawRule(presetsTop)
         drawMidLeft("Presets", nerdFont("Bold", 12), palette.label,
                     x: insetL, midTop: presetsTop + 16, height: bounds.height)
         drawRule(fromColorTop)
@@ -7671,6 +7690,13 @@ final class PaletteBuilderDoc: NSView {
         drawRule(adjTop)
         drawTopLeft("Adjustments", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: adjTop, height: bounds.height)
+        // a rounded 1 px frame around the twelve slider rows, as in Aether
+        let frame = NSRect(x: insetL - 8, y: bounds.height - adjSliderBottom - 6,
+                           width: contentW + 16, height: (adjSliderBottom - adjSliderTop) + 12)
+        let path = NSBezierPath(roundedRect: frame, xRadius: 8, yRadius: 8)
+        palette.muted.withAlphaComponent(0.4).setStroke()
+        path.lineWidth = 1
+        path.stroke()
         drawRule(contrastTop)
         drawTopLeft("Accessibility", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: contrastTop, height: bounds.height)
