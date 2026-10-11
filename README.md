@@ -718,7 +718,11 @@ picture: **Customize** on hover opens a new theme from one in the Theme
 Editor, and a saved variation carries a named card of its own with
 **Edit**. The editor is complete — Palette Builder, live previews and
 Wallpaper Editor: **Save** stores the theme and its edited wallpaper, and
-**Apply & Save** puts them on the desktop.
+**Apply & Save** puts them on the desktop. **Export** writes a shareable
+folder — the theme plus its Zed, VS Code, Neovim and terminal configs — and
+**Import** reads one back, or a `colors.toml` or a Base16 scheme; a name
+already in your library is offered Rename or Replace
+([docs/theme-studio.md](docs/theme-studio.md)).
 
 **How the colors are chosen.** The bar's own background keeps the
 measurement omacosy already makes to match the real macOS menu bar — a

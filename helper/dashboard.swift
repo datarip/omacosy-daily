@@ -591,6 +591,8 @@ final class ButtonView: NSView {
     // a quieter fill for the second action in a dialog or footer row
     var secondary = false { didSet { needsDisplay = true } }
     var busy = false { didSet { needsDisplay = true } }
+    // what a busy button says, for work that is not a save
+    var busyTitle = "Saving…"
     var danger = false { didSet { needsDisplay = true } }
     // a brief dim on the press, so a tap always shows even when the action
     // it fires is instant
@@ -621,7 +623,7 @@ final class ButtonView: NSView {
                    height: bounds.height).fill()
             NSGraphicsContext.restoreGraphicsState()
         }
-        let text = busy ? "Saving…" : title
+        let text = busy ? busyTitle : title
         let font = nerdFont("Bold", fontSize)
         let ink = (secondary && !busy) ? palette.label : palette.barBG
         if centeredByBounds {
@@ -1492,6 +1494,114 @@ final class DeleteConfirm: NSObject {
     }
 }
 
+// --- import collision ------------------------------------------------------
+
+// A small centred card for a theme import whose id is already in the library.
+// The engine refuses without a flag, so the UI asks: Rename keeps both (the
+// import gets a fresh id), Replace overwrites the saved record.
+final class ImportConflictView: NSView {
+    var titleText = "" { didSet { needsDisplay = true } }
+    var subtitleText = "" { didSet { needsDisplay = true } }
+    private let renameButton = ButtonView()
+    private let replaceButton = ButtonView()
+    var onRename: (() -> Void)?
+    var onReplace: (() -> Void)?
+
+    init(width: CGFloat) {
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: 132))
+        wantsLayer = true
+        renameButton.title = "Rename"
+        renameButton.secondary = true
+        renameButton.fontSize = 12
+        renameButton.onClick = { [weak self] in self?.onRename?() }
+        addSubview(renameButton)
+        replaceButton.title = "Replace"
+        replaceButton.danger = true
+        replaceButton.fontSize = 12
+        replaceButton.onClick = { [weak self] in self?.onReplace?() }
+        addSubview(replaceButton)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layout() {
+        super.layout()
+        let bw: CGFloat = 96, bh: CGFloat = 26
+        replaceButton.frame = NSRect(x: bounds.width - 20 - bw, y: 18, width: bw, height: bh)
+        renameButton.frame = NSRect(x: bounds.width - 20 - bw - 8 - bw, y: 18, width: bw, height: bh)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let corner = min(windowCornerRadius(12), min(bounds.width, bounds.height) / 2)
+        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                                xRadius: corner, yRadius: corner)
+        palette.barBG.setFill(); card.fill()
+        palette.accent.withAlphaComponent(0.55).setStroke(); card.lineWidth = 1; card.stroke()
+        let tf = nerdFont("Bold", 13)
+        drawTopLeft(truncate(titleText, tf, bounds.width - 40), tf, palette.label,
+                    x: 20, top: 22, height: bounds.height)
+        drawTopLeft(truncate(subtitleText, nerdFont("Regular", 11), bounds.width - 40),
+                    nerdFont("Regular", 11), palette.muted, x: 20, top: 50, height: bounds.height)
+    }
+}
+
+final class ImportConflict: NSObject {
+    private static var current: ImportConflict?
+    private let window: PickerWindow
+    private let root: ImportConflictView
+    private var keyMonitor: Any?
+
+    private init(title: String, subtitle: String,
+                 onRename: @escaping () -> Void, onReplace: @escaping () -> Void) {
+        let width: CGFloat = 420
+        root = ImportConflictView(width: width)
+        root.titleText = title
+        root.subtitleText = subtitle
+        window = PickerWindow(contentRect: root.frame,
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        super.init()
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.level = .popUpMenu
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        window.contentView = root
+        root.onRename = { [weak self] in self?.close(); onRename() }
+        root.onReplace = { [weak self] in self?.close(); onReplace() }
+    }
+
+    static func present(from host: NSView, title: String, subtitle: String,
+                        onRename: @escaping () -> Void, onReplace: @escaping () -> Void) {
+        current?.close()
+        let c = ImportConflict(title: title, subtitle: subtitle,
+                               onRename: onRename, onReplace: onReplace)
+        guard let win = host.window else { return }
+        let f = win.frame
+        c.window.setFrameOrigin(NSPoint(x: f.midX - c.window.frame.width / 2,
+                                        y: f.midY - c.window.frame.height / 2))
+        current = c
+        win.addChildWindow(c.window, ordered: .above)
+        c.show()
+    }
+
+    private func show() {
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] e in
+            if e.keyCode == 53 { self?.close(); return nil }               // Esc cancels
+            if e.keyCode == 36 || e.keyCode == 76 { self?.root.onRename?(); return nil }
+            return e
+        }
+    }
+
+    private func close() {
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        window.parent?.removeChildWindow(window)
+        window.orderOut(nil)
+        ImportConflict.current = nil
+    }
+}
+
 final class AppPicker: NSObject, NSWindowDelegate {
     private static var current: AppPicker?
     private let window: NSWindow
@@ -2359,6 +2469,54 @@ func hexColor(_ s: String) -> NSColor? {
     if h.hasPrefix("#") { h.removeFirst() }
     guard h.count == 6, let v = UInt64(h, radix: 16) else { return nil }
     return color(fromARGB: 0xff000000 | v)
+}
+
+// The first JSON object in a command's combined output: the engine prints a
+// JSON line before its human line, so success is parsed from the front.
+func firstJSONObject(in output: String) -> [String: Any]? {
+    for line in output.split(separator: "\n") {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("{") else { continue }
+        if let obj = (try? JSONSerialization.jsonObject(with: Data(t.utf8))) as? [String: Any] {
+            return obj
+        }
+    }
+    return nil
+}
+
+// A theme import's file types: our JSON, an Omarchy colors.toml and a Base16
+// YAML (the engine also sniffs the content), plus plain text so an
+// extensionless file can be picked.
+func importContentTypes() -> [UTType] {
+    var types: [UTType] = [.json, .yaml, .plainText]
+    if let toml = UTType(filenameExtension: "toml") { types.append(toml) }
+    return types
+}
+
+// A fresh bundle folder named after the theme id, -2/-3 on a clash, so an
+// export never overwrites an earlier one.
+func uniqueExportDir(in parent: String, id: String) -> String {
+    let fm = FileManager.default
+    var dir = parent + "/" + id
+    var n = 2
+    while fm.fileExists(atPath: dir) {
+        dir = parent + "/\(id)-\(n)"
+        n += 1
+    }
+    return dir
+}
+
+// The engine prefixes its errors with "omacosy-themecore: "; hand back a line
+// a person can read.
+func importErrorMessage(_ output: String) -> String {
+    for line in output.split(separator: "\n") {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("omacosy-themecore:") else { continue }
+        let msg = String(t.dropFirst("omacosy-themecore:".count))
+            .trimmingCharacters(in: .whitespaces)
+        if !msg.isEmpty { return "Import failed. " + msg }
+    }
+    return "Import failed."
 }
 
 // WCAG relative luminance, so the Edit pill can pick a label colour that
@@ -8807,6 +8965,8 @@ final class EditorFooterView: NSView {
     let saveButton = ButtonView()
     let saveAsButton = ButtonView()
     let applyButton = ButtonView()
+    let importButton = ButtonView()
+    let exportButton = ButtonView()
     var dirty = false { didSet { needsDisplay = true } }
     var message: (text: String, red: Bool)? { didSet { needsDisplay = true } }
 
@@ -8816,6 +8976,14 @@ final class EditorFooterView: NSView {
         saveAsButton.secondary = true
         saveButton.title = "Save"
         applyButton.title = "Apply & Save"
+        importButton.title = "Import"
+        importButton.secondary = true
+        importButton.busyTitle = "Importing…"
+        exportButton.title = "Export"
+        exportButton.secondary = true
+        exportButton.busyTitle = "Exporting…"
+        addSubview(importButton)
+        addSubview(exportButton)
         addSubview(saveAsButton)
         addSubview(saveButton)
         addSubview(applyButton)
@@ -8830,13 +8998,20 @@ final class EditorFooterView: NSView {
         applyButton.frame = NSRect(x: bounds.width - margin - w, y: y, width: w, height: h)
         saveButton.frame = NSRect(x: applyButton.frame.minX - 8 - w, y: y, width: w, height: h)
         saveAsButton.frame = NSRect(x: saveButton.frame.minX - 8 - w, y: y, width: w, height: h)
+        // import/export are a separate pair: a wider gap sets the file group
+        // apart from the save group
+        exportButton.frame = NSRect(x: saveAsButton.frame.minX - 20 - w, y: y, width: w, height: h)
+        importButton.frame = NSRect(x: exportButton.frame.minX - 8 - w, y: y, width: w, height: h)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         palette.muted.withAlphaComponent(0.25).setFill()
         NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1).fill()
         if let message {
-            drawMidLeft(message.text, nerdFont("Regular", 11),
+            // the buttons sit on the right; keep the message clear of them
+            let maxW = max(0, importButton.frame.minX - 16 - 10)
+            drawMidLeft(truncate(message.text, nerdFont("Regular", 11), maxW),
+                        nerdFont("Regular", 11),
                         message.red ? .systemRed : palette.muted,
                         x: 16, midTop: bounds.height / 2, height: bounds.height)
         } else if dirty {
@@ -9204,6 +9379,8 @@ final class ThemeEditor {
         root.footer.saveButton.onClick = { [weak self] in self?.startSave(newID: false, action: .none) }
         root.footer.saveAsButton.onClick = { [weak self] in self?.startSave(newID: true, action: .none) }
         root.footer.applyButton.onClick = { [weak self] in self?.startSave(newID: false, action: .apply) }
+        root.footer.exportButton.onClick = { [weak self] in self?.startExport() }
+        root.footer.importButton.onClick = { [weak self] in self?.startImport() }
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
@@ -9549,7 +9726,11 @@ final class ThemeEditor {
 
     // --- save / apply -------------------------------------------------------
 
-    private enum SaveAction { case none, apply }
+    private enum SaveAction {
+        case none
+        case apply
+        case export(String)   // the folder the user picked for the bundle
+    }
 
     private func startSave(newID: Bool, action: SaveAction) {
         let name = root.nameValue
@@ -9692,9 +9873,14 @@ final class ThemeEditor {
         dirty = false
         root.dirty = false
         let name = fresh["name"] as? String ?? root.nameValue
-        if action == .apply, let id = fresh["id"] as? String {
-            performApply(id: id, name: name)
-        } else {
+        switch action {
+        case .apply:
+            if let id = fresh["id"] as? String { performApply(id: id, name: name) }
+            else { finish(with: "Saved \(name)") }
+        case .export(let parent):
+            if let id = fresh["id"] as? String { performExport(id: id, into: parent) }
+            else { showMessage("Export needs a saved theme.", red: true) }
+        case .none:
             finish(with: "Saved \(name)")
         }
     }
@@ -9725,6 +9911,107 @@ final class ThemeEditor {
                 self.finish(with: "Applied \(name)")
             }
         }
+    }
+
+    // --- import / export ----------------------------------------------------
+
+    private enum ImportMode { case ask, rename, replace }
+
+    // The engine exports a stored theme by id, so a draft (or an edited
+    // edition) is saved first; the bundle then lands in a new folder named
+    // after the theme inside the folder the user picks.
+    private func startExport() {
+        if record == nil || dirty {
+            guard !root.nameValue.isEmpty else {
+                showMessage("Give the theme a name before exporting.", red: true)
+                return
+            }
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Export Here"
+        panel.message = "The bundle is written to a new folder named after the theme."
+        panel.beginSheetModal(for: window) { [weak self] resp in
+            guard let self, resp == .OK, let url = panel.url else { return }
+            if let id = self.record?["id"] as? String, !self.dirty {
+                self.performExport(id: id, into: url.path)
+            } else {
+                self.startSave(newID: false, action: .export(url.path))
+            }
+        }
+    }
+
+    private func performExport(id: String, into parent: String) {
+        root.footer.exportButton.busy = true
+        root.footer.message = nil
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            let dir = uniqueExportDir(in: parent, id: id)
+            let (code, out) = shell("\(themecoreBin()) theme export \(shellQuote(id)) "
+                + "--bundle \(shellQuote(dir)) --json 2>&1")
+            DispatchQueue.main.async {
+                self.root.footer.exportButton.busy = false
+                guard code == 0 else {
+                    self.showMessage("Export failed.", red: true, seconds: 6)
+                    return
+                }
+                let path = firstJSONObject(in: out)?["bundle"] as? String ?? dir
+                self.showMessage("Exported to \(path)", red: false, seconds: 8)
+            }
+        }
+    }
+
+    // Import reads our JSON, a flat colors.toml or a Base16 (YAML) scheme.
+    // The engine refuses an id that already exists unless told which way to
+    // go, so the first try asks, then Rename or Replace re-runs with its flag.
+    private func startImport() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        panel.message = "Omacosy JSON, a colors.toml or a Base16 (YAML) scheme."
+        panel.allowedContentTypes = importContentTypes()
+        panel.beginSheetModal(for: window) { [weak self] resp in
+            guard let self, resp == .OK, let url = panel.url else { return }
+            self.runImport(file: url.path, mode: .ask)
+        }
+    }
+
+    private func runImport(file: String, mode: ImportMode) {
+        root.footer.importButton.busy = true
+        root.footer.message = nil
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            var flags = ""
+            if mode == .rename { flags = " --rename" }
+            if mode == .replace { flags = " --replace" }
+            let (code, out) = shell("\(themecoreBin()) theme import \(shellQuote(file)) --json\(flags) 2>&1")
+            DispatchQueue.main.async {
+                self.root.footer.importButton.busy = false
+                if code == 0, let obj = firstJSONObject(in: out) {
+                    let name = obj["name"] as? String ?? "theme"
+                    self.showMessage("Imported \(name)", red: false)
+                    return
+                }
+                if mode == .ask, out.lowercased().contains("already exists") {
+                    self.confirmImport(file: file)
+                    return
+                }
+                self.showMessage(importErrorMessage(out), red: true, seconds: 6)
+            }
+        }
+    }
+
+    private func confirmImport(file: String) {
+        ImportConflict.present(from: root.footer,
+                               title: "Theme Already Exists",
+                               subtitle: "A theme with this name is already saved. Keep both, or replace the saved one?",
+                               onRename: { [weak self] in self?.runImport(file: file, mode: .rename) },
+                               onReplace: { [weak self] in self?.runImport(file: file, mode: .replace) })
     }
 
     private func show() {
