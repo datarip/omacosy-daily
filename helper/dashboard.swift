@@ -3279,7 +3279,6 @@ final class ThemesTabView: NSView, ScrollStepTab {
         }
         grid.selectionMode = selectionMode
         selectButton.title = selectionMode ? "Done" : "Select"
-        deleteButton.isHidden = !selectionMode
         updateDeleteButton()
         needsLayout = true
     }
@@ -3292,9 +3291,14 @@ final class ThemesTabView: NSView, ScrollStepTab {
         updateDeleteButton()
     }
 
+    // The Delete button only exists once something is ticked — an always-on
+    // red button with nothing to delete is a trap — and vanishes when the
+    // last checkbox is cleared.
     private func updateDeleteButton() {
         let n = grid.selected.count
-        deleteButton.title = n == 0 ? "Delete" : "Delete \(n)"
+        deleteButton.isHidden = !selectionMode || n == 0
+        deleteButton.title = "Delete \(n)"
+        needsDisplay = true
     }
 
     // Esc / Delete reach here from the dashboard's key monitor while a
