@@ -613,11 +613,19 @@ final class ButtonView: NSView {
             r.fill()
         }
         if progress >= 0 {
+            // Busy state: a light dim so the click is acknowledged at once,
+            // plus a real progress bar along the bottom edge. The label stays
+            // readable on top and the button colour never looks "changed".
+            palette.barBG.withAlphaComponent(0.15).setFill()
+            r.fill()
             NSGraphicsContext.saveGraphicsState()
             r.addClip()
-            NSColor.black.withAlphaComponent(0.28).setFill()
+            let barH: CGFloat = 3
+            palette.barBG.withAlphaComponent(0.25).setFill()
+            NSRect(x: 0, y: 0, width: bounds.width, height: barH).fill()
+            palette.barBG.withAlphaComponent(0.85).setFill()
             NSRect(x: 0, y: 0, width: bounds.width * min(max(progress, 0), 1),
-                   height: bounds.height).fill()
+                   height: barH).fill()
             NSGraphicsContext.restoreGraphicsState()
         }
         let text = busy ? "Saving…" : title
@@ -9070,6 +9078,7 @@ final class ThemeEditor {
     private var applyProgressTimer: Timer?
     private var applyProgressGeneration = -1
     private var applyProgressSafety: DispatchWorkItem?
+    private var applyProgressStarted = Date.distantPast
 
     private init(subject: EditorSubject, size: NSSize, status: ((String) -> Void)?) {
         self.subject = subject
@@ -9358,13 +9367,14 @@ final class ThemeEditor {
         }
     }
 
-    // The button fills left to right while the render runs; the growth eases
-    // towards 92% (a render has no progress to report), then snaps to 100%
-    // when the palette is really up to date.
+    // The button shows a bottom progress bar while the render runs; the fill
+    // eases towards 92% (a render has no progress to report), then snaps to
+    // 100% when the palette is really up to date.
     private func startApplyProgress() {
-        completeApplyProgress()
+        stopApplyProgress()
         applyProgressActive = true
         applyProgressGeneration = model.paletteGeneration
+        applyProgressStarted = Date()
         root.wallpaperEditor.setApplyProgress(0)
         var p: CGFloat = 0
         let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] t in
@@ -9379,16 +9389,32 @@ final class ThemeEditor {
         DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: safety)
     }
 
-    private func completeApplyProgress() {
+    private func stopApplyProgress() {
         applyProgressTimer?.invalidate()
         applyProgressTimer = nil
         applyProgressSafety?.cancel()
         applyProgressSafety = nil
+    }
+
+    private func completeApplyProgress() {
+        applyProgressSafety?.cancel()
+        applyProgressSafety = nil
         guard applyProgressActive else { return }
         applyProgressActive = false
+        // a cache hit can finish in milliseconds: keep the bar moving long
+        // enough that the click is always seen
+        let remaining = max(0, 0.45 - Date().timeIntervalSince(applyProgressStarted))
+        guard remaining > 0 else { finishApplyProgress(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
+            guard let self, !self.applyProgressActive else { return }
+            self.finishApplyProgress()
+        }
+    }
+
+    private func finishApplyProgress() {
+        stopApplyProgress()
         root.wallpaperEditor.setApplyProgress(1)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            // a new apply may have started in the meantime; keep its fill
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, !self.applyProgressActive else { return }
             self.root.wallpaperEditor.setApplyProgress(-1)
         }
