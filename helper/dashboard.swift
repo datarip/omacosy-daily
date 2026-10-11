@@ -3548,7 +3548,7 @@ final class EditorPanelDoc: NSView {
         for (top, bottom) in groupFrames {
             drawGroupFrame(top: top, bottom: bottom)
         }
-        drawRule(gradeTop)
+        // no rule between the last frame and Palette Grade: the frame separates
         drawTopLeft("Palette Grade", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: gradeTop, height: bounds.height)
         drawRule(transformTop)
@@ -7710,7 +7710,7 @@ final class PaletteBuilderDoc: NSView {
         palette.muted.withAlphaComponent(0.4).setStroke()
         path.lineWidth = 1
         path.stroke()
-        drawRule(contrastTop)
+        // no rule between the frame and Accessibility: the frame separates
         drawTopLeft("Accessibility", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: contrastTop, height: bounds.height)
         drawContrast()
