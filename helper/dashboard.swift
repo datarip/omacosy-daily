@@ -2685,6 +2685,14 @@ func uniqueExportDir(in parent: String, id: String) -> String {
     return dir
 }
 
+// The id between the first pair of double quotes, for the engine's
+// `theme "<id>" already exists` message.
+func quotedID(from output: String) -> String? {
+    guard let a = output.firstIndex(of: "\""),
+          let b = output[output.index(after: a)...].firstIndex(of: "\"") else { return nil }
+    return String(output[output.index(after: a)..<b])
+}
+
 // The engine prefixes its errors with "omacosy-themecore: "; hand back a line
 // a person can read.
 func importErrorMessage(_ output: String) -> String {
@@ -10196,24 +10204,26 @@ final class ThemeEditor {
         }
     }
 
-    private func runImport(file: String, mode: ImportMode) {
+    private func runImport(file: String, mode: ImportMode, name: String? = nil) {
         root.footer.importButton.busy = true
         root.footer.message = nil
         DispatchQueue.global().async { [weak self] in
             guard let self else { return }
             var flags = ""
-            if mode == .rename { flags = " --rename" }
-            if mode == .replace { flags = " --replace" }
+            if let name { flags += " --name \(shellQuote(name))" }
+            if mode == .rename { flags += " --rename" }
+            if mode == .replace { flags += " --replace" }
             let (code, out) = shell("\(themecoreBin()) theme import \(shellQuote(file)) --json\(flags) 2>&1")
             DispatchQueue.main.async {
                 self.root.footer.importButton.busy = false
                 if code == 0, let obj = firstJSONObject(in: out) {
-                    let name = obj["name"] as? String ?? "theme"
-                    self.showMessage("Imported \(name)", red: false)
+                    NamePrompt.closeCurrent()
+                    let imported = obj["name"] as? String ?? "theme"
+                    self.showMessage("Imported \(imported)", red: false)
                     return
                 }
                 if mode == .ask, out.lowercased().contains("already exists") {
-                    self.confirmImport(file: file)
+                    self.confirmImport(file: file, existingID: quotedID(from: out))
                     return
                 }
                 self.showMessage(importErrorMessage(out), red: true, seconds: 6)
@@ -10221,12 +10231,33 @@ final class ThemeEditor {
         }
     }
 
-    private func confirmImport(file: String) {
+    // The id collides: ask Rename or Replace. Rename collects the new name in
+    // the same card Save As uses, so the copy does not share the old name and
+    // the id the engine derives from it.
+    private func confirmImport(file: String, existingID: String?) {
         ImportConflict.present(from: root.footer,
                                title: "Theme Already Exists",
-                               subtitle: "A theme with this name is already saved. Keep both, or replace the saved one?",
-                               onRename: { [weak self] in self?.runImport(file: file, mode: .rename) },
+                               subtitle: "A theme with this id is already saved. Keep both, or replace the saved one?",
+                               onRename: { [weak self] in self?.promptImportName(file: file, existingID: existingID) },
                                onReplace: { [weak self] in self?.runImport(file: file, mode: .replace) })
+    }
+
+    private func promptImportName(file: String, existingID: String?) {
+        var initial = "Imported Copy"
+        if let existingID, !existingID.isEmpty {
+            let (code, out) = shell("\(themecoreBin()) theme show \(shellQuote(existingID)) --json 2>/dev/null")
+            if code == 0, let stored = firstJSONObject(in: out)?["name"] as? String, !stored.isEmpty {
+                initial = stored + " Copy"
+            }
+        }
+        NamePrompt.present(from: root,
+                           title: "Rename Imported Theme",
+                           subtitle: "Give the imported copy a name.",
+                           confirmTitle: "Rename",
+                           initial: initial,
+                           onConfirm: { [weak self] name in
+            self?.runImport(file: file, mode: .rename, name: name)
+        })
     }
 
     private func show() {
