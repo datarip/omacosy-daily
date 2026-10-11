@@ -24,7 +24,8 @@
 //   omacosy-themecore theme delete <id>
 //   omacosy-themecore theme rename <id> <new name>
 //   omacosy-themecore theme duplicate <id> [--id ID] [--name NAME]
-//   omacosy-themecore theme import <file> [--id ID] [--name NAME] [--replace|--rename]
+//   omacosy-themecore theme import <file> [--id ID] [--name NAME] [--format json|colors-toml|base16]
+//                                        [--replace|--rename]
 //   omacosy-themecore theme export <id> [--out PATH | --bundle DIR] [--templates DIR]
 //   omacosy-themecore theme materialize <id|file.json> [--wallpaper IMAGE] [--json]
 //   omacosy-themecore theme wallpaper <id|file.json> [--source] [--json]
@@ -4379,6 +4380,114 @@ func isoNow() -> String {
     return formatter.string(from: Date())
 }
 
+// MARK: - Importing a foreign palette (Phase 9)
+
+// Which reader theme import uses: `--format` first, then the file extension,
+// then the content (our JSON, a base16 scheme, or a flat omarchy colors.toml).
+func importFormat(_ flag: String?, path: String?, data: Data) throws -> String {
+    if let flag {
+        guard ["json", "colors-toml", "base16"].contains(flag) else {
+            throw ThemeError(message: "--format must be json, colors-toml or base16")
+        }
+        return flag
+    }
+    if let path {
+        switch (path as NSString).pathExtension.lowercased() {
+        case "toml": return "colors-toml"
+        case "yaml", "yml": return "base16"
+        default: break
+        }
+    }
+    guard let text = String(data: data, encoding: .utf8) else { return "json" }
+    if text.contains("\"schema\"") { return "json" }
+    if text.range(of: "(?m)^\\s*base0[0-9a-fA-F]\\s*:", options: .regularExpression) != nil { return "base16" }
+    if text.range(of: "(?m)^\\s*(background|color0)\\s*=", options: .regularExpression) != nil { return "colors-toml" }
+    return "json"
+}
+
+// A flat omarchy colors.toml (background, foreground, color0..color15, the
+// selection pair, accent and cursor). Missing ANSI slots fall back to the
+// background/foreground so a sparse file still imports.
+func parseColorsToml(_ data: Data, label: String) throws -> (colors: [String], extended: Extended) {
+    guard let text = String(data: data, encoding: .utf8) else {
+        throw ThemeError(message: "\(label): not valid UTF-8")
+    }
+    var map: [String: String] = [:]
+    for raw in text.split(separator: "\n") {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+        let parts = line.split(separator: "=", maxSplits: 1)
+        guard parts.count == 2 else { continue }
+        let key = String(parts[0]).trimmingCharacters(in: .whitespaces)
+        let value = String(parts[1]).trimmingCharacters(in: CharacterSet(charactersIn: " \"'\t"))
+        let clean = value.split(separator: " ").first.map(String.init) ?? value
+        guard let hex = normalizedColorHex(clean) else { continue }
+        map[key] = hex
+    }
+    guard let bg = map["background"], let fg = map["foreground"] else {
+        throw ThemeError(message: "\(label): colors.toml needs background and foreground")
+    }
+    var colors: [String] = []
+    for i in 0..<16 {
+        if let c = map["color\(i)"] { colors.append(c) }
+        else if i == 0 { colors.append(bg) }
+        else if i == 7 { colors.append(fg) }
+        else if i == 8 { colors.append(ColorMath.darkened(fg, 50)) }
+        else { colors.append(fg) }
+    }
+    let extended = Extended(accent: map["accent"] ?? colors[4],
+                            cursor: map["cursor"] ?? colors[7],
+                            selectionForeground: map["selection_foreground"] ?? bg,
+                            selectionBackground: map["selection_background"] ?? fg)
+    return (colors, extended)
+}
+
+// A base16 scheme (base00..base0F), mapped to the 16 ANSI slots the way
+// base16-shell does, so an imported community scheme lands where a terminal
+// expects it. Reads the flat `base0A: "#rrggbb"` lines; no full YAML parser.
+func parseBase16(_ data: Data, label: String) throws -> (colors: [String], extended: Extended) {
+    guard let text = String(data: data, encoding: .utf8) else {
+        throw ThemeError(message: "\(label): not valid UTF-8")
+    }
+    var map: [String: String] = [:]
+    for raw in text.split(separator: "\n") {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+        let parts = line.split(separator: ":", maxSplits: 1)
+        guard parts.count == 2 else { continue }
+        let key = String(parts[0]).trimmingCharacters(in: .whitespaces).lowercased()
+        let value = String(parts[1]).trimmingCharacters(in: CharacterSet(charactersIn: " \"'\t"))
+        guard let hex = normalizedColorHex(value) else { continue }
+        map[key] = hex
+    }
+    func base(_ digit: String) -> String? { map["base0" + digit.lowercased()] }
+    guard let b00 = base("0"), let b05 = base("5") else {
+        throw ThemeError(message: "\(label): base16 needs base00..base0F")
+    }
+    let order = ["0", "8", "b", "a", "d", "e", "c", "5",
+                 "3", "8", "b", "a", "d", "e", "c", "7"]
+    let colors = order.map { base($0) ?? b05 }
+    let extended = Extended(accent: base("d") ?? colors[4],
+                            cursor: base("5") ?? b05,
+                            selectionForeground: b00,
+                            selectionBackground: base("2") ?? base("3") ?? b05)
+    return (colors, extended)
+}
+
+// An imported palette becomes a theme like any other: light/dark from the
+// background's luminance, the method left as "import".
+func themeFromPalette(_ palette: (colors: [String], extended: Extended),
+                      id: String, name: String) -> Theme {
+    let light = ColorMath.relativeLuminance(palette.colors[0]) > 0.5
+    let mode = light ? "light" : "dark"
+    var theme = Theme(id: id, name: name,
+                      palette: Palette16(method: "import", mode: mode, resolvedMode: mode,
+                                         colors: palette.colors, extended: palette.extended))
+    theme.created = isoNow()
+    theme.updated = theme.created
+    return theme
+}
+
 // "#abc" and "AABBCC" normalise to "#aabbcc"; anything else is nil.
 func normalizedColorHex(_ raw: String) -> String? {
     var s = raw.trimmingCharacters(in: .whitespaces).lowercased()
@@ -5964,7 +6073,7 @@ func usage() -> Never {
            omacosy-themecore theme delete <id> [--json]
            omacosy-themecore theme rename <id> <new name> [--json]
            omacosy-themecore theme duplicate <id> [--id ID] [--name NAME] [--json]
-           omacosy-themecore theme import <file> [--id ID] [--name NAME] [--replace|--rename] [--json]
+           omacosy-themecore theme import <file> [--id ID] [--name NAME] [--format json|colors-toml|base16] [--replace|--rename] [--json]
            omacosy-themecore theme export <id> [--out PATH | --bundle DIR] [--templates DIR] [--json]
            omacosy-themecore theme materialize <id|file.json> [--wallpaper IMAGE] [--json]
            omacosy-themecore theme wallpaper <id|file.json> [--source] [--json]
@@ -6835,6 +6944,7 @@ case "theme":
             args.removeFirst()
             let idFlag = takeFlag("--id")
             let nameFlag = takeFlag("--name")
+            let formatFlag = takeFlag("--format")
             let replace = takeBool("--replace")
             let renameInstead = takeBool("--rename")
             noExtraArguments()
@@ -6852,16 +6962,39 @@ case "theme":
                 data = FileHandle.standardInput.readDataToEndOfFile()
             }
             let label = path.map { ($0 as NSString).lastPathComponent } ?? "stdin"
-            var top = try jsonTopLevel(data, label: label)
-            if let idFlag { top["id"] = idFlag }
-            if let nameFlag { top["name"] = nameFlag }
-            if top["id"] == nil {
-                guard let name = JSONField.string(top["name"]), !name.isEmpty else {
-                    throw ThemeError(message: "\(label): needs \"id\" or a \"name\" to derive one from")
+            let format = try importFormat(formatFlag, path: path, data: data)
+            var theme: Theme
+            if format == "json" {
+                var top = try jsonTopLevel(data, label: label)
+                if let idFlag { top["id"] = idFlag }
+                if let nameFlag { top["name"] = nameFlag }
+                if top["id"] == nil {
+                    guard let name = JSONField.string(top["name"]), !name.isEmpty else {
+                        throw ThemeError(message: "\(label): needs \"id\" or a \"name\" to derive one from")
+                    }
+                    top["id"] = slugify(name)
                 }
-                top["id"] = slugify(name)
+                theme = try Theme.parse(top, label: label)
+            } else {
+                let palette = format == "base16"
+                    ? try parseBase16(data, label: label)
+                    : try parseColorsToml(data, label: label)
+                let base = path.map { file -> String in
+                    let stem = ((file as NSString).lastPathComponent as NSString).deletingPathExtension
+                    // A theme dir's colors.toml names the theme by its folder.
+                    if stem == "colors" {
+                        let folder = ((file as NSString).deletingLastPathComponent as NSString).lastPathComponent
+                        if !folder.isEmpty { return folder }
+                    }
+                    return stem
+                } ?? "imported"
+                let name = nameFlag ?? base
+                let id = idFlag ?? slugify(name)
+                guard isThemeID(id) else {
+                    throw ThemeError(message: "the derived id \"\(id)\" is not valid; pass --id")
+                }
+                theme = themeFromPalette(palette, id: id, name: name)
             }
-            var theme = try Theme.parse(top, label: label)
             var replaced: Theme?
             if library.exists(id: theme.id) {
                 if replace {
