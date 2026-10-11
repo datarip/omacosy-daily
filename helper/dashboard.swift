@@ -3082,6 +3082,8 @@ final class HistogramView: NSView {
 // from the palette's). The edited picture is shown in the central pane.
 final class EditorPanelDoc: NSView {
     let histogram = HistogramView()
+    let strengthSlider = AdjustmentSliderView(
+        spec: SliderField(key: "strength", label: "Strength", min: 0, max: 100, step: 1, def: 100))
     let applyButton = ButtonView()
     let autoLevelsButton = ButtonView()
     let autoContrastButton = ButtonView()
@@ -3094,22 +3096,26 @@ final class EditorPanelDoc: NSView {
     private let insetL: CGFloat = 12
     private let insetR: CGFloat = 12
     private var groupTops: [(title: String, top: CGFloat)] = []
+    private var autoTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        applyButton.title = "Apply to Palette"
-        applyButton.toolTip = "Recompute the palette from this edit"
-        applyButton.onClick = { [weak self] in self?.onApply?() }
-        addSubview(applyButton)
-        addSubview(histogram)
-        for (b, title, op) in [(autoLevelsButton, "Auto Levels", "levels"),
-                               (autoContrastButton, "Auto Contrast", "contrast"),
-                               (autoWBButton, "Auto White Balance", "white-balance")] {
+        strengthSlider.onChange = { [weak self] v in self?.onSlider?("strength", v) }
+        addSubview(strengthSlider)
+        for (b, title, op) in [(autoLevelsButton, "Levels", "levels"),
+                               (autoContrastButton, "Contrast", "contrast"),
+                               (autoWBButton, "White Bal.", "white-balance")] {
             b.title = title
             b.fontSize = 10
             b.onClick = { [weak self] in self?.onAuto?(op) }
             addSubview(b)
         }
+        addSubview(histogram)
+        applyButton.title = "Apply to Palette"
+        applyButton.toolTip = "Recompute the palette from this edit"
+        applyButton.secondary = true
+        applyButton.onClick = { [weak self] in self?.onApply?() }
+        addSubview(applyButton)
         for group in EditorFilterFields.groups {
             for f in group.fields {
                 let s = AdjustmentSliderView(spec: f)
@@ -3125,14 +3131,15 @@ final class EditorPanelDoc: NSView {
 
     func contentHeight() -> CGFloat {
         var h: CGFloat = 10
-        h += 22 + 6                                  // Apply to Palette
-        h += HistogramView.viewHeight + 6
-        h += 26 * 3 + 12                             // Auto Levels / Contrast / WB
+        h += AdjustmentSliderView.rowHeight + 10          // Strength
+        h += 16 + 22 + 12                                 // AUTO ENHANCE + buttons
+        h += HistogramView.viewHeight + 12
         for group in EditorFilterFields.groups {
             h += 30
             h += CGFloat(group.fields.count) * AdjustmentSliderView.rowHeight
             h += 10
         }
+        h += 22 + 12                                      // Apply to Palette
         return h
     }
 
@@ -3150,15 +3157,19 @@ final class EditorPanelDoc: NSView {
     override func layout() {
         super.layout()
         var top: CGFloat = 10
-        applyButton.frame = rect(top: top, h: 22, x: insetL, w: contentW)
-        top += 22 + 6
+        strengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
+                                    x: insetL, w: contentW)
+        top += AdjustmentSliderView.rowHeight + 10
+        autoTop = top
+        top += 16                                         // AUTO ENHANCE label
+        let gap: CGFloat = 2
+        let bw = max(50, (contentW - gap * 2) / 3)
+        autoLevelsButton.frame = rect(top: top, h: 22, x: insetL, w: bw)
+        autoContrastButton.frame = rect(top: top, h: 22, x: insetL + bw + gap, w: bw)
+        autoWBButton.frame = rect(top: top, h: 22, x: insetL + (bw + gap) * 2, w: bw)
+        top += 22 + 12
         histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
-        top += HistogramView.viewHeight + 6
-        for b in [autoLevelsButton, autoContrastButton, autoWBButton] {
-            b.frame = rect(top: top, h: 22, x: insetL, w: contentW)
-            top += 26
-        }
-        top += 12
+        top += HistogramView.viewHeight + 12
         groupTops.removeAll()
         var i = 0
         for group in EditorFilterFields.groups {
@@ -3172,9 +3183,12 @@ final class EditorPanelDoc: NSView {
             }
             top += 10
         }
+        applyButton.frame = rect(top: top, h: 22, x: insetL, w: min(180, contentW))
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        drawTopLeft("AUTO ENHANCE", nerdFont("Bold", 11), palette.muted,
+                    x: insetL, top: autoTop, height: bounds.height)
         for (title, top) in groupTops {
             drawTopLeft(title, nerdFont("Bold", 12), palette.accent,
                         x: insetL, top: top, height: bounds.height)
@@ -3258,6 +3272,7 @@ final class EditorColumnView: NSView {
     func syncFromState() {
         guard let state else { return }
         for s in doc.sliders { s.setValue(state.filters[s.spec.key], notify: false) }
+        doc.strengthSlider.setValue(state.filters["strength"], notify: false)
     }
 
     // The editor hands the source's histograms here once it has decoded it.
