@@ -3205,7 +3205,8 @@ final class ThemesTabView: NSView, ScrollStepTab {
     private let selectButton = ButtonView()
     private let deleteButton = ButtonView()
     private var selectionMode = false
-    private let bottomBand: CGFloat = 30
+    // the same 54pt bottom bar as Options and Workspaces
+    private let bottomBand: CGFloat = 54
     private var status = ""
     private var needsGridRebuild = true
     var onApplied: (() -> Void)?
@@ -3477,13 +3478,16 @@ final class ThemesTabView: NSView, ScrollStepTab {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        // the same bottom bar as Options / Workspaces: a hairline above it,
+        // the status left-aligned and the buttons right-aligned, all centred
+        // on the bar's mid line
+        palette.muted.withAlphaComponent(0.25).setFill()
+        NSRect(x: 0, y: bottomBand - 0.5, width: bounds.width, height: 1).fill()
         if !status.isEmpty {
             let f = nerdFont("Regular", 11)
-            // centred in the strip's free space, which ends at the buttons
             let right = max(0, (deleteButton.isHidden ? selectButton.frame.minX : deleteButton.frame.minX) - 12)
-            let text = truncate(status, f, right)
-            drawMidLeft(text, f, palette.muted, x: max(0, (right - advance(text, f)) / 2),
-                        midTop: bounds.height - bottomBand / 2, height: bounds.height)
+            drawMidLeft(truncate(status, f, right), f, palette.muted,
+                        x: 0, midTop: bounds.height - bottomBand / 2, height: bounds.height)
         }
     }
 }
