@@ -64,7 +64,7 @@ requests are where they can become everyone's. See
 | OmniWM's `settings.toml` is generated from `settings.template.toml`, so OmniWM's rewrites of it never make the clone dirty | `install.sh`, `config/omniwm/` |
 | Both window-manager configs are **seeded once and never overwritten**. Your keybindings, and everything OmniWM writes through its own interface, survive every install. When the shipped default moves you are told, and given the path to diff against | `install.sh` (`seed_config`) |
 | The focus ring hides when a layer-0 window in front of the focused window reaches its stroke, instead of painting over it. Awaits #51, then a pull request | `helper/borders.swift` |
-| **Theme Studio**, in the settings dashboard's Themes tab: every wallpaper can become a saved theme (an *edition*), listed above its raw `Wallpaper #N` cell, and **Edit** / **Customize** opens a three-column editor — Palette Builder, palette preview, Wallpaper Editor. A palette comes from the wallpaper itself (**Magic**, the same extraction the raw cells use) or one of 23 built-in schemes, plus presets, from-colour and gradient recipes; every slot edits by picker or hex and locks against a swap, with 12 adjustment sliders, a tone curve, undo/redo and accessibility badges. The semantic colours are editable like Aether's: shades pin, pinned shades survive palette swaps, and one click resets them. An untouched Magic palette **is** the wallpaper's auto theme — the edition and the raw cell write byte-identical desktop files. **Save** / **Save As** write a self-contained record (the image is copied into the library, so renaming or deleting the source keeps the edition working); **Apply Theme** switches the live desktop through `omacosy-theme-switch`. A hover **trash** on any custom cell asks before removing: the wallpaper file goes to the Finder Trash, and the variations built from it can be deleted with it; an edition's trash removes just the record. A global **Hide NSFW** switch hides adult wallhaven results and anything downloaded from them, everywhere, without deleting anything. | `helper/dashboard.swift`, `helper/themecore.swift` |
+| **Theme Studio**, in the settings dashboard's Themes tab: every wallpaper can become a saved theme (an *edition*), listed above its raw `Wallpaper #N` cell, and **Edit** / **Customize** opens an editor around the centre preview — **step 1, the Wallpaper Editor** on the left and **step 2, the Palette Builder** on the right, each with its **own Undo/Redo**. The picture editor is non-destructive: build a filter recipe from the four groups (Blur, Brightness, Contrast, Saturation, Hue Shift; Sepia, Invert; Exposure, Sharpen, Vignette, Grain, Shadows, Highlights; Temperature, Tint), a **Strength** blend, the **AUTO ENHANCE** buttons (Levels / Contrast / White Bal.), the **12 quick presets**, a **tone curve**, a **palette grade** (2-4 colour stops plus strength) and a **Transform** (rotate/flip, crop with eight ratio presets and an interactive rect, resize with an aspect link), and watch it live on the centre picture — **press and hold** to compare with the original. **Apply to Palette** renders the edit at full resolution through the engine into `studio/edits/`, then re-derives the palette from it; the **original file is never written**. The palette itself comes from the wallpaper (**Magic**, the same extraction the raw cells use) or one of 23 built-in schemes, plus presets, from-colour and gradient recipes; every slot edits by picker or hex and locks against a swap, with 12 adjustment sliders, a tone curve, undo/redo and accessibility badges. The semantic colours are editable like Aether's: shades pin, pinned shades survive palette swaps, and one click resets them. An untouched Magic palette **is** the wallpaper's auto theme — the edition and the raw cell write byte-identical desktop files. **Save** / **Save As** write a self-contained record (the image is copied into the library, so renaming or deleting the source keeps the edition working); **Apply Theme** switches the live desktop through `omacosy-theme-switch`. A hover **trash** on any custom cell asks before removing: the wallpaper file goes to the Finder Trash, and the variations built from it can be deleted with it; an edition's trash removes just the record. A global **Hide NSFW** switch hides adult wallhaven results and anything downloaded from them, everywhere, without deleting anything. | `helper/dashboard.swift`, `helper/themecore.swift` |
 
 ## Known limitations
 
@@ -77,13 +77,20 @@ requests are where they can become everyone's. See
   the same wall is by design — see [docs/why-aerospace.md](docs/why-aerospace.md)
   — and `omacosy-float` (`Super+S`) surfaces a buried float. The focus ring no
   longer paints over a window that covers the focused one.
-- **The Theme Studio wallpaper editor does not (yet) include Aether's "Detail"
-  extras** — pixelate, oil paint (`oilPaint`), colour noise (`noise`), fade,
-  clarity and posterize. They are deliberately out of scope while the editor
-  lands: a recipe that carries them still round-trips and renders (the engine
-  keeps unknown fields), but the editor shows no control for them. Adding them
-  needs the engine maths plus a best-effort preview each. Tracked in
-  `notes/PLAN-theme-studio.md`.
+- **The wallpaper editor does not yet include Aether's "DETAIL" extras.**
+  Aether also has Pixelate, Oil Paint and Color Noise, and the light/colour
+  extras Fade, Clarity and Posterize; none of them are built. What ships is the
+  subset the Omarchy editor documents — blur, brightness, contrast, saturation,
+  hue, sepia, invert, exposure, vignette, sharpen, grain, shadows, highlights,
+  temperature, tint — plus the tone curve, the palette grade and the transform.
+  The engine (`ImageFilters`) keeps those unknown fields in `extra` and
+  re-encodes them untouched, so a stored recipe carrying `pixelate` /
+  `oilPaint` / … still round-trips and renders rather than failing; the
+  dashboard's preview ignores them, and the UI exposes no control for them.
+  Adding each is more than a slider: the engine must implement it (the maths is
+  in Aether's `canvas-filters.ts`) plus a best-effort CoreImage preview, and
+  oil paint in particular is a heavy multi-pass blur that will not map cleanly.
+  Deferred — see `notes/PLAN-theme-studio.md`.
 
 ## Your settings
 
