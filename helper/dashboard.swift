@@ -3475,9 +3475,11 @@ final class ThemesTabView: NSView, ScrollStepTab {
     override func draw(_ dirtyRect: NSRect) {
         if !status.isEmpty {
             let f = nerdFont("Regular", 11)
-            let left = deleteButton.isHidden ? selectButton.frame.minX : deleteButton.frame.minX
-            drawMidLeft(truncate(status, f, max(0, left - 12)), f, palette.muted,
-                        x: 0, midTop: bounds.height - bottomBand / 2, height: bounds.height)
+            // centred in the strip's free space, which ends at the buttons
+            let right = max(0, (deleteButton.isHidden ? selectButton.frame.minX : deleteButton.frame.minX) - 12)
+            let text = truncate(status, f, right)
+            drawMidLeft(text, f, palette.muted, x: max(0, (right - advance(text, f)) / 2),
+                        midTop: bounds.height - bottomBand / 2, height: bounds.height)
         }
     }
 }
