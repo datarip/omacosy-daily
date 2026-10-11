@@ -3527,18 +3527,15 @@ final class EditorPanelDoc: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         drawRule(autoTop)
-        drawTopLeft("AUTO ENHANCE", nerdFont("Bold", 11), palette.muted,
+        drawTopLeft("Auto Enhance", nerdFont("Bold", 12), palette.label,
                     x: insetL, top: autoTop, height: bounds.height)
-        drawRule(presetTop)
         drawMidLeft("Presets", nerdFont("Bold", 12), palette.label,
                     x: insetL, midTop: presetTop + 16, height: bounds.height)
         drawRule(histTop)
         drawTopLeft("Histogram", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: histTop, height: bounds.height)
-        drawRule(curveTop)
         drawTopLeft("Curves", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: curveTop, height: bounds.height)
-        drawRule(blurTop)
         drawMidLeft("Blur Desktop", nerdFont("Bold", 12), palette.label,
                     x: insetL, midTop: blurTop + 12, height: bounds.height)
         for (title, top) in groupTops {
