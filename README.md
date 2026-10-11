@@ -716,8 +716,9 @@ and nothing is printed.
 The `Super+,` Settings card shows them as `Wallpaper #N` cards, one per
 picture: **Customize** on hover opens a new theme from one in the Theme
 Editor, and a saved variation carries a named card of its own with
-**Edit**. The editor's Palette Builder, previews and Wallpaper Editor are
-being built phase by phase.
+**Edit**. The editor is complete — Palette Builder, live previews and
+Wallpaper Editor: **Save** stores the theme and its edited wallpaper, and
+**Apply & Save** puts them on the desktop.
 
 **How the colors are chosen.** The bar's own background keeps the
 measurement omacosy already makes to match the real macOS menu bar — a
