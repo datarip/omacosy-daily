@@ -595,6 +595,9 @@ final class ButtonView: NSView {
     // a brief dim on the press, so a tap always shows even when the action
     // it fires is instant
     var highlighted = false { didSet { needsDisplay = true } }
+    // 0...1 draws a left-to-right fill over the button; -1 hides it, for work
+    // a click starts (Apply to Palette's full-resolution render).
+    var progress: CGFloat = -1 { didSet { needsDisplay = true } }
     var onClick: (() -> Void)?
 
     override func draw(_ dirtyRect: NSRect) {
@@ -608,6 +611,14 @@ final class ButtonView: NSView {
         } else {
             (busy ? palette.muted : (danger ? NSColor.systemRed : palette.accent)).setFill()
             r.fill()
+        }
+        if progress >= 0 {
+            NSGraphicsContext.saveGraphicsState()
+            r.addClip()
+            NSColor.black.withAlphaComponent(0.28).setFill()
+            NSRect(x: 0, y: 0, width: bounds.width * min(max(progress, 0), 1),
+                   height: bounds.height).fill()
+            NSGraphicsContext.restoreGraphicsState()
         }
         let text = busy ? "Saving…" : title
         let font = nerdFont("Bold", fontSize)
@@ -3680,6 +3691,8 @@ final class EditorColumnView: NSView {
 
     func setBlur(_ on: Bool) { doc.setBlur(on) }
 
+    func setApplyProgress(_ p: CGFloat) { doc.applyButton.progress = p }
+
     override func layout() {
         super.layout()
         let headerH: CGFloat = 40
@@ -4807,7 +4820,7 @@ final class PaletteModel {
                              "DIM", "RD+", "GR+", "YL+", "BL+", "MG+", "CY+", "FG+"]
 
     private(set) var modeGroups: [(label: String, modes: [(value: String, label: String)])] = []
-    private var paletteGeneration = 0
+    private(set) var paletteGeneration = 0
     private var renderGeneration = 0
     private var renderWork: DispatchWorkItem?
     private var recentWork: DispatchWorkItem?
@@ -9047,6 +9060,16 @@ final class ThemeEditor {
     // wallpaper.blur: the desktop shows a heavy-blur variant while the editor
     // and the palette extraction keep the sharp image.
     private var blurOn = false
+    // Which history ⌘Z / ⌘Y walk: the surface the user last edited (the
+    // picture editor and the palette builder keep separate histories).
+    private enum HistorySurface { case picture, palette }
+    private var historySurface: HistorySurface = .palette
+    // Apply to Palette's button fill while it renders, and the palette
+    // generation captured when it started.
+    private var applyProgressActive = false
+    private var applyProgressTimer: Timer?
+    private var applyProgressGeneration = -1
+    private var applyProgressSafety: DispatchWorkItem?
 
     private init(subject: EditorSubject, size: NSSize, status: ((String) -> Void)?) {
         self.subject = subject
@@ -9149,6 +9172,7 @@ final class ThemeEditor {
         }
         editorState.onChange = { [weak self] in
             guard let self else { return }
+            self.historySurface = .picture
             self.dirty = true
             self.root.dirty = true
             self.root.wallpaperEditor.syncFromState()
@@ -9164,9 +9188,14 @@ final class ThemeEditor {
             // the picture the central pane and the palette see (an edition's
             // media or a draft's wallpaper); decode it once for the edits
             self.loadEditBase()
+            // the apply's fill ends when the palette has really regenerated
+            if self.applyProgressActive, self.model.paletteGeneration != self.applyProgressGeneration {
+                self.completeApplyProgress()
+            }
         }
         model.onUserEdit = { [weak self] in
             guard let self else { return }
+            self.historySurface = .palette
             self.dirty = true
             self.root.dirty = true
         }
@@ -9306,16 +9335,83 @@ final class ThemeEditor {
             showMessage("Palette back to the original", red: false)
             return
         }
+        startApplyProgress()
+        let generation = model.paletteGeneration
         DispatchQueue.global().async { [weak self] in
             guard let self else { return }
             guard let out = self.renderWorkingImage(source: source, filters: filters) else {
-                DispatchQueue.main.async { self.showMessage("Apply to Palette failed", red: true) }
+                DispatchQueue.main.async {
+                    self.completeApplyProgress()
+                    self.showMessage("Apply to Palette failed", red: true)
+                }
                 return
             }
             DispatchQueue.main.async {
                 self.model.applyEditedSource(out)
+                // if the palette did not need regenerating, end the fill now;
+                // otherwise the next model update ends it
+                if self.model.paletteGeneration == generation {
+                    self.completeApplyProgress()
+                }
                 self.showMessage("Palette updated from the edit", red: false)
             }
+        }
+    }
+
+    // The button fills left to right while the render runs; the growth eases
+    // towards 92% (a render has no progress to report), then snaps to 100%
+    // when the palette is really up to date.
+    private func startApplyProgress() {
+        completeApplyProgress()
+        applyProgressActive = true
+        applyProgressGeneration = model.paletteGeneration
+        root.wallpaperEditor.setApplyProgress(0)
+        var p: CGFloat = 0
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            p = min(0.92, p + (1 - p) * 0.14)
+            self.root.wallpaperEditor.setApplyProgress(p)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        applyProgressTimer = timer
+        let safety = DispatchWorkItem { [weak self] in self?.completeApplyProgress() }
+        applyProgressSafety = safety
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: safety)
+    }
+
+    private func completeApplyProgress() {
+        applyProgressTimer?.invalidate()
+        applyProgressTimer = nil
+        applyProgressSafety?.cancel()
+        applyProgressSafety = nil
+        guard applyProgressActive else { return }
+        applyProgressActive = false
+        root.wallpaperEditor.setApplyProgress(1)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            // a new apply may have started in the meantime; keep its fill
+            guard let self, !self.applyProgressActive else { return }
+            self.root.wallpaperEditor.setApplyProgress(-1)
+        }
+    }
+
+    // One pair of keys for both separate histories: act on the surface the
+    // user last touched, and fall back to the other when it has nothing left.
+    private func walkHistory(redo: Bool) {
+        let pic = editorState
+        let pal = model
+        func pictureStep() -> Bool {
+            if redo { guard pic.canRedo else { return false }; pic.redo() }
+            else { guard pic.canUndo else { return false }; pic.undo() }
+            return true
+        }
+        func paletteStep() -> Bool {
+            if redo { guard pal.canRedo else { return false }; pal.redo() }
+            else { guard pal.canUndo else { return false }; pal.undo() }
+            return true
+        }
+        switch historySurface {
+        case .picture: if !pictureStep() { _ = paletteStep() }
+        case .palette: if !paletteStep() { _ = pictureStep() }
         }
     }
 
@@ -9620,11 +9716,11 @@ final class ThemeEditor {
         // monitors ignore an Esc aimed at another window
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] e in
             guard let self, e.window === self.window else { return e }
-            // ⌘Z / ⇧⌘Z walk the palette history; while a text field is
-            // editing, let the field keep its own undo
-            if e.keyCode == 6, e.modifierFlags.contains(.command),
+            // ⌘Z / ⌘Y (and ⇧⌘Z) walk the history of the surface last edited;
+            // while a text field is editing, let the field keep its own undo
+            if (e.keyCode == 6 || e.keyCode == 16), e.modifierFlags.contains(.command),
                !(self.window.firstResponder is NSTextView) {
-                if e.modifierFlags.contains(.shift) { self.model.redo() } else { self.model.undo() }
+                self.walkHistory(redo: e.keyCode == 16 || e.modifierFlags.contains(.shift))
                 return nil
             }
             if e.keyCode == 53 {
