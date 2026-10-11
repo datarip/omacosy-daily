@@ -4916,6 +4916,19 @@ struct ThemeLibrary {
         FileManager.default.fileExists(atPath: fileURL(id: id).path)
     }
 
+    // A name is an edition's display identity; two editions sharing one is
+    // confusing (the grid shows two identical cards), so the library refuses a
+    // name another record already holds. Case-insensitive; `excluding` skips
+    // the record being saved/renamed.
+    func nameExists(_ name: String, excluding id: String?) -> Bool {
+        let target = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !target.isEmpty else { return false }
+        var warnings: [String] = []
+        return loadAll(warnings: &warnings).contains {
+            $0.id != id && $0.name.lowercased() == target
+        }
+    }
+
     func recordFiles() -> [URL] {
         guard let items = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: nil) else { return [] }
@@ -6035,7 +6048,7 @@ func themeError(_ error: Error) -> Never {
 
 // MARK: - CLI
 
-let themecoreVersion = "0.9.0"
+let themecoreVersion = "0.9.1"
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write("omacosy-themecore: \(message)\n".data(using: .utf8)!)
@@ -6820,6 +6833,9 @@ case "theme":
             if exists && !hadID && !replace {
                 throw ThemeError(message: "theme \"\(theme.id)\" already exists — pass --replace to overwrite it, or --name to save under another name")
             }
+            if library.nameExists(theme.name, excluding: theme.id) {
+                throw ThemeError(message: "a theme named \"\(theme.name)\" already exists — choose another name")
+            }
             let old = exists ? (try? library.load(id: theme.id)) : nil
             let previousPath = old?.wallpaper.path
             if let existing = old {
@@ -6902,6 +6918,9 @@ case "theme":
             }
             let id = args[0], newName = args[1]
             var theme = try library.load(id: id)
+            if library.nameExists(newName, excluding: id) {
+                throw ThemeError(message: "a theme named \"\(newName)\" already exists — choose another name")
+            }
             theme.name = newName
             theme.updated = isoNow()
             try library.write(theme)
@@ -6919,7 +6938,21 @@ case "theme":
             noExtraArguments()
             let original = try library.load(id: id)
             var copy = original
-            copy.name = nameFlag ?? "\(original.name) Copy"
+            if let nameFlag {
+                copy.name = nameFlag
+            } else {
+                // "X Copy", then "X Copy 2", … so repeated duplicates stay
+                // uniquely named (names are unique across the library)
+                copy.name = "\(original.name) Copy"
+                var n = 2
+                while library.nameExists(copy.name, excluding: nil) {
+                    copy.name = "\(original.name) Copy \(n)"
+                    n += 1
+                }
+            }
+            if library.nameExists(copy.name, excluding: nil) {
+                throw ThemeError(message: "a theme named \"\(copy.name)\" already exists — choose another name")
+            }
             let base = idFlag ?? slugify(copy.name)
             guard isThemeID(base) else {
                 throw ThemeError(message: "--id must match [a-z0-9-]+")
@@ -7004,6 +7037,9 @@ case "theme":
                 } else {
                     throw ThemeError(message: "theme \"\(theme.id)\" already exists — pass --replace to overwrite it, or --rename to keep both")
                 }
+            }
+            if library.nameExists(theme.name, excluding: theme.id) {
+                throw ThemeError(message: "a theme named \"\(theme.name)\" already exists — choose another name")
             }
             if theme.created == nil { theme.created = isoNow() }
             theme.updated = isoNow()
