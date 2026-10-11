@@ -3084,12 +3084,16 @@ final class EditorPanelDoc: NSView {
     let histogram = HistogramView()
     let strengthSlider = AdjustmentSliderView(
         spec: SliderField(key: "strength", label: "Strength", min: 0, max: 100, step: 1, def: 100))
+    let curveView = CurveEditorView()
+    let curveResetButton = ButtonView()
     let applyButton = ButtonView()
     let autoLevelsButton = ButtonView()
     let autoContrastButton = ButtonView()
     let autoWBButton = ButtonView()
     var onSlider: ((String, Double) -> Void)?
     var onAuto: ((String) -> Void)?
+    var onCurve: (([[Double]]) -> Void)?
+    var onCurveReset: (() -> Void)?
     var onApply: (() -> Void)?
     private(set) var sliders: [AdjustmentSliderView] = []
 
@@ -3097,11 +3101,19 @@ final class EditorPanelDoc: NSView {
     private let insetR: CGFloat = 12
     private var groupTops: [(title: String, top: CGFloat)] = []
     private var autoTop: CGFloat = 0
+    private var curveTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         strengthSlider.onChange = { [weak self] v in self?.onSlider?("strength", v) }
         addSubview(strengthSlider)
+        curveView.onChange = { [weak self] points in self?.onCurve?(points) }
+        addSubview(curveView)
+        curveResetButton.title = "Reset"
+        curveResetButton.fontSize = 10
+        curveResetButton.secondary = true
+        curveResetButton.onClick = { [weak self] in self?.onCurveReset?() }
+        addSubview(curveResetButton)
         for (b, title, op) in [(autoLevelsButton, "Levels", "levels"),
                                (autoContrastButton, "Contrast", "contrast"),
                                (autoWBButton, "White Bal.", "white-balance")] {
@@ -3134,6 +3146,7 @@ final class EditorPanelDoc: NSView {
         h += AdjustmentSliderView.rowHeight + 10          // Strength
         h += 16 + 22 + 12                                 // AUTO ENHANCE + buttons
         h += HistogramView.viewHeight + 12
+        h += 26 + CurveEditorView.viewHeight + 12         // Curves
         for group in EditorFilterFields.groups {
             h += 30
             h += CGFloat(group.fields.count) * AdjustmentSliderView.rowHeight
@@ -3148,6 +3161,8 @@ final class EditorPanelDoc: NSView {
         histogram.r = r
         histogram.g = g
         histogram.b = b
+        // the curve draws the luminance histogram as its backdrop
+        curveView.histogram = lum
     }
 
     private func rect(top: CGFloat, h: CGFloat, x: CGFloat, w: CGFloat) -> NSRect {
@@ -3170,6 +3185,11 @@ final class EditorPanelDoc: NSView {
         top += 22 + 12
         histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
         top += HistogramView.viewHeight + 12
+        curveTop = top
+        curveResetButton.frame = rect(top: top, h: 20, x: insetL + contentW - 60, w: 60)
+        top += 26
+        curveView.frame = rect(top: top, h: CurveEditorView.viewHeight, x: insetL, w: contentW)
+        top += CurveEditorView.viewHeight + 12
         groupTops.removeAll()
         var i = 0
         for group in EditorFilterFields.groups {
@@ -3189,6 +3209,8 @@ final class EditorPanelDoc: NSView {
     override func draw(_ dirtyRect: NSRect) {
         drawTopLeft("AUTO ENHANCE", nerdFont("Bold", 11), palette.muted,
                     x: insetL, top: autoTop, height: bounds.height)
+        drawTopLeft("Curves", nerdFont("Bold", 12), palette.accent,
+                    x: insetL, top: curveTop, height: bounds.height)
         for (title, top) in groupTops {
             drawTopLeft(title, nerdFont("Bold", 12), palette.accent,
                         x: insetL, top: top, height: bounds.height)
@@ -3204,6 +3226,8 @@ final class EditorColumnView: NSView {
     // The Auto and Apply buttons call out to the editor, which owns the picture
     // path and the engine.
     var onAuto: ((String) -> Void)? { didSet { doc.onAuto = onAuto } }
+    var onCurve: (([[Double]]) -> Void)? { didSet { doc.onCurve = onCurve } }
+    var onCurveReset: (() -> Void)? { didSet { doc.onCurveReset = onCurveReset } }
     var onApply: (() -> Void)? { didSet { doc.onApply = onApply } }
 
     let doc = EditorPanelDoc()
@@ -3260,6 +3284,8 @@ final class EditorColumnView: NSView {
         // preview); the column only drives its own controls.
         doc.onSlider = { [weak state] key, value in state?.set(key, value) }
         doc.onAuto = onAuto
+        doc.onCurve = onCurve
+        doc.onCurveReset = onCurveReset
         doc.onApply = onApply
         undoButton.onClick = { [weak state] in state?.undo() }
         redoButton.onClick = { [weak state] in state?.redo() }
@@ -3273,6 +3299,7 @@ final class EditorColumnView: NSView {
         guard let state else { return }
         for s in doc.sliders { s.setValue(state.filters[s.spec.key], notify: false) }
         doc.strengthSlider.setValue(state.filters["strength"], notify: false)
+        doc.curveView.points = state.filters.curvePoints
     }
 
     // The editor hands the source's histograms here once it has decoded it.
@@ -8354,6 +8381,12 @@ final class ThemeEditor {
         root.paletteCanvas.model = model
         root.wallpaperEditor.state = editorState
         root.wallpaperEditor.onAuto = { [weak self] op in self?.runAuto(op) }
+        root.wallpaperEditor.onCurve = { [weak self] points in
+            self?.editorState.edit("curve") { $0.curvePoints = points }
+        }
+        root.wallpaperEditor.onCurveReset = { [weak self] in
+            self?.editorState.edit("curve") { $0.curvePoints = [] }
+        }
         root.wallpaperEditor.onApply = { [weak self] in self?.applyToPalette() }
         editorState.onChange = { [weak self] in
             guard let self else { return }
