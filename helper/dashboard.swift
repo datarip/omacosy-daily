@@ -8561,6 +8561,10 @@ final class PreviewPaneView: NSView {
     var showMenuBar = true
     var showTerminal = true
     var showRing = true
+    // The fake Super+K cheat sheet: the one surface that shows MUTED as the
+    // descriptions, LABEL as the keys and ACCENT as the headings. Off by
+    // default, toggled from the toolbar.
+    var showCheatsheet = false { didSet { needsDisplay = true } }
     // The effective tool opacity (0...100) the terminal window is drawn at;
     // nil anywhere means opaque.
     var toolOpacity: Int?
@@ -8587,6 +8591,7 @@ final class PreviewPaneView: NSView {
     private let toggleRing = PreviewIconButton()
     private let viewPrompt = PreviewIconButton()
     private let viewCode = PreviewIconButton()
+    private let viewCheatsheet = PreviewIconButton()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -8625,7 +8630,17 @@ final class PreviewPaneView: NSView {
             self.showCode.toggle(); self.viewCode.on = self.showCode
             self.needsDisplay = true
         }
-        for b in [toggleMenuBar, toggleTerminal, toggleRing, viewPrompt, viewCode] { addSubview(b) }
+        viewCheatsheet.glyph = "\u{f11c}"
+        viewCheatsheet.toolTip = "Cheat Sheet Preview"
+        viewCheatsheet.on = false
+        viewCheatsheet.onClick = { [weak self] in
+            guard let self else { return }
+            self.showCheatsheet.toggle(); self.viewCheatsheet.on = self.showCheatsheet
+            self.needsDisplay = true
+        }
+        for b in [toggleMenuBar, toggleTerminal, toggleRing, viewPrompt, viewCode, viewCheatsheet] {
+            addSubview(b)
+        }
     }
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -8634,7 +8649,7 @@ final class PreviewPaneView: NSView {
         let s = screen
         guard s.width > 1, s.height > 1 else { return }
         let size: CGFloat = 22, gap: CGFloat = 4
-        let items = [toggleMenuBar, toggleTerminal, toggleRing, viewPrompt, viewCode]
+        let items = [toggleMenuBar, toggleTerminal, toggleRing, viewPrompt, viewCode, viewCheatsheet]
         let total = CGFloat(items.count) * size + CGFloat(items.count - 1) * gap
         var x = max(s.minX + 6, s.maxX - 8 - total)
         let y = s.minY + 8
@@ -8770,6 +8785,48 @@ final class PreviewPaneView: NSView {
             }
             cursor = pill.minX - gap
         }
+    }
+
+    // A fake Super+K cheat sheet: the one surface that shows MUTED as the
+    // descriptions, LABEL as the keys and ACCENT as the headings, all on the
+    // BAR_BG_SOLID card. Lets those roles be seen without opening the real one.
+    private func drawCheatsheet(in screen: NSRect) {
+        let r = resolvedRoles()
+        let w = min(screen.width * 0.6, 620)
+        let h = min(screen.height * 0.66, 400)
+        let card = NSRect(x: screen.midX - w / 2, y: screen.midY - h / 2, width: w, height: h)
+        let path = NSBezierPath(roundedRect: card, xRadius: 10, yRadius: 10)
+        r.bar.setFill()
+        path.fill()
+        r.accent.withAlphaComponent(0.55).setStroke()
+        path.lineWidth = 1.5
+        path.stroke()
+
+        let titleFont = nerdFont("Bold", 13)
+        let headFont = nerdFont("Bold", 11)
+        let keyFont = nerdFont("Regular", 11)
+        let descFont = nerdFont("Regular", 10)
+
+        drawBaseline("Keyboard Shortcuts", titleFont, r.accent,
+                     x: card.minX + 20, baseline: card.maxY - 20 - titleFont.capHeight)
+        var y = card.maxY - 52
+        func heading(_ t: String) {
+            drawBaseline(t, headFont, r.accent, x: card.minX + 20, baseline: y - headFont.capHeight)
+            y -= 22
+        }
+        func row(_ key: String, _ desc: String) {
+            drawBaseline(key, keyFont, r.label, x: card.minX + 28, baseline: y - keyFont.capHeight)
+            drawBaseline(desc, descFont, r.muted, x: card.minX + 168, baseline: y - descFont.capHeight)
+            y -= 20
+        }
+        heading("Window")
+        row("Super + Return", "Open the terminal")
+        row("Super + Q", "Close the window")
+        row("Super + F", "Fullscreen")
+        heading("Workspaces")
+        row("Super + 1", "Focus workspace 1")
+        row("Super + Shift + 1", "Move the window there")
+        row("Super + K", "This cheat sheet")
     }
 
     // --- fake terminal + code editor ---------------------------------------
@@ -9147,6 +9204,7 @@ final class PreviewPaneView: NSView {
             }
             if showMenuBar { drawMenuBar(in: screen) }
             if showTerminal { drawTerminal(in: screen) }
+            if showCheatsheet { drawCheatsheet(in: screen) }
         }
         // the frame line, drawn on every edge so the panel reads as a frame
         palette.muted.withAlphaComponent(0.3).setStroke()

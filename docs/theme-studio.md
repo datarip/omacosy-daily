@@ -23,7 +23,10 @@ mode, keeps Omacosy's chrome on theme.
 
 The editor previews the theme you are building **live**: its own background,
 text, pills and accent follow the draft as you transform the palette, before
-you apply. And the **Semantic Colors** section carries two **Omacosy** groups —
+you apply. The centre pane's toolbar toggles the mock **menu bar**, the
+**terminal**, the focus **ring** and a fake **cheat sheet** (the one surface
+that shows Muted as the descriptions, Label as the keys and Accent as the
+headings). And the **Semantic Colors** section carries two **Omacosy** groups —
 the bar's own colours (**Background, Pill, Muted, Label, Accent**) and its
 signals (**Ring, Red, Green, Yellow**) — that are editable **independently of
 the palette the terminal tools use**. Overriding one changes only that Omacosy
