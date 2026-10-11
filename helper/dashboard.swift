@@ -3282,7 +3282,7 @@ final class EditorPanelDoc: NSView {
             h += 10
         }
         h += 26 + 24 + 8 + AdjustmentSliderView.rowHeight + 12   // Palette Grade
-        h += 280                                                 // Transform
+        h += 294                                                 // Transform
         return h
     }
 
@@ -3427,8 +3427,9 @@ final class EditorPanelDoc: NSView {
                            x: insetL + CGFloat(col) * (rc + 4), w: rc)
         }
         top += 26 * 2 + 2
-        cropButton.frame = rect(top: top, h: 20, x: insetL, w: 64)
-        cropResetButton.frame = rect(top: top, h: 20, x: insetL + 70, w: 84)
+        top += 14                                        // separation from the ratios
+        cropResetButton.frame = rect(top: top, h: 20, x: insetL + contentW - 84, w: 84)
+        cropButton.frame = rect(top: top, h: 20, x: cropResetButton.frame.minX - 6 - 64, w: 64)
         top += 20 + 14
         resizeLabelTop = top
         top += 18
