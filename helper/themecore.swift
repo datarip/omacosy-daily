@@ -25,7 +25,7 @@
 //   omacosy-themecore theme rename <id> <new name>
 //   omacosy-themecore theme duplicate <id> [--id ID] [--name NAME]
 //   omacosy-themecore theme import <file> [--id ID] [--name NAME] [--replace|--rename]
-//   omacosy-themecore theme export <id> [--out PATH]
+//   omacosy-themecore theme export <id> [--out PATH | --bundle DIR] [--templates DIR]
 //   omacosy-themecore theme materialize <id|file.json> [--wallpaper IMAGE] [--json]
 //   omacosy-themecore theme wallpaper <id|file.json> [--source] [--json]
 //   omacosy-themecore wallpaper list [--dir DIR] [--json]
@@ -5175,6 +5175,16 @@ struct ThemeVariables {
         for (i, name) in semanticOrder.enumerated() { set("color\(i)", vars[name]!) }
     }
 
+    // Aether's mergeTemplateVariables: a per-app override map wins over the
+    // base, then the derived shades follow it except the pinned keys.
+    static func merged(_ base: [String: String], overrides: [String: String]) -> [String: String] {
+        guard !overrides.isEmpty else { return base }
+        var out = base
+        for (key, value) in overrides where !value.isEmpty { out[key] = value }
+        recomputeDerived(&out, overrides: overrides)
+        return out
+    }
+
     private static func derive(_ vars: inout [String: String], light: Bool) {
         vars["bg"] = vars["background"]
         vars["fg"] = vars["foreground"]
@@ -5295,6 +5305,20 @@ enum Materialise {
     // ring parse. barRoles returns the bare hex; both spellings are accepted.
     static func argb(_ hex: String) -> String {
         "0xff" + (hex.hasPrefix("#") ? hex.dropFirst() : Substring(hex))
+    }
+
+    // Omarchy's 22-key palette, written verbatim next to a materialised theme
+    // and into an export bundle where a flat colors.toml is expected.
+    static func colorsToml(_ rendered: (colors: [String], extended: Extended)) -> String {
+        var toml = ""
+        toml += "accent = \"\(rendered.extended.accent)\"\n"
+        toml += "cursor = \"\(rendered.extended.cursor)\"\n"
+        toml += "foreground = \"\(rendered.colors[7])\"\n"
+        toml += "background = \"\(rendered.colors[0])\"\n"
+        toml += "selection_foreground = \"\(rendered.extended.selectionForeground)\"\n"
+        toml += "selection_background = \"\(rendered.extended.selectionBackground)\"\n"
+        for i in 0..<16 { toml += "color\(i) = \"\(rendered.colors[i])\"\n" }
+        return toml
     }
 
     // The plan's revision hash: palette, extended colours, resolved mode (it
@@ -5427,15 +5451,7 @@ enum Materialise {
         bd += "export ACTIVE_COLOR=\(argb(ring))\n"
         bd += "export INACTIVE_COLOR=\(argb(pill))\n"
 
-        let ext = rendered.extended
-        var toml = ""
-        toml += "accent = \"\(ext.accent)\"\n"
-        toml += "cursor = \"\(ext.cursor)\"\n"
-        toml += "foreground = \"\(rendered.colors[7])\"\n"
-        toml += "background = \"\(rendered.colors[0])\"\n"
-        toml += "selection_foreground = \"\(ext.selectionForeground)\"\n"
-        toml += "selection_background = \"\(ext.selectionBackground)\"\n"
-        for i in 0..<16 { toml += "color\(i) = \"\(rendered.colors[i])\"\n" }
+        let toml = colorsToml(rendered)
 
         try sb.write(to: dir.appendingPathComponent("sketchybar.sh"), atomically: true, encoding: .utf8)
         try bd.write(to: dir.appendingPathComponent("borders.sh"), atomically: true, encoding: .utf8)
@@ -5942,7 +5958,7 @@ func usage() -> Never {
            omacosy-themecore theme rename <id> <new name> [--json]
            omacosy-themecore theme duplicate <id> [--id ID] [--name NAME] [--json]
            omacosy-themecore theme import <file> [--id ID] [--name NAME] [--replace|--rename] [--json]
-           omacosy-themecore theme export <id> [--out PATH] [--json]
+           omacosy-themecore theme export <id> [--out PATH | --bundle DIR] [--templates DIR] [--json]
            omacosy-themecore theme materialize <id|file.json> [--wallpaper IMAGE] [--json]
            omacosy-themecore theme wallpaper <id|file.json> [--source] [--json]
            omacosy-themecore wallpaper list [--dir DIR] [--json]
@@ -6041,6 +6057,73 @@ func jsonStringMap(_ raw: String, label: String) -> [String: String] {
         out[key] = text
     }
     return out
+}
+
+// Where the Aether-derived app templates live (config/theme-templates in the
+// repo). The explicit flag wins, then OMACOSY_TEMPLATES_DIR, then
+// OMACOSY_REPO, then the repo found by resolving ~/.local/bin/theme-set — the
+// same door the dashboard uses. An installed Omacosy keeps its repo, so the
+// default works out of the box; tests and unusual layouts pass the flag.
+func repoTemplatesDir(_ override: String?) -> String {
+    if let override { return Wallpapers.resolved(override) }
+    let env = ProcessInfo.processInfo.environment
+    if let dir = env["OMACOSY_TEMPLATES_DIR"], !dir.isEmpty { return Wallpapers.resolved(dir) }
+    if let repo = env["OMACOSY_REPO"], !repo.isEmpty { return repo + "/config/theme-templates" }
+    let link = NSHomeDirectory() + "/.local/bin/theme-set"
+    if let target = try? FileManager.default.destinationOfSymbolicLink(atPath: link), target.hasPrefix("/") {
+        let repo = ((target as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
+        return repo + "/config/theme-templates"
+    }
+    fail("cannot find the theme templates; pass --templates DIR or set OMACOSY_TEMPLATES_DIR")
+}
+
+// Phase 9: write the shareable bundle into a directory — the theme record,
+// its flat colors.toml and the Aether-derived app configs (Zed, the VS Code
+// extension, neovim.lua). The terminal-app configs come from
+// omacosy-term-auto-theme in a later step. Ported from Aether's GenerateOnly /
+// applier_zed / applier_vscode (https://github.com/omacom/aether, MIT).
+func exportBundle(_ theme: Theme, to path: String, templates: String?) throws -> String {
+    let dir = Wallpapers.resolved(path)
+    try FileManager.default.createDirectory(at: URL(fileURLWithPath: dir),
+                                            withIntermediateDirectories: true)
+
+    try ThemeLibrary.writeAtomically(try theme.canonicalData(),
+                                     to: URL(fileURLWithPath: dir + "/\(theme.id).json"))
+
+    let rendered = theme.palette.rendered()
+    try Materialise.colorsToml(rendered)
+        .write(toFile: dir + "/colors.toml", atomically: true, encoding: .utf8)
+
+    let root = repoTemplatesDir(templates)
+    var base = ThemeVariables.build(colors: rendered.colors, extended: rendered.extended,
+                                    light: theme.palette.resolvedMode == "light")
+    base["theme_name"] = theme.name
+    base["theme_slug"] = theme.id
+
+    func render(_ relative: String, app: String) throws -> String {
+        let file = root + "/" + relative
+        guard let content = try? String(contentsOfFile: file, encoding: .utf8) else {
+            throw ThemeError(message: "missing theme template: \(file)")
+        }
+        let merged = ThemeVariables.merged(base, overrides: theme.appOverrides[app] ?? [:])
+        return TemplateEngine.process(content, merged)
+    }
+
+    try render("zed.json", app: "zed")
+        .write(toFile: dir + "/zed.json", atomically: true, encoding: .utf8)
+
+    let vscode = dir + "/vscode-extension"
+    try FileManager.default.createDirectory(at: URL(fileURLWithPath: vscode + "/themes"),
+                                            withIntermediateDirectories: true)
+    try render("vscode-extension/package.json", app: "vscode")
+        .write(toFile: vscode + "/package.json", atomically: true, encoding: .utf8)
+    try render("vscode-extension/themes/theme.json", app: "vscode")
+        .write(toFile: vscode + "/themes/theme.json", atomically: true, encoding: .utf8)
+
+    try render("neovim.lua", app: "nvim")
+        .write(toFile: dir + "/neovim.lua", atomically: true, encoding: .utf8)
+
+    return dir
 }
 
 // The palette + extended colours a template verb renders from.
@@ -6771,8 +6854,16 @@ case "theme":
             guard let id = args.first else { throw ThemeError(message: "theme export needs an id") }
             args.removeFirst()
             let out = takeFlag("--out")
+            let bundle = takeFlag("--bundle")
+            let templatesFlag = takeFlag("--templates")
             noExtraArguments()
             let theme = try library.load(id: id)
+            if let bundle {
+                let dir = try exportBundle(theme, to: bundle, templates: templatesFlag)
+                if jsonOut { printJSON(["id": id, "bundle": dir]) }
+                print(dir)
+                exit(0)
+            }
             let data = try theme.canonicalData()
             guard let out else {
                 FileHandle.standardOutput.write(data)
