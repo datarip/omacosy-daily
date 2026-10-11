@@ -3312,7 +3312,7 @@ final class EditorPanelDoc: NSView {
         h += 24 + 12                                      // Apply to Palette
         h += AdjustmentSliderView.rowHeight + 10          // Strength
         h += 16 + 22 + 12                                 // AUTO ENHANCE + buttons
-        h += 18 + 26 + 8                                  // Presets
+        h += 34                                           // Presets
         h += HistogramView.viewHeight + 12
         h += 26 + CurveEditorView.viewHeight + 12         // Curves
         for group in EditorFilterFields.groups {
@@ -3413,9 +3413,9 @@ final class EditorPanelDoc: NSView {
         autoWBButton.frame = rect(top: top, h: 22, x: insetL + (bw + gap) * 2, w: bw)
         top += 22 + 12
         presetTop = top
-        top += 18
-        presetsButton.frame = rect(top: top, h: 26, x: insetL, w: min(180, contentW))
-        top += 26 + 8
+        presetsButton.frame = rect(top: top + 3, h: 26,
+                                   x: insetL + max(0, contentW - 170), w: min(170, contentW))
+        top += 34
         histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
         top += HistogramView.viewHeight + 12
         curveTop = top
@@ -3488,8 +3488,8 @@ final class EditorPanelDoc: NSView {
     override func draw(_ dirtyRect: NSRect) {
         drawTopLeft("AUTO ENHANCE", nerdFont("Bold", 11), palette.muted,
                     x: insetL, top: autoTop, height: bounds.height)
-        drawTopLeft("Presets", nerdFont("Bold", 12), palette.accent,
-                    x: insetL, top: presetTop, height: bounds.height)
+        drawMidLeft("Presets", nerdFont("Bold", 12), palette.label,
+                    x: insetL, midTop: presetTop + 16, height: bounds.height)
         drawTopLeft("Curves", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: curveTop, height: bounds.height)
         for (title, top) in groupTops {
