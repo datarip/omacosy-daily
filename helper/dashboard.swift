@@ -3090,10 +3090,16 @@ final class EditorPanelDoc: NSView {
     let autoLevelsButton = ButtonView()
     let autoContrastButton = ButtonView()
     let autoWBButton = ButtonView()
+    let gradeStrengthSlider = AdjustmentSliderView(
+        spec: SliderField(key: "paletteStrength", label: "Strength", min: 0, max: 100, step: 1, def: 70))
+    let gradeAddButton = ButtonView()
+    let gradeRemoveButton = ButtonView()
+    let gradeWells = (0..<4).map { _ in ColorWellView() }
     var onSlider: ((String, Double) -> Void)?
     var onAuto: ((String) -> Void)?
     var onCurve: (([[Double]]) -> Void)?
     var onCurveReset: (() -> Void)?
+    var onGradeStops: (([String]) -> Void)?
     var onApply: (() -> Void)?
     private(set) var sliders: [AdjustmentSliderView] = []
 
@@ -3102,6 +3108,8 @@ final class EditorPanelDoc: NSView {
     private var groupTops: [(title: String, top: CGFloat)] = []
     private var autoTop: CGFloat = 0
     private var curveTop: CGFloat = 0
+    private var gradeTop: CGFloat = 0
+    private var gradeStops: [String] = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -3127,6 +3135,27 @@ final class EditorPanelDoc: NSView {
         applyButton.toolTip = "Recompute the palette from this edit"
         applyButton.onClick = { [weak self] in self?.onApply?() }
         addSubview(applyButton)
+        gradeStrengthSlider.onChange = { [weak self] v in self?.onSlider?("paletteStrength", v) }
+        addSubview(gradeStrengthSlider)
+        for (i, w) in gradeWells.enumerated() {
+            w.isHidden = true
+            w.onChange = { [weak self] hex in
+                guard let self, i < self.gradeStops.count else { return }
+                self.gradeStops[i] = hex
+                self.onGradeStops?(self.gradeStops)
+            }
+            addSubview(w)
+        }
+        gradeAddButton.title = "+"
+        gradeAddButton.toolTip = "Add Colour Stop"
+        gradeAddButton.fontSize = 13
+        gradeAddButton.onClick = { [weak self] in self?.addGradeStop() }
+        addSubview(gradeAddButton)
+        gradeRemoveButton.title = "\u{2212}"
+        gradeRemoveButton.toolTip = "Remove Colour Stop"
+        gradeRemoveButton.fontSize = 13
+        gradeRemoveButton.onClick = { [weak self] in self?.removeGradeStop() }
+        addSubview(gradeRemoveButton)
         for group in EditorFilterFields.groups {
             for f in group.fields {
                 let s = AdjustmentSliderView(spec: f)
@@ -3152,6 +3181,7 @@ final class EditorPanelDoc: NSView {
             h += CGFloat(group.fields.count) * AdjustmentSliderView.rowHeight
             h += 10
         }
+        h += 26 + 24 + 8 + AdjustmentSliderView.rowHeight + 12   // Palette Grade
         return h
     }
 
@@ -3162,6 +3192,33 @@ final class EditorPanelDoc: NSView {
         histogram.b = b
         // the curve draws the luminance histogram as its backdrop
         curveView.histogram = lum
+    }
+
+    func setGradeStops(_ stops: [String]) {
+        gradeStops = stops
+        for (i, w) in gradeWells.enumerated() {
+            let show = i < stops.count
+            w.isHidden = !show
+            if show { w.hex = stops[i] }
+        }
+        gradeAddButton.isHidden = stops.count >= gradeWells.count
+        gradeRemoveButton.isHidden = stops.isEmpty
+        needsLayout = true
+        needsDisplay = true
+    }
+
+    private func addGradeStop() {
+        guard gradeStops.count < gradeWells.count else { return }
+        gradeStops.append("#808080")
+        setGradeStops(gradeStops)
+        onGradeStops?(gradeStops)
+    }
+
+    private func removeGradeStop() {
+        guard !gradeStops.isEmpty else { return }
+        gradeStops.removeLast()
+        setGradeStops(gradeStops)
+        onGradeStops?(gradeStops)
     }
 
     private func rect(top: CGFloat, h: CGFloat, x: CGFloat, w: CGFloat) -> NSRect {
@@ -3204,6 +3261,20 @@ final class EditorPanelDoc: NSView {
             }
             top += 10
         }
+        // Palette Grade: 2-4 colour stops plus a strength slider.
+        gradeTop = top
+        top += 26
+        let sw: CGFloat = 24, swGap: CGFloat = 6
+        var gx = insetL
+        for (i, w) in gradeWells.enumerated() where i < gradeStops.count {
+            w.frame = rect(top: top, h: sw, x: gx, w: sw)
+            gx += sw + swGap
+        }
+        gradeAddButton.frame = rect(top: top, h: sw, x: gx, w: 24)
+        gradeRemoveButton.frame = rect(top: top, h: sw, x: gx + 30, w: 24)
+        top += sw + 8
+        gradeStrengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
+                                         x: insetL, w: contentW)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -3215,6 +3286,8 @@ final class EditorPanelDoc: NSView {
             drawTopLeft(title, nerdFont("Bold", 12), palette.accent,
                         x: insetL, top: top, height: bounds.height)
         }
+        drawTopLeft("Palette Grade", nerdFont("Bold", 12), palette.accent,
+                    x: insetL, top: gradeTop, height: bounds.height)
     }
 }
 
@@ -3228,6 +3301,7 @@ final class EditorColumnView: NSView {
     var onAuto: ((String) -> Void)? { didSet { doc.onAuto = onAuto } }
     var onCurve: (([[Double]]) -> Void)? { didSet { doc.onCurve = onCurve } }
     var onCurveReset: (() -> Void)? { didSet { doc.onCurveReset = onCurveReset } }
+    var onGradeStops: (([String]) -> Void)? { didSet { doc.onGradeStops = onGradeStops } }
     var onApply: (() -> Void)? { didSet { doc.onApply = onApply } }
 
     let doc = EditorPanelDoc()
@@ -3286,6 +3360,7 @@ final class EditorColumnView: NSView {
         doc.onAuto = onAuto
         doc.onCurve = onCurve
         doc.onCurveReset = onCurveReset
+        doc.onGradeStops = onGradeStops
         doc.onApply = onApply
         undoButton.onClick = { [weak state] in state?.undo() }
         redoButton.onClick = { [weak state] in state?.redo() }
@@ -3300,6 +3375,8 @@ final class EditorColumnView: NSView {
         for s in doc.sliders { s.setValue(state.filters[s.spec.key], notify: false) }
         doc.strengthSlider.setValue(state.filters["strength"], notify: false)
         doc.curveView.points = state.filters.curvePoints
+        doc.setGradeStops(state.filters.paletteStops)
+        doc.gradeStrengthSlider.setValue(state.filters["paletteStrength"], notify: false)
     }
 
     // The editor hands the source's histograms here once it has decoded it.
@@ -3780,6 +3857,75 @@ func editorHistograms(from cg: CGImage, maxWidth: Int = 512)
     return (lum, r, g, b)
 }
 
+// themecore's buildPaletteLUT, mirrored for the preview's gradient: stops
+// sorted by HSL lightness, interpolated in HSL, the output lightness pinned to
+// the LUT axis. 256 RGB triplets. The engine remains the source of truth.
+func dashboardPaletteLUT(_ stops: [String]) -> [UInt8]? {
+    guard stops.count >= 2 else { return nil }
+    var hsl = stops.map { hslComponents($0) }
+    hsl.sort { $0.l < $1.l }
+    let segs = hsl.count - 1
+    var lut = [UInt8](repeating: 0, count: 256 * 3)
+    for y in 0..<256 {
+        let t = Double(y) / 255
+        let pos = t * Double(segs)
+        let i0 = min(segs - 1, Int(pos.rounded(.down)))
+        let f = pos - Double(i0)
+        let a = hsl[i0], b = hsl[i0 + 1]
+        let h = lerpHueDeg(a.h, b.h, f)
+        let s = a.s * (1 - f) + b.s * f
+        let hex = hslHex(h, s, t * 100)
+        let clean = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        if clean.count == 6, let v = UInt64(clean, radix: 16) {
+            lut[y * 3] = UInt8((v >> 16) & 0xff)
+            lut[y * 3 + 1] = UInt8((v >> 8) & 0xff)
+            lut[y * 3 + 2] = UInt8(v & 0xff)
+        }
+    }
+    return lut
+}
+
+func lerpHueDeg(_ a: Double, _ b: Double, _ f: Double) -> Double {
+    var d = (b - a).truncatingRemainder(dividingBy: 360)
+    if d > 180 { d -= 360 }
+    if d < -180 { d += 360 }
+    return a + d * f
+}
+
+// The palette grade as a colour cube: out = src*(1-t) + LUT[lightness]*t with
+// lightness = (max+min)/2, exactly the engine's mapping (the LUT axis is HSL
+// lightness). CIColorMap approximates it by luminance; a cube does not.
+private func ciPaletteGradeCube(_ image: CIImage, lut: [UInt8], strength: Double,
+                                size: Int = 32) -> CIImage {
+    var cube = [Float](repeating: 0, count: size * size * size * 4)
+    var idx = 0
+    for bi in 0..<size {
+        let b = Double(bi) / Double(size - 1)
+        for gi in 0..<size {
+            let g = Double(gi) / Double(size - 1)
+            for ri in 0..<size {
+                let r = Double(ri) / Double(size - 1)
+                let light = (max(r, max(g, b)) + min(r, min(g, b))) / 2
+                let li = min(255, max(0, Int((light * 255).rounded()))) * 3
+                let tr = Double(lut[li]) / 255
+                let tg = Double(lut[li + 1]) / 255
+                let tb = Double(lut[li + 2]) / 255
+                cube[idx] = Float(r * (1 - strength) + tr * strength)
+                cube[idx + 1] = Float(g * (1 - strength) + tg * strength)
+                cube[idx + 2] = Float(b * (1 - strength) + tb * strength)
+                cube[idx + 3] = 1
+                idx += 4
+            }
+        }
+    }
+    guard let f = CIFilter(name: "CIColorCube") else { return image }
+    f.setValue(image, forKey: kCIInputImageKey)
+    f.setValue(size, forKey: "inputCubeDimension")
+    f.setValue(Data(bytes: cube, count: cube.count * MemoryLayout<Float>.size),
+               forKey: "inputCubeData")
+    return f.outputImage ?? image
+}
+
 // Source-taking wrapper for the door: decode and render in one call.
 func imagePreviewCGImage(source: URL, raw: EditorFilters, maxSize: Int = 960) -> CGImage? {
     guard let input = CIImage(contentsOf: source, options: [.applyOrientationProperty: true]) else {
@@ -3909,6 +4055,11 @@ func editorPreviewRender(_ input: CIImage, raw: EditorFilters, maxSize: Int) -> 
                            bias: CIVector(x: t * 30 / 255 + n * 10 / 255,
                                           y: -n * 20 / 255,
                                           z: -t * 30 / 255 + n * 10 / 255, w: 0))
+    }
+    // Palette grade: the engine's lightness-indexed LUT, reproduced as a cube.
+    if f.paletteStops.count >= 2, f.paletteStrength > 0,
+       let lut = dashboardPaletteLUT(f.paletteStops) {
+        ci = ciPaletteGradeCube(ci, lut: lut, strength: f.paletteStrength / 100)
     }
     if f.sharpen > 0 {
         if let conv = CIFilter(name: "CIConvolution3X3") {
@@ -8386,6 +8537,9 @@ final class ThemeEditor {
         }
         root.wallpaperEditor.onCurveReset = { [weak self] in
             self?.editorState.edit("curve") { $0.curvePoints = [] }
+        }
+        root.wallpaperEditor.onGradeStops = { [weak self] stops in
+            self?.editorState.edit("palette") { $0.paletteStops = stops }
         }
         root.wallpaperEditor.onApply = { [weak self] in self?.applyToPalette() }
         editorState.onChange = { [weak self] in
