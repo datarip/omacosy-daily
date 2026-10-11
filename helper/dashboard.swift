@@ -17,6 +17,7 @@
 
 import Cocoa
 import CoreImage
+import CryptoKit
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -119,6 +120,10 @@ func shell(_ command: String) -> (Int32, String) {
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit()
     return (p.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+}
+
+func sha256Hex(_ s: String) -> String {
+    SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
 }
 
 func readConfKey(_ file: String, _ key: String) -> String? {
@@ -3067,26 +3072,25 @@ final class HistogramView: NSView {
 // from the palette's). The edited picture is shown in the central pane.
 final class EditorPanelDoc: NSView {
     let histogram = HistogramView()
-    let undoButton = ButtonView()
-    let redoButton = ButtonView()
-    let resetButton = ButtonView()
+    let applyButton = ButtonView()
     let autoLevelsButton = ButtonView()
     let autoContrastButton = ButtonView()
     let autoWBButton = ButtonView()
     var onSlider: ((String, Double) -> Void)?
     var onAuto: ((String) -> Void)?
-    var onUndo: (() -> Void)?
-    var onRedo: (() -> Void)?
-    var onReset: (() -> Void)?
+    var onApply: (() -> Void)?
     private(set) var sliders: [AdjustmentSliderView] = []
 
     private let insetL: CGFloat = 12
     private let insetR: CGFloat = 12
     private var groupTops: [(title: String, top: CGFloat)] = []
-    private var buttonsTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        applyButton.title = "Apply to Palette"
+        applyButton.toolTip = "Recompute the palette from this edit"
+        applyButton.onClick = { [weak self] in self?.onApply?() }
+        addSubview(applyButton)
         addSubview(histogram)
         for (b, title, op) in [(autoLevelsButton, "Auto Levels", "levels"),
                                (autoContrastButton, "Auto Contrast", "contrast"),
@@ -3104,21 +3108,6 @@ final class EditorPanelDoc: NSView {
                 addSubview(s)
             }
         }
-        undoButton.title = "\u{f0e2}"
-        redoButton.title = "\u{f01e}"
-        for b in [undoButton, redoButton] {
-            b.centeredByBounds = true
-            b.fontSize = 12
-        }
-        undoButton.toolTip = "Undo Picture Edit"
-        redoButton.toolTip = "Redo Picture Edit"
-        resetButton.title = "Reset"
-        undoButton.onClick = { [weak self] in self?.onUndo?() }
-        redoButton.onClick = { [weak self] in self?.onRedo?() }
-        resetButton.onClick = { [weak self] in self?.onReset?() }
-        addSubview(undoButton)
-        addSubview(redoButton)
-        addSubview(resetButton)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -3126,14 +3115,14 @@ final class EditorPanelDoc: NSView {
 
     func contentHeight() -> CGFloat {
         var h: CGFloat = 10
+        h += 22 + 6                                  // Apply to Palette
         h += HistogramView.viewHeight + 6
-        h += 26 * 3 + 12
+        h += 26 * 3 + 12                             // Auto Levels / Contrast / WB
         for group in EditorFilterFields.groups {
             h += 30
             h += CGFloat(group.fields.count) * AdjustmentSliderView.rowHeight
             h += 10
         }
-        h += 34 + 10
         return h
     }
 
@@ -3151,6 +3140,8 @@ final class EditorPanelDoc: NSView {
     override func layout() {
         super.layout()
         var top: CGFloat = 10
+        applyButton.frame = rect(top: top, h: 22, x: insetL, w: contentW)
+        top += 22 + 6
         histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
         top += HistogramView.viewHeight + 6
         for b in [autoLevelsButton, autoContrastButton, autoWBButton] {
@@ -3171,10 +3162,6 @@ final class EditorPanelDoc: NSView {
             }
             top += 10
         }
-        buttonsTop = top
-        undoButton.frame = rect(top: top + 4, h: 24, x: insetL, w: 24)
-        redoButton.frame = rect(top: top + 4, h: 24, x: insetL + 28, w: 24)
-        resetButton.frame = rect(top: top + 4, h: 24, x: insetL + 60, w: 64)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -3182,27 +3169,40 @@ final class EditorPanelDoc: NSView {
             drawTopLeft(title, nerdFont("Bold", 12), palette.accent,
                         x: insetL, top: top, height: bounds.height)
         }
-        palette.muted.withAlphaComponent(0.25).setFill()
-        NSRect(x: insetL, y: bounds.height - buttonsTop, width: contentW, height: 1).fill()
     }
 }
 
 // The right column: controls only. The edited picture is shown in the central
-// pane; this column scrolls EditorPanelDoc (the four slider groups and the
-// picture history's Undo / Redo / Reset).
+// pane. The picture history's Undo / Redo / Reset sit fixed in the header.
 final class EditorColumnView: NSView {
     var state: EditorState? { didSet { wire() } }
-    // The Auto buttons call out to the editor, which owns the picture path and
-    // the engine.
+    // The Auto and Apply buttons call out to the editor, which owns the picture
+    // path and the engine.
     var onAuto: ((String) -> Void)? { didSet { doc.onAuto = onAuto } }
+    var onApply: (() -> Void)? { didSet { doc.onApply = onApply } }
 
     let doc = EditorPanelDoc()
+    private let undoButton = ButtonView()
+    private let redoButton = ButtonView()
+    private let resetButton = ButtonView()
     private let scroll = NSScrollView()
     private let scroller = CustomScroller()
     private let scrollerW: CGFloat = 8
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        undoButton.title = "\u{f0e2}"
+        redoButton.title = "\u{f01e}"
+        for b in [undoButton, redoButton] {
+            b.centeredByBounds = true
+            b.fontSize = 12
+            addSubview(b)
+        }
+        undoButton.toolTip = "Undo Picture Edit"
+        redoButton.toolTip = "Redo Picture Edit"
+        resetButton.title = "Reset"
+        resetButton.fontSize = 11
+        addSubview(resetButton)
         scroll.hasVerticalScroller = false
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
@@ -3234,10 +3234,11 @@ final class EditorColumnView: NSView {
         // EditorState.onChange belongs to the editor (dirty + the central
         // preview); the column only drives its own controls.
         doc.onSlider = { [weak state] key, value in state?.set(key, value) }
-        doc.onUndo = { [weak state] in state?.undo() }
-        doc.onRedo = { [weak state] in state?.redo() }
-        doc.onReset = { [weak state] in state?.reset() }
         doc.onAuto = onAuto
+        doc.onApply = onApply
+        undoButton.onClick = { [weak state] in state?.undo() }
+        redoButton.onClick = { [weak state] in state?.redo() }
+        resetButton.onClick = { [weak state] in state?.reset() }
         syncFromState()
     }
 
@@ -3257,6 +3258,12 @@ final class EditorColumnView: NSView {
         super.layout()
         let headerH: CGFloat = 40
         let h = max(0, bounds.height - headerH)
+        resetButton.frame = NSRect(x: bounds.width - 12 - 56, y: bounds.height - 30,
+                                   width: 56, height: 24)
+        redoButton.frame = NSRect(x: resetButton.frame.minX - 6 - 24, y: bounds.height - 30,
+                                  width: 24, height: 24)
+        undoButton.frame = NSRect(x: redoButton.frame.minX - 6 - 24, y: bounds.height - 30,
+                                  width: 24, height: 24)
         let scrollW = max(0, bounds.width - scrollerW - 12)
         scroll.frame = NSRect(x: 0, y: 0, width: scrollW, height: h)
         scroller.frame = NSRect(x: bounds.width - scrollerW, y: 0, width: scrollerW, height: h)
@@ -3487,6 +3494,23 @@ struct EditorFilters: Equatable {
             default: break
             }
         }
+    }
+
+    // The recipe as the engine's `image render --filters` JSON (canonical keys).
+    func jsonObject() -> [String: Any] {
+        var o: [String: Any] = [
+            "blur": blur, "brightness": brightness, "contrast": contrast,
+            "saturation": saturation, "hueRotate": hueRotate, "sepia": sepia,
+            "invert": invert, "exposure": exposure, "vignette": vignette,
+            "sharpen": sharpen, "grain": grain, "shadows": shadows,
+            "highlights": highlights, "temperature": temperature, "tint": tint,
+            "paletteStrength": paletteStrength, "cropX": cropX, "cropY": cropY,
+            "cropW": cropW, "cropH": cropH, "resizeW": resizeW, "resizeH": resizeH,
+            "rotate": rotate, "flipH": flipH, "flipV": flipV, "strength": strength,
+        ]
+        if !curvePoints.isEmpty { o["curvePoints"] = curvePoints }
+        if paletteStops.count >= 2 { o["paletteStops"] = paletteStops }
+        return o
     }
 }
 
@@ -4145,6 +4169,10 @@ final class PaletteModel {
     private(set) var shades: [String: String] = [:]
     private(set) var recentColors: [String] = []
     private(set) var imagePath = ""
+    // When an edit is applied, the palette derives from the rendered file while
+    // the editor keeps the original as its source (non-destructive, re-editable).
+    private(set) var editedPath: String?
+    var extractSource: String { editedPath ?? imagePath }
     // bar/pill/label/muted/ring for the current rendered palette, for the
     // accessibility panel
     private(set) var roles: [String: String] = [:]
@@ -4548,7 +4576,7 @@ final class PaletteModel {
         if newMode == "auto" {
             paletteGeneration += 1
             let gen = paletteGeneration
-            let q = shellQuote(imagePath)
+            let q = shellQuote(extractSource)
             DispatchQueue.global().async { [weak self] in
                 guard let self else { return }
                 let (code, out) = self.themecore("palette suggest-mode \(q)")
@@ -4845,11 +4873,23 @@ final class PaletteModel {
     // Re-derives the base palette from the image. Locked colours keep their
     // old value; choosing Magic resets the adjustments too (the plan's
     // reset action).
+    // The wallpaper editor's "Apply to Palette": re-derive the palette from the
+    // edited render (or the original when nil). One palette-history step.
+    func applyEditedSource(_ path: String?) {
+        guard path != editedPath else { return }
+        pushHistory("source")
+        editedPath = path
+        edited()
+        update()
+        regenerate()
+        loadStrips()
+    }
+
     private func regenerate() {
-        guard !imagePath.isEmpty, baseColors.count == 16 else { return }
+        guard !extractSource.isEmpty, baseColors.count == 16 else { return }
         paletteGeneration += 1
         let gen = paletteGeneration
-        let q = shellQuote(imagePath)
+        let q = shellQuote(extractSource)
         let m = method
         let light = resolvedMode == "light"
         let lockedNow = locked
@@ -5033,11 +5073,11 @@ final class PaletteModel {
     // populated by the time it is opened. Magic runs with them: an edition
     // seeds no strip of its own, and without it the Magic row stayed empty.
     private func loadStrips() {
-        guard !imagePath.isEmpty else { return }
+        guard !extractSource.isEmpty else { return }
         stripGeneration += 1
         let gen = stripGeneration
         let values = ["magic"] + modeGroups.flatMap { $0.modes.map { $0.value } }
-        let q = shellQuote(imagePath)
+        let q = shellQuote(extractSource)
         let light = resolvedMode == "light"
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }
@@ -6706,9 +6746,21 @@ final class PaletteBuilderView: NSView {
     private let scrollerW: CGFloat = 8
     private var shownEditKey: String?
     private var shownImage = ""
+    // The palette's own history, fixed in the column header.
+    private let undoButton = ButtonView()
+    private let redoButton = ButtonView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        undoButton.title = "\u{f0e2}"
+        redoButton.title = "\u{f01e}"
+        for b in [undoButton, redoButton] {
+            b.centeredByBounds = true
+            b.fontSize = 12
+            addSubview(b)
+        }
+        undoButton.toolTip = "Undo Palette Edit"
+        redoButton.toolTip = "Redo Palette Edit"
         scroll.hasVerticalScroller = false
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
@@ -6791,6 +6843,8 @@ final class PaletteBuilderView: NSView {
             slider.onChange = { [weak self] v in self?.model?.setAdjustment(key, v) }
         }
         doc.resetButton.onClick = { [weak self] in self?.model?.resetAdjustments() }
+        undoButton.onClick = { [weak self] in self?.model?.undo() }
+        redoButton.onClick = { [weak self] in self?.model?.redo() }
     }
 
     func sync() {
@@ -6861,6 +6915,8 @@ final class PaletteBuilderView: NSView {
         super.layout()
         let headerH: CGFloat = 40
         let h = max(0, bounds.height - headerH)
+        redoButton.frame = NSRect(x: bounds.width - 32, y: bounds.height - 30, width: 24, height: 24)
+        undoButton.frame = NSRect(x: bounds.width - 60, y: bounds.height - 30, width: 24, height: 24)
         scroll.frame = NSRect(x: 0, y: 0, width: max(0, bounds.width - scrollerW - 14), height: h)
         scroller.frame = NSRect(x: bounds.width - scrollerW, y: 0, width: scrollerW, height: h)
         scroller.refresh()
@@ -7997,9 +8053,6 @@ final class EditorFooterView: NSView {
     let saveButton = ButtonView()
     let saveAsButton = ButtonView()
     let applyButton = ButtonView()
-    // history is global to the editor: it lives in the bottom band
-    let undoButton = ButtonView()
-    let redoButton = ButtonView()
     var dirty = false { didSet { needsDisplay = true } }
     var message: (text: String, red: Bool)? { didSet { needsDisplay = true } }
 
@@ -8009,19 +8062,9 @@ final class EditorFooterView: NSView {
         saveAsButton.secondary = true
         saveButton.title = "Save"
         applyButton.title = "Apply Theme"
-        undoButton.title = "\u{f0e2}"
-        undoButton.centeredByBounds = true
-        undoButton.fontSize = 12
-        undoButton.toolTip = "Undo (⌘Z)"
-        redoButton.title = "\u{f01e}"
-        redoButton.centeredByBounds = true
-        redoButton.fontSize = 12
-        redoButton.toolTip = "Redo (⇧⌘Z)"
         addSubview(saveAsButton)
         addSubview(saveButton)
         addSubview(applyButton)
-        addSubview(undoButton)
-        addSubview(redoButton)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -8033,8 +8076,6 @@ final class EditorFooterView: NSView {
         applyButton.frame = NSRect(x: bounds.width - margin - w, y: y, width: w, height: h)
         saveButton.frame = NSRect(x: applyButton.frame.minX - 8 - w, y: y, width: w, height: h)
         saveAsButton.frame = NSRect(x: saveButton.frame.minX - 8 - w, y: y, width: w, height: h)
-        undoButton.frame = NSRect(x: margin, y: y, width: 24, height: h)
-        redoButton.frame = NSRect(x: margin + 28, y: y, width: 24, height: h)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -8043,13 +8084,13 @@ final class EditorFooterView: NSView {
         if let message {
             drawMidLeft(message.text, nerdFont("Regular", 11),
                         message.red ? .systemRed : palette.muted,
-                        x: 84, midTop: bounds.height / 2, height: bounds.height)
+                        x: 16, midTop: bounds.height / 2, height: bounds.height)
         } else if dirty {
-            let dot = NSRect(x: 84, y: bounds.midY - 3, width: 6, height: 6)
+            let dot = NSRect(x: 16, y: bounds.midY - 3, width: 6, height: 6)
             palette.accent.setFill()
             NSBezierPath(ovalIn: dot).fill()
             drawMidLeft("Unsaved changes", nerdFont("Regular", 11), palette.muted,
-                        x: 96, midTop: bounds.height / 2, height: bounds.height)
+                        x: 28, midTop: bounds.height / 2, height: bounds.height)
         }
     }
 }
@@ -8274,6 +8315,7 @@ final class ThemeEditor {
         root.paletteCanvas.model = model
         root.wallpaperEditor.state = editorState
         root.wallpaperEditor.onAuto = { [weak self] op in self?.runAuto(op) }
+        root.wallpaperEditor.onApply = { [weak self] in self?.applyToPalette() }
         editorState.onChange = { [weak self] in
             guard let self else { return }
             self.dirty = true
@@ -8294,8 +8336,6 @@ final class ThemeEditor {
             self.dirty = true
             self.root.dirty = true
         }
-        root.footer.undoButton.onClick = { [weak self] in self?.model.undo() }
-        root.footer.redoButton.onClick = { [weak self] in self?.model.redo() }
         root.footer.saveButton.onClick = { [weak self] in self?.startSave(newID: false, action: .none) }
         root.footer.saveAsButton.onClick = { [weak self] in self?.startSave(newID: true, action: .none) }
         root.footer.applyButton.onClick = { [weak self] in self?.startSave(newID: false, action: .apply) }
@@ -8401,6 +8441,44 @@ final class ThemeEditor {
             DispatchQueue.main.async {
                 guard let self, self.editBaseGeneration == gen else { return }
                 self.root.paletteCanvas.setEditedImage(cg)
+            }
+        }
+    }
+
+    // Renders the current edit at full resolution through the engine (the
+    // record) into a content-addressed working file, then re-derives the
+    // palette from it. The original picture is never written.
+    private func applyToPalette() {
+        let source = model.imagePath
+        let filters = editorState.filters
+        guard !source.isEmpty else { return }
+        guard !filters.isIdentity else {
+            model.applyEditedSource(nil)
+            showMessage("Palette back to the original", red: false)
+            return
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: filters.jsonObject()),
+              let recipe = String(data: data, encoding: .utf8) else { return }
+        let ext = (source as NSString).pathExtension.isEmpty
+            ? "png" : (source as NSString).pathExtension.lowercased()
+        let dir = HOME + "/.config/omacosy/studio/edits"
+        let name = String(sha256Hex(source + "\n" + recipe).prefix(16))
+        let out = dir + "/" + name + "." + ext
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: out) {
+                let cmd = "\(themecoreBin()) image render \(shellQuote(source)) "
+                    + "--filters \(shellQuote(recipe)) --out \(shellQuote(out))"
+                let (code, _) = shell(cmd)
+                guard code == 0, FileManager.default.fileExists(atPath: out) else {
+                    DispatchQueue.main.async { self.showMessage("Apply to Palette failed", red: true) }
+                    return
+                }
+            }
+            DispatchQueue.main.async {
+                self.model.applyEditedSource(out)
+                self.showMessage("Palette updated from the edit", red: false)
             }
         }
     }
