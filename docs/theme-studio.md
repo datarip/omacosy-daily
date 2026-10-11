@@ -21,6 +21,16 @@ draw their own background and pills from the palette's **accent** — the colour
 the palette names itself with — so any applied palette, Magic or an Aether
 mode, keeps Omacosy's chrome on theme.
 
+The editor previews the theme you are building **live**: its own background,
+text, pills and accent follow the draft as you transform the palette, before
+you apply. And the **Semantic Colors** section carries two **Omacosy** groups —
+the bar's own colours (**Background, Pill, Muted, Label, Accent**) and its
+signals (**Ring, Red, Green, Yellow**) — that are editable **independently of
+the palette the terminal tools use**. Overriding one changes only that Omacosy
+surface, never the `colors.toml` the terminal follows; click a card to open the
+colour inspector, and the pin dot plus the header Reset or "Reset N pinned"
+return them to auto.
+
 ## Exporting a theme
 
 **From the editor.** Press **Export** in the footer. A folder picker opens; the

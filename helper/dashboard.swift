@@ -5448,6 +5448,39 @@ final class PaletteModel {
         ("selection_background", "Selection"),
     ]
 
+    // The Omacosy-UI-ONLY roles the editor can override, stored as `ui_<role>`
+    // in `extended`. The engine applies them verbatim to the bar/ring and no
+    // terminal writer reads them, so recolouring Omacosy's own chrome never
+    // moves the palette the terminal tools use.
+    static let uiRoles: [(role: String, label: String)] = [
+        ("background", "Background"), ("pill", "Pill"), ("muted", "Muted"),
+        ("label", "Label"), ("accent", "Accent"), ("ring", "Ring"),
+        ("red", "Red"), ("green", "Green"), ("yellow", "Yellow"),
+    ]
+
+    // The derived value an Omacosy role falls back to when unpinned. `roles`
+    // (from `palette roles`) holds bar/pill/muted/label/accent/ring; the
+    // semantic trio is the fixed light/dark set the engine also uses.
+    func derivedUIRole(_ role: String) -> String {
+        func hashed(_ s: String?) -> String? { s.flatMap(cleanHex) }
+        switch role {
+        case "background": return hashed(roles["bar"]) ?? hashed(baseColors.first) ?? "#000000"
+        case "pill":
+            return hashed(roles["pill"])
+                ?? hashed(baseColors.indices.contains(8) ? baseColors[8] : nil) ?? "#000000"
+        case "muted": return hashed(roles["muted"]) ?? "#8a8a8a"
+        case "label":
+            return hashed(roles["label"])
+                ?? hashed(baseColors.indices.contains(7) ? baseColors[7] : nil) ?? "#ffffff"
+        case "accent": return hashed(roles["accent"]) ?? "#8888ff"
+        case "ring": return hashed(roles["ring"]) ?? hashed(roles["accent"]) ?? "#8888ff"
+        case "red": return resolvedMode == "light" ? "#9d1f1f" : "#e05f5f"
+        case "green": return resolvedMode == "light" ? "#1f7a3a" : "#6fcf87"
+        case "yellow": return resolvedMode == "light" ? "#8a6d00" : "#e5c736"
+        default: return "#000000"
+        }
+    }
+
     // Aether's pinnable semantic shades: derived from the palette, but a
     // click-to-edit stores an explicit value that survives palette swaps
     // until "Reset N pinned".
@@ -5464,12 +5497,16 @@ final class PaletteModel {
 
     func pinnedShadeCount() -> Int {
         Self.shadeKeys.filter { extendedHex[$0.key] != nil }.count
+            + Self.uiRoles.filter { extendedHex["ui_\($0.role)"] != nil }.count
     }
 
     func clearShadePins() {
         guard pinnedShadeCount() > 0 else { return }
         pushHistory(nil)
         for slot in Self.shadeKeys { extendedHex.removeValue(forKey: slot.key) }
+        // the Omacosy UI overrides ride the same "back to auto" reset
+        for r in Self.uiRoles { extendedHex.removeValue(forKey: "ui_\(r.role)") }
+        extendedHex.removeValue(forKey: "background")
         edited()
         update()
         refreshRender()
@@ -5535,7 +5572,10 @@ final class PaletteModel {
         extendedHex = defaultExtended(baseColors, accent: nil)
         if let ext = pal["extended"] as? [String: Any] {
             for (key, raw) in ext {
-                if let v = raw as? String { extendedHex[key] = v }
+                if let v = raw as? String {
+                    // the bare "background" is the earlier spelling of ui_background
+                    extendedHex[key == "background" ? "ui_background" : key] = v
+                }
             }
         }
         method = (pal["method"] as? String) ?? "magic"
@@ -5603,10 +5643,17 @@ final class PaletteModel {
     }
 
     func resetAdjustments() {
-        guard !adjustments.isIdentity || !curve.isEmpty else { return }
+        // The header Reset also returns every Omacosy UI override to auto, so
+        // it is not a no-op once only a background has been picked. It never
+        // reverts the palette to the last save (Undo/⌘Z steps back).
+        let hasUI = Self.uiRoles.contains { extendedHex["ui_\($0.role)"] != nil }
+            || extendedHex["background"] != nil
+        guard !adjustments.isIdentity || !curve.isEmpty || hasUI else { return }
         pushHistory(nil)
         adjustments = EditorAdjustments()
         curve = []
+        for r in Self.uiRoles { extendedHex.removeValue(forKey: "ui_\(r.role)") }
+        extendedHex.removeValue(forKey: "background")
         edited()
         update()
         refreshRender()
@@ -5857,6 +5904,12 @@ final class PaletteModel {
         switch editTarget {
         case .color(let i): return baseColors.indices.contains(i) ? baseColors[i] : nil
         case .extended(let key):
+            // roles come back from `palette roles` as a bare 6-char hex; the
+            // inspector edits "#rrggbb", so normalise before handing it over
+            if key.hasPrefix("ui_") {
+                let role = String(key.dropFirst(3))
+                return cleanHex(extendedHex[key] ?? "") ?? derivedUIRole(role)
+            }
             return extendedHex[key] ?? shades[key] ?? defaultExtended(baseColors, accent: nil)[key]
         case .override(let app, let key):
             if let ov = appOverrides[app]?[key] { return ov }
@@ -5876,6 +5929,10 @@ final class PaletteModel {
             guard Self.ansiLabels.indices.contains(i) else { return "Colour \(i)" }
             return "\(Self.ansiLabels[i]) (ANSI \(i))"
         case .extended(let key):
+            if key.hasPrefix("ui_") {
+                let role = String(key.dropFirst(3))
+                return Self.uiRoles.first { $0.role == role }?.label ?? role.capitalized
+            }
             if let slot = Self.extendedKeys.first(where: { $0.key == key }) { return slot.label }
             if let slot = Self.shadeKeys.first(where: { $0.key == key }) { return slot.label }
             return key
@@ -6225,6 +6282,14 @@ final class PaletteModel {
     private func loadRoles(_ colors: [String], accent: String?) {
         var args = "palette roles --colors \(shellQuote(colors.joined(separator: ",")))"
         if let accent, !accent.isEmpty { args += " --accent \(shellQuote(accent))" }
+        var ui: [String: String] = [:]
+        for r in Self.uiRoles {
+            if let h = extendedHex["ui_\(r.role)"], !h.isEmpty { ui[r.role] = h }
+        }
+        if !ui.isEmpty, let d = try? JSONSerialization.data(withJSONObject: ui),
+           let s = String(data: d, encoding: .utf8) {
+            args += " --ui-json \(shellQuote(s))"
+        }
         args += " --json"
         DispatchQueue.global().async { [weak self] in
             guard let self else { return }
@@ -7144,15 +7209,18 @@ final class SemanticSectionView: NSView {
 
     var groups: [Group] = [] { didSet { needsDisplay = true } }
     var editTarget: PaletteModel.EditTarget? { didSet { needsDisplay = true } }
+    // Keys whose value is an explicit pin (a shade or the UI Background), so
+    // the "Reset N pinned" count has something visible to point at.
+    var pinnedKeys: Set<String> = [] { didSet { needsDisplay = true } }
     var onEdit: ((PaletteModel.EditTarget) -> Void)?
 
     static let groupH: CGFloat = 86
     static let rowGap: CGFloat = 8
 
-    static func height() -> CGFloat { groupH * 2 + rowGap }
+    static func height() -> CGFloat { groupH * 3 + rowGap * 2 }
 
     private func boxes() -> [(group: Group, box: NSRect, cards: [NSRect])] {
-        guard groups.count == 4, bounds.width > 0 else { return [] }
+        guard !groups.isEmpty, bounds.width > 0 else { return [] }
         let colGap: CGFloat = 8
         let colW = (bounds.width - colGap) / 2
         var out: [(Group, NSRect, [NSRect])] = []
@@ -7206,6 +7274,17 @@ final class SemanticSectionView: NSView {
                         palette.accent.setStroke()
                         path.lineWidth = 2
                         path.stroke()
+                    }
+                    // a pin marker in the top-right corner, so the "Reset N
+                    // pinned" count points at a card the user can see
+                    if pinnedKeys.contains(key) {
+                        let dot = NSRect(x: r.maxX - 8, y: r.maxY - 8, width: 6, height: 6)
+                        let dotPath = NSBezierPath(ovalIn: dot)
+                        palette.accent.setFill()
+                        dotPath.fill()
+                        main.withAlphaComponent(0.55).setStroke()
+                        dotPath.lineWidth = 1
+                        dotPath.stroke()
                     }
                 } else if let slot = card.slot {
                     var isEditing = false
@@ -7988,7 +8067,7 @@ final class PaletteBuilderView: NSView {
         redoButton.toolTip = "Redo Palette Edit"
         resetButton.title = "Reset"
         resetButton.fontSize = 11
-        resetButton.toolTip = "Reset Colour Adjustments"
+        resetButton.toolTip = "Reset Adjustments and UI Background"
         addSubview(resetButton)
         scroll.hasVerticalScroller = false
         scroll.drawsBackground = false
@@ -9229,6 +9308,11 @@ final class PaletteCanvasView: NSView {
         func ext(_ key: String) -> String {
             model.finalExtended[key] ?? model.extendedHex[key] ?? "#000000"
         }
+        // An Omacosy UI role: the user's override when set, otherwise the
+        // derived value. `derivedUIRole` already returns "#rrggbb".
+        func uiHex(_ role: String) -> String {
+            cleanHex(model.extendedHex["ui_\(role)"] ?? "") ?? model.derivedUIRole(role)
+        }
         doc.semantic.groups = [
             SemanticSectionView.Group(title: "Background", cards: [
                 .init(label: "Darker", hex: shade("darker_bg", 0), key: "darker_bg"),
@@ -9247,13 +9331,34 @@ final class PaletteCanvasView: NSView {
                 .init(label: "Orange", hex: shade("orange", 1), key: "orange"),
                 .init(label: "Brown", hex: shade("brown", 1), key: "brown"),
             ]),
-            SemanticSectionView.Group(title: "UI", cards: [
+            SemanticSectionView.Group(title: "Terminal", cards: [
                 .init(label: "Accent", hex: ext("accent"), key: "accent"),
                 .init(label: "Cursor", hex: ext("cursor"), key: "cursor"),
                 .init(label: "Sel FG", hex: ext("selection_foreground"), key: "selection_foreground"),
                 .init(label: "Sel BG", hex: ext("selection_background"), key: "selection_background"),
             ]),
+            SemanticSectionView.Group(title: "Omacosy", cards: [
+                .init(label: "Background", hex: uiHex("background"), key: "ui_background"),
+                .init(label: "Pill", hex: uiHex("pill"), key: "ui_pill"),
+                .init(label: "Muted", hex: uiHex("muted"), key: "ui_muted"),
+                .init(label: "Label", hex: uiHex("label"), key: "ui_label"),
+                .init(label: "Accent", hex: uiHex("accent"), key: "ui_accent"),
+            ]),
+            SemanticSectionView.Group(title: "Ring & Status", cards: [
+                .init(label: "Ring", hex: uiHex("ring"), key: "ui_ring"),
+                .init(label: "Red", hex: uiHex("red"), key: "ui_red"),
+                .init(label: "Green", hex: uiHex("green"), key: "ui_green"),
+                .init(label: "Yellow", hex: uiHex("yellow"), key: "ui_yellow"),
+            ]),
         ]
+        var pinnedKeys: Set<String> = []
+        for slot in PaletteModel.shadeKeys where model.extendedHex[slot.key] != nil {
+            pinnedKeys.insert(slot.key)
+        }
+        for r in PaletteModel.uiRoles where model.extendedHex["ui_\(r.role)"] != nil {
+            pinnedKeys.insert("ui_\(r.role)")
+        }
+        doc.semantic.pinnedKeys = pinnedKeys
         doc.semantic.editTarget = model.editTarget
         doc.pinnedCount = model.pinnedShadeCount()
         doc.onResetPins = { [weak self] in self?.model?.clearShadePins() }
@@ -9686,7 +9791,7 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
         let corner = min(windowCornerRadius(10), min(bounds.width, bounds.height) / 2)
         let body = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
                                 xRadius: corner, yRadius: corner)
-        palette.barBG.setFill()
+        (palette.barBG).setFill()
         body.fill()
         palette.accent.setStroke()
         body.lineWidth = 1
@@ -9761,6 +9866,9 @@ final class ThemeEditor {
     private var applyProgressGeneration = -1
     private var applyProgressSafety: DispatchWorkItem?
     private var applyProgressStarted = Date.distantPast
+    // The applied theme's palette, saved while the editor previews the draft
+    // so it can be put back when the editor closes.
+    private var appliedPalette: Palette?
 
     private init(subject: EditorSubject, size: NSSize, status: ((String) -> Void)?) {
         self.subject = subject
@@ -9876,6 +9984,8 @@ final class ThemeEditor {
             guard let self else { return }
             self.root.paletteBuilder.sync()
             self.root.paletteCanvas.sync()
+            // the whole editor previews the draft's Omacosy UI colours live
+            self.applyDraftPalette()
             // the picture the central pane and the palette see (an edition's
             // media or a draft's wallpaper); decode it once for the edits
             self.loadEditBase()
@@ -10761,9 +10871,37 @@ final class ThemeEditor {
         }
     }
 
+    // The editor draws from the shared `palette`; point it at the DRAFT's
+    // derived Omacosy roles so the whole editor previews the theme being built.
+    // The applied palette is saved once and restored on close.
+    private func applyDraftPalette() {
+        if appliedPalette == nil { appliedPalette = palette }
+        guard let applied = appliedPalette, !model.roles.isEmpty else { return }
+        func c(_ key: String, _ fallback: NSColor) -> NSColor {
+            model.roles[key].map(nsColor(fromHex:)) ?? fallback
+        }
+        var p = Palette()
+        p.barBG = c("bar", applied.barBG)
+        p.itemBG = c("pill", applied.itemBG)
+        p.accent = c("accent", applied.accent)
+        p.label = c("label", applied.label)
+        p.muted = c("muted", applied.muted)
+        palette = p
+        markTreeNeedsDisplay(root)
+        if let dash = window.parent as? DashboardWindow, let v = dash.contentView {
+            markTreeNeedsDisplay(v)
+        }
+    }
+
     private func close() {
         guard ThemeEditor.current === self else { return }
         ThemeEditor.current = nil
+        // the editor swapped the global palette to the draft; put the applied
+        // theme's back before the dashboard takes over
+        palette = loadPalette()
+        if let dash = window.parent as? DashboardWindow, let v = dash.contentView {
+            markTreeNeedsDisplay(v)
+        }
         if let k = keyMonitor { NSEvent.removeMonitor(k); keyMonitor = nil }
         NSColorPanel.shared.setTarget(nil)
         NSColorPanel.shared.orderOut(nil)

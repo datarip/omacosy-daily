@@ -649,7 +649,8 @@ extension Palette16 {
                 Extended(accent: one(extended.accent),
                          cursor: one(extended.cursor),
                          selectionForeground: one(extended.selectionForeground),
-                         selectionBackground: one(extended.selectionBackground)))
+                         selectionBackground: one(extended.selectionBackground),
+                         ui: extended.ui))
     }
 }
 
@@ -3260,7 +3261,26 @@ struct BarRoles {
 // vs pill >= 0.50, muted >= 0.18 from both, accent >= 0.28/0.20 from bar and
 // pill, ring >= 0.10 from the bar) and the WCAG checks (text 4.5:1, accent
 // 3:1). The blend loops are derive.swift's.
-func barRoles(_ colors: [String], accent accentHex: String) -> BarRoles {
+func barRoles(_ colors: [String], accent accentHex: String,
+              ui: [String: String] = [:]) -> BarRoles {
+    var roles = barRolesCore(colors, accent: accentHex)
+    // Omacosy-UI overrides are applied VERBATIM: the user asked to drive those
+    // surfaces directly, so nothing derived from them moves. Read by no
+    // terminal writer, so the terminal palette is untouched.
+    func override(_ role: String, _ field: inout String) {
+        guard let h = ui[role], let n = normalizedColorHex(h) else { return }
+        field = n.hasPrefix("#") ? String(n.dropFirst()) : n
+    }
+    override("background", &roles.bar)
+    override("pill", &roles.pill)
+    override("muted", &roles.muted)
+    override("label", &roles.label)
+    override("accent", &roles.accent)
+    override("ring", &roles.ring)
+    return roles
+}
+
+private func barRolesCore(_ colors: [String], accent accentHex: String) -> BarRoles {
     if colors.count != 16 { fail("bar roles need exactly 16 colours") }
     let p0 = DerivePort.RGB(hex: colors[0])
     let p7 = DerivePort.RGB(hex: colors[7])
@@ -4366,6 +4386,11 @@ struct Extended {
     var cursor: String
     var selectionForeground: String
     var selectionBackground: String
+    // Omacosy-UI-ONLY overrides, keyed by role: background, pill, muted,
+    // label, accent, ring, red, green, yellow. Applied verbatim by barRoles /
+    // materialise and read by NO terminal writer, so recolouring Omacosy's own
+    // chrome never moves the palette the terminal tools use. Unset = derive.
+    var ui: [String: String] = [:]
 
     // Engine rule: when absent, these derive from the palette.
     static func defaults(for colors: [String]) -> Extended {
@@ -4657,6 +4682,13 @@ extension Theme {
             extended.cursor = try colour("cursor", extended.cursor)
             extended.selectionForeground = try colour("selection_foreground", extended.selectionForeground)
             extended.selectionBackground = try colour("selection_background", extended.selectionBackground)
+            // Omacosy-UI-only overrides: `ui_<role>`, and the bare
+            // `background` (the earlier spelling of `ui_background`).
+            for (k, v) in extObj {
+                guard let s = JSONField.string(v), let hex = normalizedColorHex(s) else { continue }
+                if k.hasPrefix("ui_") { extended.ui[String(k.dropFirst(3))] = hex }
+                else if k == "background" { extended.ui["background"] = hex }
+            }
         } else if paletteObj["extended"] != nil && !(paletteObj["extended"] is NSNull) {
             try bad("\"palette.extended\" must be an object")
         }
@@ -4922,6 +4954,9 @@ extension Theme {
         ext["cursor"] = palette.extended.cursor
         ext["selection_foreground"] = palette.extended.selectionForeground
         ext["selection_background"] = palette.extended.selectionBackground
+        let staleUI = ext.keys.filter { $0.hasPrefix("ui_") || $0 == "background" }
+        for k in staleUI { ext.removeValue(forKey: k) }
+        for (role, hex) in palette.extended.ui { ext["ui_\(role)"] = hex }
         pal["extended"] = ext
         pal["locked"] = palette.locked
         pal.removeValue(forKey: "lockedColors")
@@ -5532,8 +5567,11 @@ enum Materialise {
         var parts: [String] = []
         parts.append(theme.palette.colors.joined(separator: ","))
         let ext = theme.palette.extended
-        parts.append([ext.accent, ext.cursor, ext.selectionForeground, ext.selectionBackground]
-            .joined(separator: ","))
+        var extParts = [ext.accent, ext.cursor, ext.selectionForeground, ext.selectionBackground]
+        if !ext.ui.isEmpty {
+            extParts.append(ext.ui.keys.sorted().map { "\($0)=\(ext.ui[$0]!)" }.joined(separator: ";"))
+        }
+        parts.append(extParts.joined(separator: ","))
         parts.append(theme.palette.resolvedMode)
         let a = theme.palette.adjustments
         parts.append([a.vibrance, a.saturation, a.contrast, a.brightness, a.shadows,
@@ -5637,6 +5675,19 @@ enum Materialise {
             bar = roles.bar; pill = roles.pill; muted = roles.muted
             label = roles.label; accent = roles.accent; ring = roles.ring
         }
+        // Omacosy-UI overrides, verbatim, over either path: they change ONLY
+        // the Omacosy surfaces, never the palette the terminal tools read.
+        let ui = rendered.extended.ui
+        func uiOverride(_ role: String, _ field: inout String) {
+            guard let h = ui[role], let n = normalizedColorHex(h) else { return }
+            field = n.hasPrefix("#") ? String(n.dropFirst()) : n
+        }
+        uiOverride("background", &bar); uiOverride("pill", &pill); uiOverride("muted", &muted)
+        uiOverride("label", &label); uiOverride("accent", &accent); uiOverride("ring", &ring)
+        var semOut = sem
+        for (role, key) in [("red", "RED"), ("green", "GREEN"), ("yellow", "YELLOW")] {
+            if let h = ui[role], let n = normalizedColorHex(h) { semOut[key] = argb(n) }
+        }
 
         var sb = "#!/usr/bin/env bash\n"
         sb += "# generated by omacosy-themecore from theme \(theme.id)\n"
@@ -5647,7 +5698,7 @@ enum Materialise {
         sb += "export LABEL_COLOR=\(argb(label))\n"
         sb += "export ICON_COLOR=\(argb(label))\n"
         sb += "export ACCENT=\(argb(accent))\n"
-        for key in ["RED", "GREEN", "YELLOW"] { sb += "export \(key)=\(sem[key]!)\n" }
+        for key in ["RED", "GREEN", "YELLOW"] { sb += "export \(key)=\(semOut[key]!)\n" }
 
         var bd = "#!/usr/bin/env bash\n"
         bd += "# generated by omacosy-themecore from theme \(theme.id)\n"
@@ -7376,6 +7427,8 @@ case "palette":
             let mode = takeFlag("--mode") ?? "normal"
             let light = takeBool("--light")
             let accentRaw = takeFlag("--accent")
+            let backgroundRaw = takeFlag("--background")
+            let uiRaw = takeFlag("--ui-json")
             noExtraArguments()
             if colorsRaw != nil && imageRaw != nil {
                 fail("use either --colors or --image, not both")
@@ -7396,7 +7449,13 @@ case "palette":
                 fail("palette roles needs --colors CSV or --image PATH")
             }
             let accent = normalizedHex(accentRaw ?? colors[4])
-            let roles = barRoles(colors, accent: accent)
+            var ui: [String: String] = [:]
+            if let backgroundRaw { ui["background"] = backgroundRaw }
+            if let uiRaw, let d = uiRaw.data(using: .utf8),
+               let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: String] {
+                for (k, v) in obj { ui[k] = v }
+            }
+            let roles = barRoles(colors, accent: accent, ui: ui)
             if jsonOut {
                 printJSON(["bar": roles.bar, "pill": roles.pill, "muted": roles.muted,
                            "label": roles.label, "accent": roles.accent, "ring": roles.ring])
