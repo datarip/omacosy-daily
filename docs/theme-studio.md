@@ -12,6 +12,15 @@ The Theme Studio is the editing half of Omacosy's custom themes, inside the
 Everything below is fork-only. The four stock Omarchy themes are never touched,
 and a theme's wallpaper picture is never rewritten.
 
+Saving or applying keeps the editor open: **Save** writes the theme and
+**Apply & Save** writes it and puts it on the desktop, but neither closes the
+window — only the **✕** button or **Esc** does. Several palettes can therefore
+be saved, applied and compared in one sitting. Applying a theme repaints the
+whole editor too, scrollbars and buttons included. The dashboard and the bar
+draw their own background and pills from the palette's **accent** — the colour
+the palette names itself with — so any applied palette, Magic or an Aether
+mode, keeps Omacosy's chrome on theme.
+
 ## Exporting a theme
 
 **From the editor.** Press **Export** in the footer. A folder picker opens; the

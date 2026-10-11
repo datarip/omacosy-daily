@@ -9592,6 +9592,13 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
     }
     func setName(_ name: String) { nameField.stringValue = name }
 
+    // The name field's colours are properties, not drawing, so a palette
+    // change has to set them again or the header keeps the old theme.
+    func refreshNameField() {
+        nameField.textColor = palette.label
+        nameField.backgroundColor = palette.itemBG.withAlphaComponent(nameEditable ? 0.5 : 0.25)
+    }
+
     @objc private func nameReturn() { window?.makeFirstResponder(self) }
     func controlTextDidChange(_ obj: Notification) { onNameEdit?() }
     func controlTextDidEndEditing(_ obj: Notification) { setPenOpen(false) }
@@ -9708,6 +9715,14 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { onClose?() }
     }
+}
+
+// Mark a view and every descendant dirty. A palette change has to reach the
+// nested parts — the CustomScroller behind each column, the buttons in the
+// footer — which a single needsDisplay on the parent does not repaint.
+func markTreeNeedsDisplay(_ view: NSView) {
+    view.needsDisplay = true
+    for sub in view.subviews { markTreeNeedsDisplay(sub) }
 }
 
 final class ThemeEditor {
@@ -10203,14 +10218,17 @@ final class ThemeEditor {
     }
 
     // a theme switch repaints the card; the editor draws with the same
-    // global palette, so it must be marked dirty too
+    // global palette, so it must be marked dirty too. The mark walks the
+    // WHOLE subtree: the custom scrollbars and the footer buttons are nested
+    // views, and a parent's needsDisplay alone leaves them showing the old
+    // theme until something else makes them redraw (a scroll, a reopen).
     static func refreshColors() {
         guard let e = current else { return }
-        e.root.needsDisplay = true
-        for v in e.root.subviews { v.needsDisplay = true }
+        markTreeNeedsDisplay(e.root)
         e.root.paletteBuilder.refreshColors()
         e.root.paletteCanvas.refreshColors()
         e.root.wallpaperEditor.refreshColors()
+        e.root.refreshNameField()
     }
 
     // Esc on the dashboard while the editor is up means "close the editor,
@@ -10382,20 +10400,21 @@ final class ThemeEditor {
         switch action {
         case .apply:
             if let id = fresh["id"] as? String { performApply(id: id, name: name) }
-            else { finish(with: "Saved \(name)") }
+            else { savedNotice("Saved \(name)") }
         case .export(let parent):
             if let id = fresh["id"] as? String { performExport(id: id, into: parent) }
             else { showMessage("Export needs a saved theme.", red: true) }
         case .none:
-            finish(with: "Saved \(name)")
+            savedNotice("Saved \(name)")
         }
     }
 
-    // a finished write hands the dashboard a line of status and steps out
-    private func finish(with message: String) {
-        let report = status
-        close()
-        report?(message)
+    // A finished write reports to the dashboard and says so in the footer,
+    // but the editor STAYS OPEN: the cross or Esc is the only way out, so a
+    // theme can be saved, applied and re-tested without reopening the editor.
+    private func savedNotice(_ message: String) {
+        status?(message)
+        showMessage(message, red: false)
     }
 
     private func showMessage(_ text: String, red: Bool, seconds: Double = 4) {
@@ -10414,7 +10433,7 @@ final class ThemeEditor {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.root.footer.applyButton.busy = false
-                self.finish(with: "Applied \(name)")
+                self.savedNotice("Applied \(name)")
             }
         }
     }
