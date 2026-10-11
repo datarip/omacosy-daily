@@ -3190,7 +3190,6 @@ final class EditorPanelDoc: NSView {
         cropButton.onClick = { [weak self] in
             guard let self else { return }
             self.cropOn.toggle()
-            self.cropButton.title = self.cropOn ? "Done" : "Crop"
             self.onCropToggle?(self.cropOn)
         }
         addSubview(cropButton)
@@ -3202,7 +3201,6 @@ final class EditorPanelDoc: NSView {
                 guard let self else { return }
                 if !self.cropOn {
                     self.cropOn = true
-                    self.cropButton.title = "Done"
                     self.onCropToggle?(true)
                 }
                 self.onCropPreset?(spec.value)
@@ -3352,7 +3350,6 @@ final class EditorPanelDoc: NSView {
 
     func setCropOn(_ on: Bool) {
         cropOn = on
-        cropButton.title = on ? "Done" : "Crop"
         needsDisplay = true
     }
 
@@ -3422,7 +3419,6 @@ final class EditorPanelDoc: NSView {
         }
         top += 24 + 12
         cropLabelTop = top
-        cropButton.frame = rect(top: top - 3, h: 20, x: insetL + contentW - 60, w: 60)
         top += 20
         let rc = (contentW - 12) / 4
         for (i, b) in ratioButtons.enumerated() {
@@ -3431,7 +3427,8 @@ final class EditorPanelDoc: NSView {
                            x: insetL + CGFloat(col) * (rc + 4), w: rc)
         }
         top += 26 * 2 + 2
-        cropResetButton.frame = rect(top: top, h: 20, x: insetL, w: 84)
+        cropButton.frame = rect(top: top, h: 20, x: insetL, w: 64)
+        cropResetButton.frame = rect(top: top, h: 20, x: insetL + 70, w: 84)
         top += 20 + 14
         resizeLabelTop = top
         top += 18
