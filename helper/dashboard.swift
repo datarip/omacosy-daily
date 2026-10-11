@@ -4070,6 +4070,14 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         resizeCommit()
     }
 
+    // The cell's .center is not applied to the shared field editor, so while a
+    // resize field is focused its text would left-align. Set it on the editor.
+    func controlTextDidBeginEditing(_ obj: Notification) {
+        guard let f = obj.object as? NSTextField, f === resizeWField || f === resizeHField,
+              let editor = obj.userInfo?["NSFieldEditor"] as? NSTextView else { return }
+        editor.alignment = .center
+    }
+
     func setOriginalSize(_ size: CGSize) {
         originalSize = size
         needsDisplay = true
