@@ -1602,6 +1602,159 @@ final class ImportConflict: NSObject {
     }
 }
 
+// --- name prompt -----------------------------------------------------------
+
+// A small centred card that asks for a theme's name when an action creates a
+// new one — Save As…, or Export of a still-unsaved draft. Naming here is
+// clearly "a new theme", where typing in the editor's header field reads as
+// renaming the theme that is open. A name collision is shown inline and the
+// card stays open.
+final class NamePromptView: NSView {
+    var titleText = "" { didSet { needsDisplay = true } }
+    var subtitleText = "" { didSet { needsDisplay = true } }
+    var errorText = "" { didSet { needsDisplay = true } }
+    let field = NSTextField()
+    private let cancelButton = ButtonView()
+    private let confirmButton = ButtonView()
+    var onCancel: (() -> Void)?
+    var onConfirm: ((String) -> Void)?
+
+    init(width: CGFloat, confirmTitle: String, initial: String, subtitle: String) {
+        self.subtitleText = subtitle
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: 176))
+        wantsLayer = true
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.textColor = palette.label
+        field.font = nerdFont("Regular", 13)
+        field.focusRingType = .none
+        field.usesSingleLineMode = true
+        field.stringValue = initial
+        addSubview(field)
+        cancelButton.title = "Cancel"
+        cancelButton.secondary = true
+        cancelButton.fontSize = 12
+        cancelButton.onClick = { [weak self] in self?.onCancel?() }
+        addSubview(cancelButton)
+        confirmButton.title = confirmTitle
+        confirmButton.fontSize = 12
+        confirmButton.onClick = { [weak self] in self?.commit() }
+        addSubview(confirmButton)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func commit() {
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            errorText = "Give the theme a name."
+            return
+        }
+        onConfirm?(name)
+    }
+
+    override func layout() {
+        super.layout()
+        let bw: CGFloat = 96, bh: CGFloat = 26
+        confirmButton.frame = NSRect(x: bounds.width - 20 - bw, y: 18, width: bw, height: bh)
+        cancelButton.frame = NSRect(x: bounds.width - 20 - bw - 8 - bw, y: 18, width: bw, height: bh)
+        field.frame = NSRect(x: 28, y: bounds.height - 114, width: bounds.width - 56, height: 20)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let corner = min(windowCornerRadius(12), min(bounds.width, bounds.height) / 2)
+        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                                xRadius: corner, yRadius: corner)
+        palette.barBG.setFill(); card.fill()
+        palette.accent.withAlphaComponent(0.55).setStroke(); card.lineWidth = 1; card.stroke()
+
+        let tf = nerdFont("Bold", 13)
+        drawTopLeft(truncate(titleText, tf, bounds.width - 48), tf, palette.label,
+                    x: 24, top: 20, height: bounds.height)
+        drawTopLeft(truncate(subtitleText, nerdFont("Regular", 11), bounds.width - 48),
+                    nerdFont("Regular", 11), palette.muted, x: 24, top: 44, height: bounds.height)
+        // the drawn box, because AppKit lays a taller field's text near its top
+        let box = NSRect(x: 24, y: bounds.height - 116, width: bounds.width - 48, height: 24)
+        palette.itemBG.withAlphaComponent(0.35).setFill()
+        NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6).fill()
+        palette.muted.withAlphaComponent(0.35).setStroke()
+        let border = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
+        border.lineWidth = 1; border.stroke()
+        if !errorText.isEmpty {
+            drawTopLeft(truncate(errorText, nerdFont("Regular", 11), bounds.width - 48),
+                        nerdFont("Regular", 11), .systemRed, x: 24, top: 68, height: bounds.height)
+        }
+    }
+}
+
+final class NamePrompt: NSObject {
+    private static var current: NamePrompt?
+    private let window: PickerWindow
+    private let root: NamePromptView
+    private var keyMonitor: Any?
+    private let onConfirm: (String) -> Void
+
+    private init(title: String, subtitle: String, confirmTitle: String, initial: String,
+                 onConfirm: @escaping (String) -> Void) {
+        self.onConfirm = onConfirm
+        let width: CGFloat = 420
+        root = NamePromptView(width: width, confirmTitle: confirmTitle,
+                              initial: initial, subtitle: subtitle)
+        root.titleText = title
+        window = PickerWindow(contentRect: root.frame,
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        super.init()
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.level = .popUpMenu
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        window.contentView = root
+        root.onCancel = { [weak self] in self?.close() }
+        root.onConfirm = { [weak self] name in self?.onConfirm(name) }
+    }
+
+    static func present(from host: NSView, title: String, subtitle: String,
+                        confirmTitle: String, initial: String,
+                        onConfirm: @escaping (String) -> Void) {
+        current?.close()
+        let p = NamePrompt(title: title, subtitle: subtitle, confirmTitle: confirmTitle,
+                           initial: initial, onConfirm: onConfirm)
+        guard let win = host.window else { return }
+        let f = win.frame
+        p.window.setFrameOrigin(NSPoint(x: f.midX - p.window.frame.width / 2,
+                                        y: f.midY - p.window.frame.height / 2))
+        current = p
+        win.addChildWindow(p.window, ordered: .above)
+        p.show()
+    }
+
+    static func showError(_ message: String) { current?.root.errorText = message }
+    static func closeCurrent() { current?.close() }
+
+    private func show() {
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(root.field)
+        if let editor = root.field.currentEditor() {
+            editor.selectedRange = NSRange(location: 0, length: root.field.stringValue.count)
+        }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] e in
+            guard let self, e.window === self.window else { return e }
+            if e.keyCode == 53 { self.close(); return nil }               // Esc
+            if e.keyCode == 36 || e.keyCode == 76 { self.root.commit(); return nil }
+            return e
+        }
+    }
+
+    private func close() {
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        window.parent?.removeChildWindow(window)
+        window.orderOut(nil)
+        NamePrompt.current = nil
+    }
+}
+
 final class AppPicker: NSObject, NSWindowDelegate {
     private static var current: AppPicker?
     private let window: NSWindow
@@ -9403,7 +9556,7 @@ final class ThemeEditor {
             self.root.dirty = true
         }
         root.footer.saveButton.onClick = { [weak self] in self?.startSave(newID: false, action: .none) }
-        root.footer.saveAsButton.onClick = { [weak self] in self?.startSave(newID: true, action: .none) }
+        root.footer.saveAsButton.onClick = { [weak self] in self?.startSaveAs() }
         root.footer.applyButton.onClick = { [weak self] in self?.startSave(newID: false, action: .apply) }
         root.footer.exportButton.onClick = { [weak self] in self?.startExport() }
         root.footer.importButton.onClick = { [weak self] in self?.startImport() }
@@ -9758,10 +9911,15 @@ final class ThemeEditor {
         case export(String)   // the folder the user picked for the bundle
     }
 
-    private func startSave(newID: Bool, action: SaveAction) {
-        let name = root.nameValue
+    // `explicitName` is set when a NamePrompt card collected the name (Save As,
+    // or Export of a draft); plain Save/Apply take the header field. `onFailure`
+    // routes an error back to that card instead of the footer.
+    private func startSave(newID: Bool, action: SaveAction, name explicitName: String? = nil,
+                           onFailure: ((String) -> Void)? = nil) {
+        let name = explicitName ?? root.nameValue
         guard !name.isEmpty else {
-            showMessage("Give the theme a name.", red: true)
+            if let onFailure { onFailure("Give the theme a name.") }
+            else { showMessage("Give the theme a name.", red: true) }
             return
         }
         let base = saveBase(newID: newID)
@@ -9798,7 +9956,7 @@ final class ThemeEditor {
                 self.root.footer.saveButton.busy = false
                 self.root.footer.saveAsButton.busy = false
                 if let error {
-                    self.showMessage(error, red: true)
+                    if let onFailure { onFailure(error) } else { self.showMessage(error, red: true) }
                 } else if let fresh {
                     self.didSave(fresh, action: action)
                 }
@@ -9895,6 +10053,8 @@ final class ThemeEditor {
     }
 
     private func didSave(_ fresh: [String: Any], action: SaveAction) {
+        // a naming card, if one asked, is done once the write succeeds
+        NamePrompt.closeCurrent()
         record = fresh
         dirty = false
         root.dirty = false
@@ -9943,16 +10103,28 @@ final class ThemeEditor {
 
     private enum ImportMode { case ask, rename, replace }
 
-    // The engine exports a stored theme by id, so a draft (or an edited
-    // edition) is saved first; the bundle then lands in a new folder named
-    // after the theme inside the folder the user picks.
+    // Save As always makes a new theme, so it asks for the name in a card
+    // rather than the header field (which would read as renaming the open one).
+    private func startSaveAs() {
+        NamePrompt.present(from: root,
+                           title: "Save Theme As",
+                           subtitle: "Give the new theme a name.",
+                           confirmTitle: "Save As",
+                           initial: suggestedNewName(),
+                           onConfirm: { [weak self] name in
+            self?.startSave(newID: true, action: .none, name: name,
+                            onFailure: { NamePrompt.showError($0) })
+        })
+    }
+
+    private func suggestedNewName() -> String {
+        let base = root.nameValue.isEmpty ? "New Theme" : root.nameValue
+        return record == nil ? base : base + " Copy"
+    }
+
+    // The engine exports a stored theme by id; the bundle lands in a new
+    // folder named after the theme inside the folder the user picks.
     private func startExport() {
-        if record == nil || dirty {
-            guard !root.nameValue.isEmpty else {
-                showMessage("Give the theme a name before exporting.", red: true)
-                return
-            }
-        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -9962,11 +10134,28 @@ final class ThemeEditor {
         panel.message = "The bundle is written to a new folder named after the theme."
         panel.beginSheetModal(for: window) { [weak self] resp in
             guard let self, resp == .OK, let url = panel.url else { return }
-            if let id = self.record?["id"] as? String, !self.dirty {
-                self.performExport(id: id, into: url.path)
-            } else {
-                self.startSave(newID: false, action: .export(url.path))
-            }
+            self.export(into: url.path)
+        }
+    }
+
+    private func export(into parent: String) {
+        if let id = record?["id"] as? String, !dirty {
+            performExport(id: id, into: parent)
+        } else if record == nil {
+            // a draft must become a saved theme first; name it in a card, not
+            // in the header
+            NamePrompt.present(from: root,
+                               title: "Export Theme",
+                               subtitle: "Name the theme before exporting.",
+                               confirmTitle: "Continue",
+                               initial: root.nameValue.isEmpty ? "My Theme" : root.nameValue,
+                               onConfirm: { [weak self] name in
+                self?.startSave(newID: false, action: .export(parent), name: name,
+                                onFailure: { NamePrompt.showError($0) })
+            })
+        } else {
+            // an edited edition keeps its name and id
+            startSave(newID: false, action: .export(parent))
         }
     }
 
