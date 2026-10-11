@@ -3330,11 +3330,9 @@ final class ThemesTabView: NSView, ScrollStepTab {
     // the same 54pt bottom bar as Options and Workspaces
     private let bottomBand: CGFloat = 54
     private var status = "" { didSet { needsDisplay = true; needsLayout = true } }
-    // the status + buttons are centred as one group on the bar; layout() sets
-    // these, draw() reads them
-    private var statusOriginX: CGFloat = 0
+    // layout() sets this (truncated to fit left of the centred buttons);
+    // draw() renders it
     private var statusShown = ""
-    private let barGap: CGFloat = 16
     private var needsGridRebuild = true
     var onApplied: (() -> Void)?
 
@@ -3594,22 +3592,20 @@ final class ThemesTabView: NSView, ScrollStepTab {
         scroll.frame = NSRect(x: 0, y: band, width: max(0, bounds.width - scrollerW - 14), height: scrollH)
         scroller.frame = NSRect(x: bounds.width - scrollerW, y: band, width: scrollerW, height: scrollH)
         scroller.refresh()
-        // status + buttons centred as one group on the bar (like the centred
-        // Save on Options/Workspaces); only the group is centred, not the
-        // button alone, so a status does not overlap it
+        // The Select/Delete buttons are centred on the bar, like the centred
+        // Save on Options/Workspaces; the status sits to their left.
         let by = (band - 24) / 2
-        let f = nerdFont("Regular", 11)
-        statusShown = status.isEmpty ? "" : truncate(status, f, max(0, bounds.width - 260))
-        let statusW = statusShown.isEmpty ? 0 : advance(statusShown, f)
         let delW: CGFloat = deleteButton.isHidden ? 0 : 96 + 8
-        let total = statusW + (statusW > 0 ? barGap : 0) + delW + 96
-        statusOriginX = max(0, (bounds.width - total) / 2)
-        var x = statusOriginX + statusW + (statusW > 0 ? barGap : 0)
+        let groupW = delW + 96
+        let groupX = max(0, (bounds.width - groupW) / 2)
         if !deleteButton.isHidden {
-            deleteButton.frame = NSRect(x: x, y: by, width: 96, height: 24)
-            x += 96 + 8
+            deleteButton.frame = NSRect(x: groupX, y: by, width: 96, height: 24)
+            selectButton.frame = NSRect(x: groupX + 96 + 8, y: by, width: 96, height: 24)
+        } else {
+            selectButton.frame = NSRect(x: groupX, y: by, width: 96, height: 24)
         }
-        selectButton.frame = NSRect(x: x, y: by, width: 96, height: 24)
+        let f = nerdFont("Regular", 11)
+        statusShown = status.isEmpty ? "" : truncate(status, f, max(0, groupX - 12))
         let w = scroll.contentSize.width
         if w > 0 {
             if abs(grid.frame.width - w) > 0.5 {
@@ -3632,11 +3628,11 @@ final class ThemesTabView: NSView, ScrollStepTab {
 
     override func draw(_ dirtyRect: NSRect) {
         // the same bottom bar as Options / Workspaces: a hairline above it,
-        // and the status + buttons centred as one group on its mid line
+        // the buttons centred on its mid line and the status to their left
         palette.muted.withAlphaComponent(0.25).setFill()
         NSRect(x: 0, y: bottomBand - 0.5, width: bounds.width, height: 1).fill()
         if !statusShown.isEmpty {
-            drawMidLeft(statusShown, nerdFont("Regular", 11), palette.muted, x: statusOriginX,
+            drawMidLeft(statusShown, nerdFont("Regular", 11), palette.muted, x: 0,
                         midTop: bounds.height - bottomBand / 2, height: bounds.height)
         }
     }
