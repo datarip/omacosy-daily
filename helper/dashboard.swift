@@ -1765,30 +1765,31 @@ final class ContextMenuView: NSView {
     var onSelect: ((Int) -> Void)?
     private var hovered = -1
     private var hoverTracking: NSTrackingArea?
-    private let rowH: CGFloat = 26
-    private let padX: CGFloat = 14
+    private let rowH: CGFloat = 24
+    private let padX: CGFloat = 12
+    private let padY: CGFloat = 3
     private var font: NSFont { nerdFont("Regular", 12) }
 
     static func size(for items: [String]) -> NSSize {
         let f = nerdFont("Regular", 12)
         let w = items.map { advance($0, f) }.max() ?? 80
-        return NSSize(width: w + 28, height: CGFloat(items.count) * 26 + 8)
+        return NSSize(width: w + 24, height: CGFloat(items.count) * 24 + 6)
     }
 
     private func rowRect(_ i: Int) -> NSRect {
-        let top = 4 + CGFloat(i) * rowH
+        let top = padY + CGFloat(i) * rowH
         return NSRect(x: 0, y: bounds.height - top - rowH, width: bounds.width, height: rowH)
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 7, yRadius: 7)
         palette.barBG.setFill(); card.fill()
-        palette.muted.withAlphaComponent(0.35).setStroke(); card.lineWidth = 1; card.stroke()
+        palette.muted.withAlphaComponent(0.22).setStroke(); card.lineWidth = 1; card.stroke()
         for (i, item) in items.enumerated() {
             let r = rowRect(i)
             if i == hovered {
                 palette.accent.setFill()
-                NSBezierPath(roundedRect: r.insetBy(dx: 4, dy: 2), xRadius: 5, yRadius: 5).fill()
+                NSBezierPath(roundedRect: r.insetBy(dx: 4, dy: 1), xRadius: 5, yRadius: 5).fill()
             }
             let ink = i == hovered
                 ? (relativeLuminance(palette.accent) > 0.179 ? palette.barBG : palette.label)
@@ -1846,7 +1847,8 @@ final class ContextMenu: NSObject {
         super.init()
         window.isOpaque = false
         window.backgroundColor = .clear
-        window.hasShadow = true
+        // a system shadow reads as a thick black halo around a small menu
+        window.hasShadow = false
         window.level = .popUpMenu
         window.appearance = NSAppearance(named: .darkAqua)
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
@@ -10357,7 +10359,7 @@ final class ThemeEditor {
               let obj = (try? JSONSerialization.jsonObject(with: od)) as? [String: Any],
               let id = obj["id"] as? String else {
             if out.lowercased().contains("already exists") {
-                return ("A theme named “\(name)” already exists. Choose another name.", nil)
+                return ("A theme with the same name already exists. Please give a different name.", nil)
             }
             return ("Couldn't save the theme. Try again.", nil)
         }
@@ -10514,7 +10516,8 @@ final class ThemeEditor {
         }
     }
 
-    private func runImport(file: String, mode: ImportMode, name: String? = nil) {
+    private func runImport(file: String, mode: ImportMode, name: String? = nil,
+                           onFailure: ((String) -> Void)? = nil) {
         root.footer.importButton.busy = true
         root.footer.message = nil
         DispatchQueue.global().async { [weak self] in
@@ -10536,7 +10539,11 @@ final class ThemeEditor {
                     self.confirmImport(file: file, existingID: quotedID(from: out))
                     return
                 }
-                self.showMessage(importErrorMessage(out), red: true, seconds: 6)
+                let message = out.lowercased().contains("already exists")
+                    ? "A theme with the same name already exists. Please give a different name."
+                    : importErrorMessage(out)
+                if let onFailure { onFailure(message) }
+                else { self.showMessage(message, red: true, seconds: 6) }
             }
         }
     }
@@ -10566,7 +10573,8 @@ final class ThemeEditor {
                            confirmTitle: "Rename",
                            initial: initial,
                            onConfirm: { [weak self] name in
-            self?.runImport(file: file, mode: .rename, name: name)
+            self?.runImport(file: file, mode: .rename, name: name,
+                            onFailure: { NamePrompt.showError($0) })
         })
     }
 
@@ -13851,6 +13859,20 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-sh
     root.layoutSubtreeIfNeeded()
     guard let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { exit(1) }
     root.cacheDisplay(in: root.bounds, to: rep)
+    guard let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
+    try? png.write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+    print("wrote \(CommandLine.arguments[2])")
+    exit(0)
+}
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--contextmenu-shot" {
+    // Off-screen render of the themed context menu, for layout review.
+    app.setActivationPolicy(.accessory)
+    palette = loadPalette()
+    let v = ContextMenuView()
+    v.items = ["Duplicate Theme"]
+    v.frame = NSRect(origin: .zero, size: ContextMenuView.size(for: v.items))
+    guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { exit(1) }
+    v.cacheDisplay(in: v.bounds, to: rep)
     guard let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
     try? png.write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
     print("wrote \(CommandLine.arguments[2])")
