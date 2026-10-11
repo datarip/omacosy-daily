@@ -3314,13 +3314,13 @@ final class EditorPanelDoc: NSView {
 
     func contentHeight() -> CGFloat {
         var h: CGFloat = 10
-        h += 24 + 10                                      // Blur Desktop toggle
         h += 24 + 12                                      // Apply to Palette
         h += AdjustmentSliderView.rowHeight + 10          // Strength
         h += 16 + 22 + 12                                 // AUTO ENHANCE + buttons
         h += 34                                           // Presets
         h += HistogramView.viewHeight + 12
         h += 26 + CurveEditorView.viewHeight + 12         // Curves
+        h += 24 + 10                                      // Blur Desktop toggle
         for group in EditorFilterFields.groups {
             h += 30
             h += CGFloat(group.fields.count) * AdjustmentSliderView.rowHeight
@@ -3407,9 +3407,6 @@ final class EditorPanelDoc: NSView {
     override func layout() {
         super.layout()
         var top: CGFloat = 10
-        blurTop = top
-        blurToggle.frame = rect(top: top, h: 24, x: insetL + contentW - 46, w: 46)
-        top += 24 + 10
         applyButton.frame = rect(top: top, h: 24, x: insetL, w: contentW)
         top += 24 + 12
         strengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
@@ -3434,6 +3431,9 @@ final class EditorPanelDoc: NSView {
         top += 26
         curveView.frame = rect(top: top, h: CurveEditorView.viewHeight, x: insetL, w: contentW)
         top += CurveEditorView.viewHeight + 12
+        blurTop = top
+        blurToggle.frame = rect(top: top, h: 24, x: insetL + contentW - 46, w: 46)
+        top += 24 + 10
         groupTops.removeAll()
         var i = 0
         for group in EditorFilterFields.groups {
@@ -3496,21 +3496,35 @@ final class EditorPanelDoc: NSView {
         top += 20 + 12
     }
 
+    // A hairline 6 pt above a section's heading: long scrolling panels read
+    // as separate feature blocks instead of one continuous column.
+    private func drawRule(_ top: CGFloat) {
+        palette.muted.withAlphaComponent(0.25).setFill()
+        NSRect(x: insetL, y: bounds.height - (top - 6), width: contentW, height: 1).fill()
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        drawMidLeft("Blur Desktop", nerdFont("Bold", 12), palette.label,
-                    x: insetL, midTop: blurTop + 12, height: bounds.height)
+        drawRule(autoTop)
         drawTopLeft("AUTO ENHANCE", nerdFont("Bold", 11), palette.muted,
                     x: insetL, top: autoTop, height: bounds.height)
+        drawRule(presetTop)
         drawMidLeft("Presets", nerdFont("Bold", 12), palette.label,
                     x: insetL, midTop: presetTop + 16, height: bounds.height)
+        drawRule(curveTop)
         drawTopLeft("Curves", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: curveTop, height: bounds.height)
+        drawRule(blurTop)
+        drawMidLeft("Blur Desktop", nerdFont("Bold", 12), palette.label,
+                    x: insetL, midTop: blurTop + 12, height: bounds.height)
         for (title, top) in groupTops {
+            drawRule(top)
             drawTopLeft(title, nerdFont("Bold", 12), palette.accent,
                         x: insetL, top: top, height: bounds.height)
         }
+        drawRule(gradeTop)
         drawTopLeft("Palette Grade", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: gradeTop, height: bounds.height)
+        drawRule(transformTop)
         drawTopLeft("Transform", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: transformTop, height: bounds.height)
         drawTopLeft("ROTATE & FLIP", nerdFont("Bold", 10), palette.muted,
@@ -7631,24 +7645,33 @@ final class PaletteBuilderDoc: NSView {
         contrastTop = top
     }
 
+    // A hairline 6 pt above a section's heading, matching the wallpaper
+    // editor's rules: each feature block gets its own visual panel.
+    private func drawRule(_ top: CGFloat) {
+        palette.muted.withAlphaComponent(0.25).setFill()
+        NSRect(x: insetL, y: bounds.height - (top - 6), width: contentW, height: 1).fill()
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         drawMidLeft("Mode", nerdFont("Bold", 12), palette.label,
                     x: insetL, midTop: modeTop + 16, height: bounds.height)
+        drawRule(methodTop)
         drawMidLeft("Method", nerdFont("Bold", 12), palette.label,
                     x: insetL, midTop: methodTop + 16, height: bounds.height)
+        drawRule(presetsTop)
         drawMidLeft("Presets", nerdFont("Bold", 12), palette.label,
                     x: insetL, midTop: presetsTop + 16, height: bounds.height)
+        drawRule(fromColorTop)
         drawTopLeft("From Colour", nerdFont("Bold", 12), palette.label,
                     x: insetL, top: fromColorTop, height: bounds.height)
+        drawRule(gradientTop)
         drawTopLeft("Gradient", nerdFont("Bold", 12), palette.label,
                     x: insetL, top: gradientTop, height: bounds.height)
-        if editorVisible {
-            palette.muted.withAlphaComponent(0.25).setFill()
-            NSRect(x: insetL, y: bounds.height - (editorTop - 6), width: contentW, height: 1).fill()
-            NSRect(x: insetL, y: bounds.height - (adjTop - 10), width: contentW, height: 1).fill()
-        }
+        if editorVisible { drawRule(editorTop) }
+        drawRule(adjTop)
         drawTopLeft("Adjustments", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: adjTop, height: bounds.height)
+        drawRule(contrastTop)
         drawTopLeft("Accessibility", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: contrastTop, height: bounds.height)
         drawContrast()
