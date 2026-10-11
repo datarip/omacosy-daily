@@ -2471,15 +2471,41 @@ func hexColor(_ s: String) -> NSColor? {
     return color(fromARGB: 0xff000000 | v)
 }
 
-// The first JSON object in a command's combined output: the engine prints a
-// JSON line before its human line, so success is parsed from the front.
+// The first complete JSON object in a command's output. The engine
+// pretty-prints (multi-line) and exits, so a line-by-line scan misses it;
+// try the whole output, then brace-match from each `{`.
 func firstJSONObject(in output: String) -> [String: Any]? {
-    for line in output.split(separator: "\n") {
-        let t = line.trimmingCharacters(in: .whitespaces)
-        guard t.hasPrefix("{") else { continue }
-        if let obj = (try? JSONSerialization.jsonObject(with: Data(t.utf8))) as? [String: Any] {
-            return obj
+    if let obj = try? JSONSerialization.jsonObject(with: Data(output.utf8)),
+       let dict = obj as? [String: Any] {
+        return dict
+    }
+    let bytes = Array(output.utf8)
+    let open = UInt8(ascii: "{"), close = UInt8(ascii: "}")
+    let quote = UInt8(ascii: "\""), backslash = UInt8(ascii: "\\")
+    var i = 0
+    while i < bytes.count {
+        guard bytes[i] == open else { i += 1; continue }
+        var depth = 0, inString = false, escaped = false
+        var j = i
+        while j < bytes.count {
+            let c = bytes[j]
+            if inString {
+                if escaped { escaped = false }
+                else if c == backslash { escaped = true }
+                else if c == quote { inString = false }
+            } else if c == quote { inString = true }
+            else if c == open { depth += 1 }
+            else if c == close {
+                depth -= 1
+                if depth == 0 {
+                    if let obj = try? JSONSerialization.jsonObject(with: Data(bytes[i...j])),
+                       let dict = obj as? [String: Any] { return dict }
+                    break
+                }
+            }
+            j += 1
         }
+        i = j + 1
     }
     return nil
 }

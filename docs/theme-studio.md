@@ -124,6 +124,10 @@ upstream project and the Neovim port Aether itself points at.
 
 ## Future improvements
 
+- **Zed colours** — the generated `zed.json` loads, but its background reads
+  much brighter than the desktop palette (reported 2026-10-11). The vendored
+  template maps a role Omacosy resolves differently, so revisit its
+  background/foreground mapping.
 - **Kitty / Alacritty / Warp appliers** — Aether also writes `kitty.conf`,
   `alacritty.toml` and `warp.yaml`. Omacosy does not yet; the terminal pipeline
   covers Ghostty, btop, Neovim, lazygit, fastfetch, yazi, bat, delta, fzf and
