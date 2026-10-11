@@ -106,6 +106,16 @@ func drawMidCenter(_ s: String, _ font: NSFont, _ color: NSColor,
                  baseline: height - midTop - font.capHeight / 2)
 }
 
+// The numbered step bubble on a column header (1 = picture, 2 = colours).
+func drawStepBadge(_ n: Int, centerX: CGFloat, midTop: CGFloat, height: CGFloat) {
+    let d: CGFloat = 18
+    let rect = NSRect(x: centerX - d / 2, y: height - midTop - d / 2, width: d, height: d)
+    palette.accent.setFill()
+    NSBezierPath(ovalIn: rect).fill()
+    drawMidCenter("\(n)", nerdFont("Bold", 11), palette.barBG,
+                  centerX: centerX, midTop: midTop, height: height)
+}
+
 // --- shell / config --------------------------------------------------------
 
 @discardableResult
@@ -3176,6 +3186,7 @@ final class EditorPanelDoc: NSView {
 // pane. The picture history's Undo / Redo / Reset sit fixed in the header.
 final class EditorColumnView: NSView {
     var state: EditorState? { didSet { wire() } }
+    var stepBadge = 0 { didSet { needsDisplay = true } }
     // The Auto and Apply buttons call out to the editor, which owns the picture
     // path and the engine.
     var onAuto: ((String) -> Void)? { didSet { doc.onAuto = onAuto } }
@@ -3284,8 +3295,11 @@ final class EditorColumnView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        if stepBadge > 0 {
+            drawStepBadge(stepBadge, centerX: 24, midTop: 18, height: bounds.height)
+        }
         drawMidLeft("Wallpaper Editor", nerdFont("Bold", 13), palette.accent,
-                    x: 16, midTop: 18, height: bounds.height)
+                    x: stepBadge > 0 ? 42 : 16, midTop: 18, height: bounds.height)
     }
 }
 
@@ -6739,6 +6753,7 @@ final class ColorInspectorView: NSView, NSTextFieldDelegate {
 // A thin view over the shared PaletteModel.
 final class PaletteBuilderView: NSView {
     var model: PaletteModel? { didSet { wire() } }
+    var stepBadge = 0 { didSet { needsDisplay = true } }
 
     private let scroll = NSScrollView()
     private let scroller = CustomScroller()
@@ -6749,6 +6764,7 @@ final class PaletteBuilderView: NSView {
     // The palette's own history, fixed in the column header.
     private let undoButton = ButtonView()
     private let redoButton = ButtonView()
+    private let resetButton = ButtonView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -6761,6 +6777,10 @@ final class PaletteBuilderView: NSView {
         }
         undoButton.toolTip = "Undo Palette Edit"
         redoButton.toolTip = "Redo Palette Edit"
+        resetButton.title = "Reset"
+        resetButton.fontSize = 11
+        resetButton.toolTip = "Reset Colour Adjustments"
+        addSubview(resetButton)
         scroll.hasVerticalScroller = false
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
@@ -6842,7 +6862,7 @@ final class PaletteBuilderView: NSView {
             let key = slider.spec.key
             slider.onChange = { [weak self] v in self?.model?.setAdjustment(key, v) }
         }
-        doc.resetButton.onClick = { [weak self] in self?.model?.resetAdjustments() }
+        resetButton.onClick = { [weak self] in self?.model?.resetAdjustments() }
         undoButton.onClick = { [weak self] in self?.model?.undo() }
         redoButton.onClick = { [weak self] in self?.model?.redo() }
     }
@@ -6915,8 +6935,12 @@ final class PaletteBuilderView: NSView {
         super.layout()
         let headerH: CGFloat = 40
         let h = max(0, bounds.height - headerH)
-        redoButton.frame = NSRect(x: bounds.width - 32, y: bounds.height - 30, width: 24, height: 24)
-        undoButton.frame = NSRect(x: bounds.width - 60, y: bounds.height - 30, width: 24, height: 24)
+        resetButton.frame = NSRect(x: bounds.width - 12 - 56, y: bounds.height - 30,
+                                   width: 56, height: 24)
+        redoButton.frame = NSRect(x: resetButton.frame.minX - 6 - 24, y: bounds.height - 30,
+                                  width: 24, height: 24)
+        undoButton.frame = NSRect(x: redoButton.frame.minX - 6 - 24, y: bounds.height - 30,
+                                  width: 24, height: 24)
         scroll.frame = NSRect(x: 0, y: 0, width: max(0, bounds.width - scrollerW - 14), height: h)
         scroller.frame = NSRect(x: bounds.width - scrollerW, y: 0, width: scrollerW, height: h)
         scroller.refresh()
@@ -6947,8 +6971,11 @@ final class PaletteBuilderView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        if stepBadge > 0 {
+            drawStepBadge(stepBadge, centerX: 24, midTop: 18, height: bounds.height)
+        }
         drawMidLeft("Palette Builder", nerdFont("Bold", 13), palette.accent,
-                    x: 16, midTop: 18, height: bounds.height)
+                    x: stepBadge > 0 ? 42 : 16, midTop: 18, height: bounds.height)
     }
 }
 
@@ -6958,7 +6985,6 @@ final class PaletteBuilderDoc: NSView {
     let inspector = ColorInspectorView()
     let curveView = CurveEditorView()
     var sliders: [AdjustmentSliderView] = []
-    let resetButton = ButtonView()
     // palette sources
     let presetsButton = PopupButtonView()
     let fromColorField = NSTextField()
@@ -6999,8 +7025,6 @@ final class PaletteBuilderDoc: NSView {
             sliders.append(s)
             addSubview(s)
         }
-        resetButton.title = "Reset"
-        addSubview(resetButton)
         presetsButton.title = "Presets"
         addSubview(presetsButton)
         for f in [fromColorField, gradientStart, gradientEnd] {
@@ -7047,7 +7071,6 @@ final class PaletteBuilderDoc: NSView {
         h += 24                                             // Adjustments
         h += CurveEditorView.viewHeight + 8
         h += CGFloat(sliders.count) * AdjustmentSliderView.rowHeight
-        h += 34                                             // Reset + Undo/Redo
         h += 38 + CGFloat(contrast.count) * 26              // Accessibility
         h += 10
         return h
@@ -7105,8 +7128,6 @@ final class PaletteBuilderDoc: NSView {
             top += AdjustmentSliderView.rowHeight
         }
         top += 8
-        resetButton.frame = rect(top: top, h: 24, x: insetL, w: 96)
-        top += 34
         contrastTop = top
     }
 
@@ -8109,12 +8130,14 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
 
     private let headerH: CGFloat = 56
     private let footerH: CGFloat = 54
-    private let leftW: CGFloat = 320
-    private let rightW: CGFloat = 340
+    private let leftW: CGFloat = 340    // wallpaper editor (step 1)
+    private let rightW: CGFloat = 320   // palette builder (step 2)
     private let closeSize: CGFloat = 24
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        wallpaperEditor.stepBadge = 1
+        paletteBuilder.stepBadge = 2
         nameField.isBezeled = false
         nameField.drawsBackground = true
         nameField.backgroundColor = palette.itemBG.withAlphaComponent(0.25)
@@ -8232,10 +8255,11 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
     override func layout() {
         super.layout()
         let h = max(0, bounds.height - headerH - footerH)
-        paletteBuilder.frame = NSRect(x: 0, y: footerH, width: leftW, height: h)
+        // Step 1 (picture) on the left, step 2 (colours) on the right.
+        wallpaperEditor.frame = NSRect(x: 0, y: footerH, width: leftW, height: h)
         paletteCanvas.frame = NSRect(x: leftW, y: footerH,
                                      width: max(0, bounds.width - leftW - rightW), height: h)
-        wallpaperEditor.frame = NSRect(x: bounds.width - rightW, y: footerH, width: rightW, height: h)
+        paletteBuilder.frame = NSRect(x: bounds.width - rightW, y: footerH, width: rightW, height: h)
         footer.frame = NSRect(x: 0, y: 0, width: bounds.width, height: footerH)
         // the name field is the whole title — no static prefix (the editor
         // is obvious from its contents)
