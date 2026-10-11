@@ -3248,6 +3248,7 @@ final class EditorPanelDoc: NSView {
         addSubview(cropResetButton)
         resizeLinkButton.title = "\u{f023}"
         resizeLinkButton.fontSize = 11
+        resizeLinkButton.centeredByBounds = true
         resizeLinkButton.toolTip = "Keep the original aspect ratio"
         resizeLinkButton.onClick = { [weak self] in
             guard let self else { return }
