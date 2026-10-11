@@ -61,6 +61,7 @@
 // Ported from Aether (https://github.com/omacom/aether)
 // Copyright (c) Bjarne Overli — MIT License
 import AppKit
+import CoreImage
 import CryptoKit
 import Foundation
 import ImageIO
@@ -5299,10 +5300,84 @@ enum Materialise {
 
         let backgroundDir = dir.appendingPathComponent("backgrounds", isDirectory: true)
         try FileManager.default.createDirectory(at: backgroundDir, withIntermediateDirectories: true)
+        // The desktop image: the edition's own image, or the heavy-blur
+        // variant when `wallpaper.blur` is on. Roles and extraction above
+        // always read the sharp image; only the desktop-facing link moves.
+        var desktopImage = image
+        var backgroundName = image.lastPathComponent
+        if theme.wallpaper.blur {
+            desktopImage = try blurredVariant(of: image, cacheDir: Materialise.blurCacheDir)
+            backgroundName = image.deletingPathExtension().lastPathComponent + "-blur.jpg"
+        }
         try FileManager.default.createSymbolicLink(
-            at: backgroundDir.appendingPathComponent(image.lastPathComponent), withDestinationURL: image)
+            at: backgroundDir.appendingPathComponent(backgroundName), withDestinationURL: desktopImage)
 
-        try writeThumbnail(from: image, to: dir.appendingPathComponent("preview.png"))
+        try writeThumbnail(from: desktopImage, to: dir.appendingPathComponent("preview.png"))
+    }
+
+    // Ported from Aether (https://github.com/omacom/aether)
+    // Copyright (c) Bjarne Overli — MIT License
+    //
+    // wallpaper/blur.go CreateBlurredVariant: downscale the long side to 640,
+    // a heavy Gaussian (sigma 32), then upscale back but never past 2560,
+    // written as JPEG 92. Content-addressed on the source bytes, so the same
+    // picture blurs once and every revision reuses the file.
+    static var blurCacheDir: URL {
+        URL(fileURLWithPath: Wallpapers.stateDir).appendingPathComponent("studio/blur")
+    }
+
+    private static let blurContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    static func blurredVariant(of image: URL, cacheDir: URL) throws -> URL {
+        let data: Data
+        do { data = try Data(contentsOf: image) }
+        catch { throw ThemeError(message: "cannot read \(image.path) for blur") }
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let dest = cacheDir.appendingPathComponent("blur-\(digest.prefix(16)).jpg")
+        if FileManager.default.fileExists(atPath: dest.path) { return dest }
+
+        guard let ci = CIImage(contentsOf: image) else {
+            throw ThemeError(message: "cannot decode \(image.path) for blur")
+        }
+        let extent = ci.extent
+        let long = max(extent.width, extent.height)
+        guard long > 0 else { throw ThemeError(message: "empty image: \(image.path)") }
+        let downScale = min(1.0, 640.0 / long)
+        let down = downScale < 1
+            ? ci.transformed(by: CGAffineTransform(scaleX: downScale, y: downScale)) : ci
+        let small = down.extent
+        let blurred = down.clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 32.0])
+            .cropped(to: small)
+        let targetLong = min(long, 2560.0)
+        let upScale = targetLong / max(small.width, small.height)
+        let out = upScale == 1 ? blurred
+            : blurred.transformed(by: CGAffineTransform(scaleX: upScale, y: upScale))
+        guard let cg = blurContext.createCGImage(out, from: out.extent) else {
+            throw ThemeError(message: "cannot render the blur of \(image.path)")
+        }
+        do { try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true) }
+        catch { throw ThemeError(message: "cannot create \(cacheDir.path): \(error.localizedDescription)") }
+        let tmp = cacheDir.appendingPathComponent(".blur-\(digest.prefix(16)).tmp-\(ProcessInfo.processInfo.processIdentifier).jpg")
+        guard let dst = CGImageDestinationCreateWithURL(tmp as CFURL, "public.jpeg" as CFString, 1, nil) else {
+            throw ThemeError(message: "cannot write \(tmp.path)")
+        }
+        CGImageDestinationAddImage(dst, cg,
+            [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
+        guard CGImageDestinationFinalize(dst) else {
+            try? FileManager.default.removeItem(at: tmp)
+            throw ThemeError(message: "cannot write \(tmp.path)")
+        }
+        if FileManager.default.fileExists(atPath: dest.path) {
+            try? FileManager.default.removeItem(at: tmp)   // lost a race
+        } else {
+            do { try FileManager.default.moveItem(at: tmp, to: dest) }
+            catch {
+                try? FileManager.default.removeItem(at: tmp)
+                throw ThemeError(message: "cannot move the blur into \(dest.path): \(error.localizedDescription)")
+            }
+        }
+        return dest
     }
 
     // A small PNG for the Themes tab, written without decoding the full

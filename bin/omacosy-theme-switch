@@ -279,7 +279,14 @@ case "$mode" in
     # Materialise first: an invalid JSON, or an edition whose image is gone,
     # fails here and touches neither the desktop nor the symlink.
     dir="$("$THEMECORE" theme materialize "$json")" || exit 1
-    wall="$("$THEMECORE" theme wallpaper "$json")" || exit 1
+    # The directory's backgrounds link is authoritative: the edition's own
+    # image, or its heavy-blur variant when wallpaper.blur is on. Resolve
+    # past the materialised directory so the pointer names the image, not a
+    # revision folder that may be pruned.
+    shown="$(find -L "$dir/backgrounds" -maxdepth 1 -type f 2>/dev/null | sort | head -1)"
+    wall="$(readlink -f "$shown" 2>/dev/null || true)"
+    [ -n "$wall" ] || wall="$shown"
+    [ -n "$wall" ] || exit 1
     source="$("$THEMECORE" theme wallpaper "$json" --source 2>/dev/null || true)"
     # <id>-<rev>; removing the shortest dash suffix strips exactly the
     # revision, whatever dashes the id itself carries.
