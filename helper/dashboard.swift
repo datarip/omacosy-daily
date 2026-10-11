@@ -3769,7 +3769,7 @@ final class HistogramView: NSView {
 // The scrollable editor body: the histogram and its Auto buttons, the four
 // slider groups, then the picture history's own Undo / Redo / Reset (separate
 // from the palette's). The edited picture is shown in the central pane.
-final class EditorPanelDoc: NSView {
+final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     let histogram = HistogramView()
     let strengthSlider = AdjustmentSliderView(
         spec: SliderField(key: "strength", label: "Strength", min: 0, max: 100, step: 1, def: 100))
@@ -3945,6 +3945,7 @@ final class EditorPanelDoc: NSView {
             f.focusRingType = .none
             f.target = self
             f.action = #selector(resizeCommit)
+            f.delegate = self
             addSubview(f)
         }
         transformResetButton.title = "Reset"
@@ -3952,8 +3953,19 @@ final class EditorPanelDoc: NSView {
         transformResetButton.secondary = true
         transformResetButton.onClick = { [weak self] in self?.onTransformReset?() }
         addSubview(transformResetButton)
-        resizeWField.placeholderString = "Width"
-        resizeHField.placeholderString = "Height"
+        // centred placeholders: NSTextFieldCell does not centre a plain
+        // placeholderString, so use an attributed one with a centred paragraph
+        let centerStyle = NSMutableParagraphStyle()
+        centerStyle.alignment = .center
+        func placeholder(_ s: String) -> NSAttributedString {
+            NSAttributedString(string: s, attributes: [
+                .foregroundColor: palette.muted,
+                .font: nerdFont("Regular", 11),
+                .paragraphStyle: centerStyle,
+            ])
+        }
+        resizeWField.placeholderAttributedString = placeholder("Width")
+        resizeHField.placeholderAttributedString = placeholder("Height")
         cropResetButton.title = "Reset Crop"
         cropResetButton.fontSize = 10
         cropResetButton.secondary = true
@@ -4038,13 +4050,32 @@ final class EditorPanelDoc: NSView {
         onGradeStops?(gradeStops)
     }
 
+    private var resizeRatio: Double {
+        originalSize.width > 0 && originalSize.height > 0
+            ? originalSize.width / originalSize.height : 0
+    }
+
     @objc private func resizeCommit() {
         let w = Double(resizeWField.stringValue) ?? 0
         var h = Double(resizeHField.stringValue) ?? 0
-        if resizeLinked, originalSize.width > 0, originalSize.height > 0, w > 0 {
-            h = (w / (originalSize.width / originalSize.height)).rounded()
+        if resizeLinked, resizeRatio > 0, w > 0 {
+            h = (w / resizeRatio).rounded()
         }
         onResize?(w, h)
+    }
+
+    // Typing in one linked field updates the other as you go (Aether's UI), not
+    // only on Return/blur.
+    func controlTextDidChange(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField else { return }
+        if resizeLinked, resizeRatio > 0 {
+            if field === resizeWField, let w = Double(resizeWField.stringValue), w > 0 {
+                resizeHField.stringValue = "\(Int((w / resizeRatio).rounded()))"
+            } else if field === resizeHField, let h = Double(resizeHField.stringValue), h > 0 {
+                resizeWField.stringValue = "\(Int((h * resizeRatio).rounded()))"
+            }
+        }
+        resizeCommit()
     }
 
     func setOriginalSize(_ size: CGSize) {
@@ -8892,7 +8923,7 @@ final class PreviewPaneView: NSView {
                     capPath.lineWidth = 1
                     capPath.stroke()
                     drawBaseline(k, keyFont, r.label, x: cap.minX + 6, baseline: y)
-                    let actX = colX + keyW + 12
+                    let actX = colX + keyW + 20
                     drawBaseline(truncate(a, actFont, colX + colW - actX),
                                  actFont, r.muted, x: actX, baseline: y)
                     y -= rowH
