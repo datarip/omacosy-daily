@@ -8595,9 +8595,6 @@ final class PreviewPaneView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        // the overlays (above all, the cheat sheet) must never spill out of
-        // the preview column onto the editor's own panels
-        clipsToBounds = true
         toggleMenuBar.glyph = "\u{f0c9}"
         toggleMenuBar.toolTip = "Menu Bar Preview"
         toggleMenuBar.onClick = { [weak self] in
@@ -9268,6 +9265,10 @@ final class PreviewPaneView: NSView {
         // card background and the frame edges line up with the column rules.
         NSColor.black.setFill()
         NSBezierPath(rect: bounds).fill()
+        // clip the drawing (not the subviews) to the pane, so an overlay can
+        // never spill onto the editor's own panels; the toolbar buttons are
+        // subviews and are left alone
+        NSBezierPath(rect: bounds).addClip()
 
         let path = model?.imagePath ?? ""
         let screen = self.screen
