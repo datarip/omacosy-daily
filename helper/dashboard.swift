@@ -1755,6 +1755,131 @@ final class NamePrompt: NSObject {
     }
 }
 
+// --- context menu ----------------------------------------------------------
+
+// A small themed context menu. An NSMenu is a grey system panel that ignores
+// the Omacosy palette and font, so right-click menus are drawn here instead:
+// one row per item, the accent on the hovered row, the app's own font.
+final class ContextMenuView: NSView {
+    var items: [String] = []
+    var onSelect: ((Int) -> Void)?
+    private var hovered = -1
+    private var hoverTracking: NSTrackingArea?
+    private let rowH: CGFloat = 26
+    private let padX: CGFloat = 14
+    private var font: NSFont { nerdFont("Regular", 12) }
+
+    static func size(for items: [String]) -> NSSize {
+        let f = nerdFont("Regular", 12)
+        let w = items.map { advance($0, f) }.max() ?? 80
+        return NSSize(width: w + 28, height: CGFloat(items.count) * 26 + 8)
+    }
+
+    private func rowRect(_ i: Int) -> NSRect {
+        let top = 4 + CGFloat(i) * rowH
+        return NSRect(x: 0, y: bounds.height - top - rowH, width: bounds.width, height: rowH)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+        palette.barBG.setFill(); card.fill()
+        palette.muted.withAlphaComponent(0.35).setStroke(); card.lineWidth = 1; card.stroke()
+        for (i, item) in items.enumerated() {
+            let r = rowRect(i)
+            if i == hovered {
+                palette.accent.setFill()
+                NSBezierPath(roundedRect: r.insetBy(dx: 4, dy: 2), xRadius: 5, yRadius: 5).fill()
+            }
+            let ink = i == hovered
+                ? (relativeLuminance(palette.accent) > 0.179 ? palette.barBG : palette.label)
+                : palette.label
+            drawMidLeft(item, font, ink, x: padX, midTop: bounds.height - r.midY, height: bounds.height)
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = hoverTracking { removeTrackingArea(t) }
+        let t = NSTrackingArea(rect: .zero,
+                               options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                               owner: self, userInfo: nil)
+        addTrackingArea(t)
+        hoverTracking = t
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        var hit = -1
+        for i in items.indices where rowRect(i).contains(p) { hit = i; break }
+        if hit != hovered { hovered = hit; needsDisplay = true }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if hovered != -1 { hovered = -1; needsDisplay = true }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        for i in items.indices where rowRect(i).contains(p) { onSelect?(i); return }
+    }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+final class ContextMenu: NSObject {
+    private static var current: ContextMenu?
+    private let window: PickerWindow
+    private let view: ContextMenuView
+    private var monitors: [Any] = []
+
+    static func show(items: [String], at point: NSPoint, onSelect: @escaping (Int) -> Void) {
+        current?.close()
+        current = ContextMenu(items: items, at: point, onSelect: onSelect)
+    }
+
+    private init(items: [String], at point: NSPoint, onSelect: @escaping (Int) -> Void) {
+        view = ContextMenuView()
+        view.items = items
+        let size = ContextMenuView.size(for: items)
+        view.frame = NSRect(origin: .zero, size: size)
+        window = PickerWindow(contentRect: view.frame,
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        super.init()
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.level = .popUpMenu
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        window.contentView = view
+        var origin = NSPoint(x: point.x, y: point.y - size.height)
+        if let scr = NSScreen.main {
+            origin.x = min(origin.x, scr.visibleFrame.maxX - size.width - 6)
+            origin.y = max(origin.y, scr.visibleFrame.minY + 6)
+        }
+        window.setFrameOrigin(origin)
+        view.onSelect = { [weak self] i in self?.close(); onSelect(i) }
+        let local = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] e in
+                guard let self else { return e }
+                if e.type == .keyDown { if e.keyCode == 53 { self.close(); return nil }; return e }
+                if !self.window.frame.contains(NSEvent.mouseLocation) { self.close() }
+                return e
+            }
+        let global = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in self?.close() }
+        monitors = [local, global].compactMap { $0 }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func close() {
+        for m in monitors { NSEvent.removeMonitor(m) }
+        monitors = []
+        window.orderOut(nil)
+        ContextMenu.current = nil
+    }
+}
+
 final class AppPicker: NSObject, NSWindowDelegate {
     private static var current: AppPicker?
     private let window: NSWindow
@@ -3134,23 +3259,20 @@ final class ThemeGridView: NSView {
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    // Right-click on a named edition offers Duplicate Theme. Raw Wallpaper #N
-    // cells have no record to copy, so they get no menu.
-    override func menu(for event: NSEvent) -> NSMenu? {
+    // Right-click on a named edition opens a small themed popup at the click
+    // (an NSMenu is a grey system panel). Raw Wallpaper #N cells have no
+    // record to copy, so they get no menu.
+    override func rightMouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         guard let i = cellFrames.first(where: { $0.value.contains(p) })?.key,
-              cells.indices.contains(i), cells[i].isCustom, cells[i].editionID != nil else { return nil }
-        let menu = NSMenu()
-        let item = NSMenuItem(title: "Duplicate Theme", action: #selector(duplicateClicked(_:)), keyEquivalent: "")
-        item.target = self
-        item.representedObject = i
-        menu.addItem(item)
-        return menu
-    }
-
-    @objc private func duplicateClicked(_ sender: NSMenuItem) {
-        guard let i = sender.representedObject as? Int, cells.indices.contains(i) else { return }
-        onDuplicate?(cells[i])
+              cells.indices.contains(i), cells[i].isCustom, cells[i].editionID != nil else {
+            super.rightMouseDown(with: event)
+            return
+        }
+        let cell = cells[i]
+        ContextMenu.show(items: ["Duplicate Theme"], at: NSEvent.mouseLocation) { [weak self] _ in
+            self?.onDuplicate?(cell)
+        }
     }
 
     override func updateTrackingAreas() {
@@ -3266,6 +3388,18 @@ final class ThemesTabView: NSView, ScrollStepTab {
     // Off-screen review only.
     func debugHoverFirstCustom() {
         if let i = grid.cells.firstIndex(where: { $0.isCustom }) { grid.debugSetHover(i) }
+    }
+    func debugSetStatus(_ s: String) { status = s; needsDisplay = true }
+    func debugSelectFirstCustom(_ n: Int) {
+        selectionMode = true
+        grid.selectionMode = true
+        selectButton.title = "Done"
+        for i in grid.cells.indices where grid.cells[i].isCustom {
+            grid.selected.insert(i)
+            if grid.selected.count >= n { break }
+        }
+        updateDeleteButton()
+        needsLayout = true
     }
 
     // --- bulk selection ----------------------------------------------------
@@ -3479,15 +3613,16 @@ final class ThemesTabView: NSView, ScrollStepTab {
 
     override func draw(_ dirtyRect: NSRect) {
         // the same bottom bar as Options / Workspaces: a hairline above it,
-        // the status left-aligned and the buttons right-aligned, all centred
-        // on the bar's mid line
+        // with the buttons right-aligned and the status centred horizontally
+        // in the bar (and everything on the bar's mid line)
         palette.muted.withAlphaComponent(0.25).setFill()
         NSRect(x: 0, y: bottomBand - 0.5, width: bounds.width, height: 1).fill()
         if !status.isEmpty {
             let f = nerdFont("Regular", 11)
             let right = max(0, (deleteButton.isHidden ? selectButton.frame.minX : deleteButton.frame.minX) - 12)
-            drawMidLeft(truncate(status, f, right), f, palette.muted,
-                        x: 0, midTop: bounds.height - bottomBand / 2, height: bounds.height)
+            let text = truncate(status, f, right)
+            drawMidLeft(text, f, palette.muted, x: max(0, (right - advance(text, f)) / 2),
+                        midTop: bounds.height - bottomBand / 2, height: bounds.height)
         }
     }
 }
@@ -13696,6 +13831,10 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-sh
         if args.contains("hoverTheme"),
            let tab = root.subviews.compactMap({ $0 as? ThemesTabView }).first {
             tab.debugHoverFirstCustom()
+        }
+        if let tab = root.subviews.compactMap({ $0 as? ThemesTabView }).first {
+            if args.contains("applied") { tab.debugSetStatus("Applied 4chan Permanent Underclass") }
+            if args.contains("selected") { tab.debugSelectFirstCustom(2) }
         }
     }
     root.layoutSubtreeIfNeeded()
