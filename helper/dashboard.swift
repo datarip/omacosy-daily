@@ -613,19 +613,12 @@ final class ButtonView: NSView {
             r.fill()
         }
         if progress >= 0 {
-            // Busy state: a light dim so the click is acknowledged at once,
-            // plus a real progress bar along the bottom edge. The label stays
-            // readable on top and the button colour never looks "changed".
-            palette.barBG.withAlphaComponent(0.15).setFill()
-            r.fill()
+            // whole-button left-to-right fill while the work runs
             NSGraphicsContext.saveGraphicsState()
             r.addClip()
-            let barH: CGFloat = 3
-            palette.barBG.withAlphaComponent(0.25).setFill()
-            NSRect(x: 0, y: 0, width: bounds.width, height: barH).fill()
-            palette.barBG.withAlphaComponent(0.85).setFill()
+            NSColor.black.withAlphaComponent(0.28).setFill()
             NSRect(x: 0, y: 0, width: bounds.width * min(max(progress, 0), 1),
-                   height: barH).fill()
+                   height: bounds.height).fill()
             NSGraphicsContext.restoreGraphicsState()
         }
         let text = busy ? "Saving…" : title
