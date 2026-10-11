@@ -8595,6 +8595,9 @@ final class PreviewPaneView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        // the overlays (above all, the cheat sheet) must never spill out of
+        // the preview column onto the editor's own panels
+        clipsToBounds = true
         toggleMenuBar.glyph = "\u{f0c9}"
         toggleMenuBar.toolTip = "Menu Bar Preview"
         toggleMenuBar.onClick = { [weak self] in
@@ -8789,82 +8792,82 @@ final class PreviewPaneView: NSView {
 
     // A fake Super+K cheat sheet: the one surface that shows MUTED as the
     // descriptions, LABEL as the keys, ACCENT as the headings and ITEM_BG as
-    // the keycaps, all on the BAR_BG_SOLID card. Mirrors the real sheet's
-    // layout (balanced columns, section headings, key/action rows) so those
-    // roles can be seen without opening it. Content is representative of the
-    // shipped AeroSpace map.
+    // the keycaps, on the BAR_BG_SOLID card. Sized to the preview and clipped
+    // to it, so it never spills onto the editor's own panels. The keys drop
+    // the "Super+" prefix (the header carries it), which is what lets three
+    // columns stay readable in the narrower preview.
     private func drawCheatsheet(in screen: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: screen).addClip()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+
         let r = resolvedRoles()
-        let w = min(screen.width * 0.88, 900)
-        let h = min(screen.height * 0.84, 560)
+        let w = screen.width * 0.95
+        let h = screen.height * 0.93
         let card = NSRect(x: screen.midX - w / 2, y: screen.midY - h / 2, width: w, height: h)
-        let cardPath = NSBezierPath(roundedRect: card, xRadius: 12, yRadius: 12)
+        let cardPath = NSBezierPath(roundedRect: card, xRadius: 10, yRadius: 10)
         r.bar.setFill()
         cardPath.fill()
         r.accent.withAlphaComponent(0.5).setStroke()
         cardPath.lineWidth = 1.5
         cardPath.stroke()
 
-        let pad: CGFloat = 26
-        let titleFont = nerdFont("Bold", 15)
-        let subFont = nerdFont("Regular", 10)
-        let headFont = nerdFont("Bold", 11)
-        let keyFont = nerdFont("Bold", 10)
-        let actFont = nerdFont("Regular", 11)
+        let pad: CGFloat = 20
+        let titleFont = nerdFont("Bold", 13)
+        let subFont = nerdFont("Regular", 9)
+        let headFont = nerdFont("Bold", 10)
+        let keyFont = nerdFont("Bold", 9)
+        let actFont = nerdFont("Regular", 9)
 
-        // header: keyboard glyph, title, and the "Super is Caps Lock" note
-        drawGlyph("\u{f11c}", nerdFont("Regular", 16), r.accent,
-                  in: NSRect(x: card.minX + pad, y: card.maxY - pad - 20, width: 22, height: 20))
-        let titleX = card.minX + pad + 30
+        drawGlyph("\u{f11c}", nerdFont("Regular", 14), r.accent,
+                  in: NSRect(x: card.minX + pad, y: card.maxY - pad - 18, width: 20, height: 18))
+        let titleX = card.minX + pad + 26
         drawBaseline("Keyboard Shortcuts", titleFont, r.accent,
-                     x: titleX, baseline: card.maxY - pad - titleFont.capHeight - 2)
-        drawBaseline("Super is Caps Lock", subFont, r.muted,
-                     x: titleX + advance("Keyboard Shortcuts", titleFont) + 14,
-                     baseline: card.maxY - pad - titleFont.capHeight - 2)
+                     x: titleX, baseline: card.maxY - pad - titleFont.capHeight - 1)
+        drawBaseline("Super = Caps Lock", subFont, r.muted,
+                     x: titleX + advance("Keyboard Shortcuts", titleFont) + 12,
+                     baseline: card.maxY - pad - titleFont.capHeight - 1)
         r.muted.withAlphaComponent(0.3).setFill()
-        NSRect(x: card.minX + pad, y: card.maxY - pad - 32, width: card.width - pad * 2,
+        NSRect(x: card.minX + pad, y: card.maxY - pad - 28, width: card.width - pad * 2,
                height: 1).fill()
 
-        // sections, then balanced into three columns by row count
         struct Row { let head: String?; let key: String; let act: String }
         let sections: [(String, [(String, String)])] = [
             ("Workspaces", [
-                ("Super+1…9", "Focus workspace"),
-                ("Super+Shift+1…9", "Move window there"),
-                ("Super+Tab / ⇧+Tab", "Next / previous"),
-                ("Super+B", "Back and forth"),
+                ("1…9", "Focus workspace"),
+                ("⇧1…9", "Move window there"),
+                ("Tab / ⇧Tab", "Next / previous"),
+                ("B", "Back and forth"),
             ]),
             ("Window", [
-                ("Super+← ↓ ↑ →", "Focus a window"),
-                ("Super+Shift+← ↓ ↑ →", "Move a window"),
-                ("Super+F", "Fullscreen"),
-                ("Super+N", "Native fullscreen"),
-                ("Super+W", "Close window"),
+                ("← ↓ ↑ →", "Focus a window"),
+                ("⇧← ↓ ↑ →", "Move a window"),
+                ("F", "Fullscreen"),
+                ("N", "Native fullscreen"),
+                ("W", "Close window"),
             ]),
             ("Layout", [
-                ("Super+T", "Toggle floating"),
-                ("Super+J", "Toggle split"),
-                ("Super+− / +", "Resize"),
-                ("Super+R", "Resize mode"),
-                ("Super+Shift+;", "Service mode"),
+                ("T", "Toggle floating"),
+                ("J", "Toggle split"),
+                ("− / +", "Resize"),
             ]),
             ("Apps", [
-                ("Super+Return", "Terminal"),
-                ("Super+Shift+Return", "Browser"),
-                ("Super+Space", "Raycast"),
-                ("Super+Shift+F", "Files"),
-                ("Super+Shift+M", "Music"),
-                ("Super+Shift+G", "Messenger"),
-                ("Super+Shift+E", "Mail"),
-                ("Super+Shift+L", "Lock screen"),
+                ("Return", "Terminal"),
+                ("⇧Return", "Browser"),
+                ("Space", "Raycast"),
+                ("⇧F", "Files"),
+                ("⇧M", "Music"),
+                ("⇧G", "Messenger"),
+                ("⇧E", "Mail"),
+                ("⇧L", "Lock screen"),
             ]),
             ("Themes", [
-                ("Super+Shift+T", "Next theme"),
-                ("Super+Shift+B", "Next wallpaper"),
+                ("⇧T", "Next theme"),
+                ("⇧B", "Next wallpaper"),
             ]),
             ("Omacosy", [
-                ("Super+,", "Settings"),
-                ("Super+K", "This cheat sheet"),
+                (",", "Settings"),
+                ("K", "This cheat sheet"),
             ]),
         ]
         var rows: [Row] = []
@@ -8878,9 +8881,10 @@ final class PreviewPaneView: NSView {
             .map { Array(rows[$0..<min($0 + per, rows.count)]) }
 
         let contentW = card.width - pad * 2
-        let colGap: CGFloat = 30
+        let colGap: CGFloat = 24
         let colW = (contentW - colGap * 2) / 3
-        let topY = card.maxY - pad - 54
+        let topY = card.maxY - pad - 44
+        let rowH: CGFloat = 19
         var colX = card.minX + pad
         for col in cols {
             var y = topY
@@ -8891,21 +8895,23 @@ final class PreviewPaneView: NSView {
                     r.accent.withAlphaComponent(0.45).setFill()
                     NSRect(x: colX, y: y - 5, width: advance(head.uppercased(), headFont),
                            height: 1.5).fill()
-                    y -= 28
+                    y -= rowH + 8
                 } else if row.key.isEmpty {
-                    y -= 12
+                    y -= 8
                 } else {
-                    let kw = advance(row.key, keyFont) + 14
-                    let cap = NSRect(x: colX, y: y - 5, width: kw, height: 18)
+                    let kw = advance(row.key, keyFont) + 12
+                    let cap = NSRect(x: colX, y: y - 4, width: kw, height: 16)
                     let capPath = NSBezierPath(roundedRect: cap, xRadius: 4, yRadius: 4)
                     r.pill.setFill()
                     capPath.fill()
                     r.muted.withAlphaComponent(0.4).setStroke()
                     capPath.lineWidth = 1
                     capPath.stroke()
-                    drawBaseline(row.key, keyFont, r.label, x: cap.minX + 7, baseline: y)
-                    drawBaseline(row.act, actFont, r.muted, x: colX + keyW + 18, baseline: y)
-                    y -= 25
+                    drawBaseline(row.key, keyFont, r.label, x: cap.minX + 6, baseline: y)
+                    let actX = colX + keyW + 12
+                    drawBaseline(truncate(row.act, actFont, colX + colW - actX),
+                                 actFont, r.muted, x: actX, baseline: y)
+                    y -= rowH
                 }
             }
             colX += colW + colGap
