@@ -11,6 +11,12 @@
 //   omacosy-themecore curve lut --points "x,y;x,y" [--json]
 //   omacosy-themecore presets [--json]
 //   omacosy-themecore modes [--json]
+//   omacosy-themecore template apps [--json]
+//   omacosy-themecore template vars --colors CSV [extended flags] [--light]
+//                                        [--overrides JSON] [--recompute] [--json]
+//   omacosy-themecore template render --colors CSV (--file PATH|--text STRING)
+//                                        [--out FILE] [extended flags] [--light]
+//                                        [--overrides JSON] [--recompute] [--json]
 //   omacosy-themecore theme list [--json]
 //   omacosy-themecore theme show <id>
 //   omacosy-themecore theme save [<file>|-] [--id ID] [--name NAME] [--replace]
@@ -5104,6 +5110,162 @@ enum Templates {
     }()
 }
 
+// MARK: - Aether template engine (Phase 9)
+
+// Ported from Aether (https://github.com/omacom/aether)
+// Copyright (c) Bjarne Overli — MIT License
+//
+// Aether renders each app's config from ONE variable map built out of the
+// palette: the sixteen semantic names (background, foreground, black …
+// bright_white) with color0..color15 aliases, the extended colours and the
+// derived shades (the bg/fg ramps, orange, brown, selection). The Zed, VS Code
+// and neovim.lua exporters read it from here. `build` follows Aether's
+// `template.BuildVariables` (an optional overrides map wins last, no
+// recompute); `recomputeDerived` follows `template.RecomputeDerived`, used
+// after a per-app override replaces a base colour. Both match Aether v4.32.0
+// byte for byte.
+struct ThemeVariables {
+    // Aether's semanticOrder: ANSI 0..15 as role names.
+    static let semanticOrder = ["black", "red", "green", "yellow", "blue",
+                                "magenta", "cyan", "white",
+                                "bright_black", "bright_red", "bright_green",
+                                "bright_yellow", "bright_blue", "bright_magenta",
+                                "bright_cyan", "bright_white"]
+
+    static func build(colors: [String], extended: Extended, light: Bool,
+                      overrides: [String: String] = [:]) -> [String: String] {
+        var vars: [String: String] = [:]
+        // Aether's roles: background/foreground are the ANSI black/white slots.
+        vars["background"] = colors[0]
+        vars["foreground"] = colors[7]
+        for (i, name) in semanticOrder.enumerated() { vars[name] = colors[i] }
+        vars["accent"] = extended.accent
+        vars["cursor"] = extended.cursor
+        vars["selection_foreground"] = extended.selectionForeground
+        vars["selection_background"] = extended.selectionBackground
+        for (i, name) in semanticOrder.enumerated() { vars["color\(i)"] = vars[name] }
+        vars["theme_type"] = light ? "light" : "dark"
+        vars["mode"] = vars["theme_type"]!
+        derive(&vars, light: light)
+        for (key, value) in overrides where !value.isEmpty { vars[key] = value }
+        return vars
+    }
+
+    // Aether's RecomputeDerived: after a per-app override replaced a base
+    // value, the aliases and derived shades follow it — except the keys the
+    // overrides pinned, which keep their own value.
+    static func recomputeDerived(_ vars: inout [String: String], overrides: [String: String]) {
+        func set(_ key: String, _ value: String) {
+            if overrides[key] == nil { vars[key] = value }
+        }
+        set("bg", vars["background"]!)
+        set("fg", vars["foreground"]!)
+        set("dark_bg", ColorMath.darkened(vars["background"]!, 75))
+        set("darker_bg", ColorMath.darkened(vars["background"]!, 50))
+        set("lighter_bg", ColorMath.lightened(vars["background"]!, 10))
+        set("dark_fg", ColorMath.darkened(vars["foreground"]!, 75))
+        set("light_fg", ColorMath.lightened(vars["foreground"]!, 15))
+        set("bright_fg", ColorMath.lightened(vars["foreground"]!, 25))
+        set("muted", vars["bright_black"]!)
+        let orange = ColorMath.lightened(vars["red"]!, 15)
+        set("orange", orange)
+        set("brown", ColorMath.darkened(orange, 60))
+        set("selection", selectionColor(vars, light: vars["theme_type"] == "light"))
+        set("mode", vars["theme_type"]!)
+        for (i, name) in semanticOrder.enumerated() { set("color\(i)", vars[name]!) }
+    }
+
+    private static func derive(_ vars: inout [String: String], light: Bool) {
+        vars["bg"] = vars["background"]
+        vars["fg"] = vars["foreground"]
+        vars["dark_bg"] = ColorMath.darkened(vars["background"]!, 75)
+        vars["darker_bg"] = ColorMath.darkened(vars["background"]!, 50)
+        vars["lighter_bg"] = ColorMath.lightened(vars["background"]!, 10)
+        vars["dark_fg"] = ColorMath.darkened(vars["foreground"]!, 75)
+        vars["light_fg"] = ColorMath.lightened(vars["foreground"]!, 15)
+        vars["bright_fg"] = ColorMath.lightened(vars["foreground"]!, 25)
+        vars["muted"] = vars["bright_black"]
+        let orange = ColorMath.lightened(vars["red"]!, 15)
+        vars["orange"] = orange
+        vars["brown"] = ColorMath.darkened(orange, 60)
+        vars["selection"] = selectionColor(vars, light: light)
+    }
+
+    // The inverted default pair gets a nearby surface instead of the normal
+    // foreground as a fill (Aether's selectionColor).
+    static func selectionColor(_ vars: [String: String], light: Bool) -> String {
+        if vars["selection_foreground"] == vars["background"],
+           vars["selection_background"] == vars["foreground"] {
+            return light ? ColorMath.darkened(vars["background"]!, 85)
+                         : ColorMath.lightened(vars["background"]!, 10)
+        }
+        return vars["selection_background"]!
+    }
+}
+
+// Aether's template/engine.go. `{key}` is the plain substitution; the four
+// modifier spellings cover the shipped templates and custom ones alike:
+// `{key.strip}` (no "#"), `{key.rgb}` ("r,g,b"), `{key.rgbs}` ("r g b") and
+// `{key.rgba}` / `{key.rgba:0.5}`. `.yaru` is Linux icon-theme only and is not
+// ported — no template Omacosy ships names it.
+enum TemplateEngine {
+    static func process(_ content: String, _ variables: [String: String]) -> String {
+        var result = content
+        for (key, value) in variables {
+            result = replaceVariable(result, key: key, value: value)
+        }
+        return result
+    }
+
+    static func replaceVariable(_ content: String, key: String, value: String) -> String {
+        var out = content.replacingOccurrences(of: "{\(key)}", with: value)
+        if value.hasPrefix("#") {
+            let (r, g, b) = components(value)
+            out = out.replacingOccurrences(of: "{\(key).strip}", with: String(value.dropFirst()))
+            out = out.replacingOccurrences(of: "{\(key).rgb}", with: "\(r),\(g),\(b)")
+            out = out.replacingOccurrences(of: "{\(key).rgbs}", with: "\(r) \(g) \(b)")
+        } else {
+            out = out.replacingOccurrences(of: "{\(key).strip}", with: value)
+            out = out.replacingOccurrences(of: "{\(key).rgb}", with: value)
+            out = out.replacingOccurrences(of: "{\(key).rgbs}", with: value)
+        }
+        return applyRGBA(out, key: key, value: value)
+    }
+
+    private static func components(_ hex: String) -> (Int, Int, Int) {
+        let c = ColorMath.rgb(fromHex: hex)
+        return (ColorMath.clampByte(c.r), ColorMath.clampByte(c.g), ColorMath.clampByte(c.b))
+    }
+
+    // 1.0 prints as "1" and 0.5 as "0.5", the way Go's %g does.
+    private static func formatAlpha(_ value: Double) -> String {
+        String(format: "%g", value)
+    }
+
+    private static func applyRGBA(_ content: String, key: String, value: String) -> String {
+        let pattern = "\\{\(NSRegularExpression.escapedPattern(for: key))\\.rgba(?::([0-9]*\\.?[0-9]+))?\\}"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return content }
+        let original = content as NSString
+        let matches = regex.matches(in: content, range: NSRange(location: 0, length: original.length))
+        var out = content
+        for match in matches.reversed() {
+            guard let range = Range(match.range, in: out) else { continue }
+            let replacement: String
+            if value.hasPrefix("#") {
+                let alphaRange = match.range(at: 1)
+                let alpha = alphaRange.location == NSNotFound
+                    ? 1.0 : (Double(original.substring(with: alphaRange)) ?? 1.0)
+                let (r, g, b) = components(value)
+                replacement = "rgba(\(r), \(g), \(b), \(formatAlpha(alpha)))"
+            } else {
+                replacement = value
+            }
+            out.replaceSubrange(range, with: replacement)
+        }
+        return out
+    }
+}
+
 // MARK: - Materialise
 
 // Turns a stored theme record into a runnable theme directory. The bar, the
@@ -5741,7 +5903,7 @@ func themeError(_ error: Error) -> Never {
 
 // MARK: - CLI
 
-let themecoreVersion = "0.8.0"
+let themecoreVersion = "0.9.0"
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write("omacosy-themecore: \(message)\n".data(using: .utf8)!)
@@ -5767,6 +5929,12 @@ func usage() -> Never {
            omacosy-themecore curve lut --points "x,y;x,y" [--json]
            omacosy-themecore presets [--json]
            omacosy-themecore modes [--json]
+           omacosy-themecore template apps [--json]
+           omacosy-themecore template vars --colors CSV [extended flags] [--light]
+                                           [--overrides JSON] [--recompute] [--json]
+           omacosy-themecore template render --colors CSV (--file PATH|--text STRING)
+                                           [--out FILE] [extended flags] [--light]
+                                           [--overrides JSON] [--recompute] [--json]
            omacosy-themecore theme list [--json]
            omacosy-themecore theme show <id> [--json]
            omacosy-themecore theme save [<file>|-] [--id ID] [--name NAME] [--replace] [--json] [--media-from FILE] [--edited]
@@ -5858,6 +6026,34 @@ func hexListArgument(_ raw: String) -> [String] {
     let parts = raw.split(separator: ",").map { normalizedHex(String($0)) }
     if parts.isEmpty { fail("empty colour list") }
     return parts
+}
+
+// A JSON object of string values, for --overrides.
+func jsonStringMap(_ raw: String, label: String) -> [String: String] {
+    guard let data = raw.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data),
+          let map = object as? [String: Any] else {
+        fail("\(label) must be a JSON object of strings")
+    }
+    var out: [String: String] = [:]
+    for (key, value) in map {
+        guard let text = value as? String else { fail("\(label).\(key) must be a string") }
+        out[key] = text
+    }
+    return out
+}
+
+// The palette + extended colours a template verb renders from.
+func templateExtended(_ colorsRaw: String?) -> (colors: [String], extended: Extended) {
+    guard let colorsRaw else { fail("--colors is required (#rrggbb,...)") }
+    let colors = hexListArgument(colorsRaw)
+    guard colors.count == 16 else { fail("--colors needs exactly 16 colours") }
+    var extended = Extended.defaults(for: colors)
+    if let v = takeFlag("--accent") { extended.accent = normalizedHex(v) }
+    if let v = takeFlag("--cursor") { extended.cursor = normalizedHex(v) }
+    if let v = takeFlag("--selection-foreground") { extended.selectionForeground = normalizedHex(v) }
+    if let v = takeFlag("--selection-background") { extended.selectionBackground = normalizedHex(v) }
+    return (colors, extended)
 }
 
 func intListArgument(_ raw: String) -> [Int] {
@@ -6168,6 +6364,60 @@ case "template":
         }
         for app in Templates.apps { print("\(app.id)\t\(app.name)\t\(app.roles.count) roles") }
         exit(0)
+
+    // The Aether variable map for a palette — the export path's building
+    // block and the fixture door for it. `--recompute` applies Aether's
+    // mergeTemplateVariables semantics to `--overrides` (a per-app merge);
+    // without it the overrides win last, as BuildVariables does.
+    case "vars":
+        let extended = templateExtended(takeFlag("--colors"))
+        let light = takeBool("--light")
+        let overrides = takeFlag("--overrides").map { jsonStringMap($0, label: "--overrides") } ?? [:]
+        let recompute = takeBool("--recompute")
+        noExtraArguments()
+        var vars = ThemeVariables.build(colors: extended.colors, extended: extended.extended, light: light)
+        for (key, value) in overrides where !value.isEmpty { vars[key] = value }
+        if recompute { ThemeVariables.recomputeDerived(&vars, overrides: overrides) }
+        if jsonOut { printJSON(vars) }
+        for key in vars.keys.sorted() { print("\(key)=\(vars[key]!)") }
+        exit(0)
+
+    // Render one template with the Aether variable map. The exporter passes
+    // --file; tests pass --text.
+    case "render":
+        let extended = templateExtended(takeFlag("--colors"))
+        let light = takeBool("--light")
+        let overrides = takeFlag("--overrides").map { jsonStringMap($0, label: "--overrides") } ?? [:]
+        let recompute = takeBool("--recompute")
+        let text = takeFlag("--text")
+        let file = takeFlag("--file")
+        let out = takeFlag("--out")
+        noExtraArguments()
+        var vars = ThemeVariables.build(colors: extended.colors, extended: extended.extended, light: light)
+        for (key, value) in overrides where !value.isEmpty { vars[key] = value }
+        if recompute { ThemeVariables.recomputeDerived(&vars, overrides: overrides) }
+        let template: String
+        if let text {
+            template = text
+        } else if let file, let contents = try? String(contentsOfFile: Wallpapers.resolved(file),
+                                                       encoding: .utf8) {
+            template = contents
+        } else {
+            fail("template render needs --file PATH or --text STRING")
+        }
+        let rendered = TemplateEngine.process(template, vars)
+        guard let out else {
+            FileHandle.standardOutput.write(rendered.data(using: .utf8)!)
+            if !rendered.hasSuffix("\n") { print("") }
+            exit(0)
+        }
+        let target = Wallpapers.resolved(out)
+        do { try rendered.write(toFile: target, atomically: true, encoding: .utf8) }
+        catch { fail("cannot write \(target): \(error.localizedDescription)") }
+        if jsonOut { printJSON(["out": target, "bytes": rendered.utf8.count]) }
+        print(target)
+        exit(0)
+
     default:
         usage()
     }
