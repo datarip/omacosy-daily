@@ -3610,10 +3610,11 @@ func imageHistogram(url: URL, maxWidth: Int = 512) throws -> [Int] {
 // record for export; the dashboard draws a best-effort CoreImage preview of
 // the same recipe (ImageFilters there mirrors these fields).
 //
-// Six fields of Aether's Filters are out of Omacosy's scope
-// (docs/wallpaper-editor.md does not list them): oilPaint, pixelate, fade,
-// clarity, posterize and colour noise. A recipe carrying them decodes and
-// re-encodes them untouched in `extra`, but the engine ignores them.
+// All 30 fields of Aether's Filters are typed here. Pixelate is the one that
+// cannot be matched to the browser exactly: Aether hands the shrink to the
+// canvas, whose resampling is its own, so the engine uses the box average the
+// recorder's shim defines (see record-image-fixtures.sh) — lossless against
+// the fixtures, an approximation of WebKit on a real photo, like resize.
 
 // ECMAScript ToUint8Clamp: round half to even, then clamp to 0...255. The
 // canvas pixel stores in Aether go through a Uint8ClampedArray, not
@@ -3625,6 +3626,10 @@ func toUint8Clamp(_ v: Double) -> UInt8 {
     if v >= 255 { return 255 }
     return UInt8(v.rounded(.toNearestOrEven))
 }
+
+// ECMAScript Math.round: a half rounds toward +infinity, so -0.5 -> 0. Swift's
+// .rounded() rounds halves away from zero, which differs on negatives.
+func jsRound(_ v: Double) -> Double { (v + 0.5).rounded(.down) }
 
 // HSL with h, s, l all in 0...1, the palette-grade LUT's own primitive
 // (color.ts `rgbToHsl01` / `hslToRgb01`).
@@ -3718,6 +3723,12 @@ struct ImageFilters {
     var vignette = 0.0
     var sharpen = 0.0
     var grain = 0.0
+    var oilPaint = 0.0
+    var pixelate = 0.0
+    var clarity = 0.0
+    var fade = 0.0
+    var posterize = 0.0
+    var noise = 0.0
     var shadows = 0.0
     var highlights = 0.0
     var temperature = 0.0
@@ -3744,6 +3755,7 @@ struct ImageFilters {
         self.init()
         let known: Set<String> = ["blur", "brightness", "contrast", "saturation", "hueRotate",
             "hue_rotate", "sepia", "invert", "exposure", "vignette", "sharpen", "grain",
+            "oilPaint", "oil_paint", "pixelate", "clarity", "fade", "posterize", "noise",
             "shadows", "highlights", "temperature", "tint", "curvePoints", "curve_points",
             "paletteStops", "palette_stops", "paletteStrength", "palette_strength",
             "cropX", "cropY", "cropW", "cropH", "crop_x", "crop_y", "crop_w", "crop_h",
@@ -3753,6 +3765,7 @@ struct ImageFilters {
             let canon: String
             switch key {
             case "hue_rotate": canon = "hueRotate"
+            case "oil_paint": canon = "oilPaint"
             case "curve_points": canon = "curvePoints"
             case "palette_stops": canon = "paletteStops"
             case "palette_strength": canon = "paletteStrength"
@@ -3779,6 +3792,12 @@ struct ImageFilters {
             case "vignette": vignette = num(value)
             case "sharpen": sharpen = num(value)
             case "grain": grain = num(value)
+            case "oilPaint": oilPaint = num(value)
+            case "pixelate": pixelate = num(value)
+            case "clarity": clarity = num(value)
+            case "fade": fade = num(value)
+            case "posterize": posterize = num(value)
+            case "noise": noise = num(value)
             case "shadows": shadows = num(value)
             case "highlights": highlights = num(value)
             case "temperature": temperature = num(value)
@@ -3848,6 +3867,12 @@ struct ImageFilters {
         f.vignette = vignette * s
         f.sharpen = sharpen * s
         f.grain = grain * s
+        f.oilPaint = oilPaint * s
+        f.pixelate = pixelate * s
+        f.clarity = clarity * s
+        f.fade = fade * s
+        f.posterize = posterize * s
+        f.noise = noise * s
         f.blur = blur * s
         f.paletteStrength = paletteStrength * s
         f.curvePoints = curvePoints.map { [$0[0], $0[0] + ($0[1] - $0[0]) * s] }
@@ -3858,6 +3883,7 @@ struct ImageFilters {
         curvePoints.isEmpty && paletteStops.count < 2 && blur == 0 && brightness == 100
             && contrast == 100 && saturation == 100 && hueRotate == 0 && sepia == 0 && invert == 0
             && exposure == 0 && vignette == 0 && sharpen == 0 && grain == 0 && shadows == 0
+            && oilPaint == 0 && pixelate == 0 && clarity == 0 && fade == 0 && posterize == 0 && noise == 0
             && highlights == 0 && temperature == 0 && tint == 0 && rotate == 0 && !flipH && !flipV
             && cropX == 0 && cropY == 0 && cropW == 1 && cropH == 1 && resizeW == 0 && resizeH == 0
     }
@@ -4048,8 +4074,16 @@ enum ImagePipeline {
         var image = crop(source, x: cx, y: cy, w: cw, h: ch)
         image = try resample(image, toW: outW, toH: outH)
 
+        if f.pixelate > 0 {
+            pixelate(&image, pixelate: f.pixelate, spatialScale: spatialScale)
+        }
+
         if f.blur > 0 {
             boxBlur(&image, radius: max(1, Int(((f.blur / 4) * spatialScale).rounded())))
+        }
+
+        if f.oilPaint > 0 {
+            boxBlur(&image, radius: max(2, Int((f.oilPaint * 2 * spatialScale).rounded())))
         }
 
         let curveLUT: [UInt8]? = f.curvePoints.isEmpty ? nil : ToneCurve.lut(f.curvePoints)
@@ -4057,6 +4091,7 @@ enum ImagePipeline {
             ? buildPaletteLUT(f.paletteStops) : nil
         applyPixelPass(&image, f, curveLUT: curveLUT, paletteLUT: paletteLUT)
         if f.sharpen > 0 { sharpen(&image, amount: f.sharpen / 100) }
+        if f.clarity > 0 { clarity(&image, amount: f.clarity / 100) }
         if f.vignette > 0 { vignette(&image, strength: f.vignette / 100) }
         if f.rotate.truncatingRemainder(dividingBy: 360) != 0 || f.flipH || f.flipV {
             image = transform(image, rotate: f.rotate, flipH: f.flipH, flipV: f.flipV)
@@ -4072,7 +4107,7 @@ enum ImagePipeline {
         let needsPixel = curveLUT != nil || paletteLUT != nil || f.brightness != 100
             || f.contrast != 100 || f.saturation != 100 || f.hueRotate != 0 || f.sepia > 0
             || f.invert > 0 || f.exposure != 0 || f.shadows != 0 || f.highlights != 0 || f.grain > 0
-            || f.temperature != 0 || f.tint != 0
+            || f.temperature != 0 || f.tint != 0 || f.fade > 0 || f.posterize > 0 || f.noise > 0
         if !needsPixel { return }
 
         let bri = f.brightness / 100
@@ -4088,6 +4123,10 @@ enum ImagePipeline {
         let grainInt = f.grain * 8
         let tempWarm = f.temperature / 100
         let tintShift = f.tint / 100
+        let fadeAmt = f.fade / 100
+        let noiseInt = f.noise * 2.5
+        let posterLevels = f.posterize > 0 ? max(2, jsRound(11 - f.posterize)) : 0
+        let posterStep = posterLevels > 1 ? 255 / (posterLevels - 1) : 0
         let hueRad = f.hueRotate * Double.pi / 180
         let cosH = cos(hueRad), sinH = sin(hueRad)
 
@@ -4152,6 +4191,12 @@ enum ImagePipeline {
             }
             if tempWarm != 0 { r += tempWarm * 30; b -= tempWarm * 30 }
             if tintShift != 0 { g -= tintShift * 20; r += tintShift * 10; b += tintShift * 10 }
+            if fadeAmt > 0 {
+                let lift = fadeAmt * 60
+                r += lift * (1 - r / 255)
+                g += lift * (1 - g / 255)
+                b += lift * (1 - b / 255)
+            }
             if let lut = paletteLUT {
                 let cMax = max(r, max(g, b)), cMin = min(r, min(g, b))
                 let y = Int((cMax + cMin) / 2)
@@ -4162,9 +4207,19 @@ enum ImagePipeline {
                 g = g * inv + Double(lut[base + 1]) * t
                 b = b * inv + Double(lut[base + 2]) * t
             }
+            if posterLevels > 0 {
+                r = jsRound(r / posterStep) * posterStep
+                g = jsRound(g / posterStep) * posterStep
+                b = jsRound(b / posterStep) * posterStep
+            }
             if grainInt > 0 {
                 let noise = (Double.random(in: 0..<1) - 0.5) * grainInt
                 r += noise; g += noise; b += noise
+            }
+            if noiseInt > 0 {
+                r += (Double.random(in: 0..<1) - 0.5) * noiseInt
+                g += (Double.random(in: 0..<1) - 0.5) * noiseInt
+                b += (Double.random(in: 0..<1) - 0.5) * noiseInt
             }
             d[i] = toUint8Clamp(r)
             d[i + 1] = toUint8Clamp(g)
@@ -4229,6 +4284,91 @@ enum ImagePipeline {
                         + Double(src[(y * w + x + 1) * 4 + c])
                     d[idx + c] = toUint8Clamp(Double(src[idx + c]) + (center - n) * amount * 0.25)
                 }
+            }
+        }
+        image.pixels = d
+    }
+
+    // Aether's pixelate: shrink to a block grid by box average, then stretch
+    // back with the nearest map — the two canvas drawImage calls its
+    // renderInternal makes. Block size is the same `round(pixelate/5 *
+    // spatialScale)` the browser uses. The shrink mirrors the recorder's
+    // drawImage (record-image-fixtures.sh) exactly: a destination pixel takes
+    // the mean of the source pixels whose centres fall in its half-open area.
+    static func pixelate(_ image: inout RGBAImage, pixelate value: Double, spatialScale: Double) {
+        let w = image.width, h = image.height
+        let block = max(2, Int((value / 5 * spatialScale).rounded()))
+        let sw = max(1, Int((Double(w) / Double(block)).rounded()))
+        let sh = max(1, Int((Double(h) / Double(block)).rounded()))
+        if sw == w && sh == h { return }
+        let small = boxDownscale(image, toW: sw, toH: sh)
+        image = nearestResample(small, toW: w, toH: h)
+    }
+
+    static func boxDownscale(_ image: RGBAImage, toW sw: Int, toH sh: Int) -> RGBAImage {
+        let W = image.width, H = image.height
+        var out = [UInt8](repeating: 0, count: sw * sh * 4)
+        for Y in 0..<sh {
+            let v0 = Double(Y) * Double(H) / Double(sh)
+            let v1 = Double(Y + 1) * Double(H) / Double(sh)
+            let jLo = max(0, Int(ceil(v0 - 0.5)))
+            let jHi = min(H - 1, Int(ceil(v1 - 0.5)) - 1)
+            for X in 0..<sw {
+                let u0 = Double(X) * Double(W) / Double(sw)
+                let u1 = Double(X + 1) * Double(W) / Double(sw)
+                let iLo = max(0, Int(ceil(u0 - 0.5)))
+                let iHi = min(W - 1, Int(ceil(u1 - 0.5)) - 1)
+                let di = (Y * sw + X) * 4
+                if iLo > iHi || jLo > jHi {
+                    let nx = min(W - 1, max(0, Int(((Double(X) + 0.5) * Double(W) / Double(sw)).rounded(.down))))
+                    let ny = min(H - 1, max(0, Int(((Double(Y) + 0.5) * Double(H) / Double(sh)).rounded(.down))))
+                    let si = (ny * W + nx) * 4
+                    out[di] = image.pixels[si]; out[di + 1] = image.pixels[si + 1]
+                    out[di + 2] = image.pixels[si + 2]; out[di + 3] = image.pixels[si + 3]
+                    continue
+                }
+                var rS = 0.0, gS = 0.0, bS = 0.0, aS = 0.0, cnt = 0.0
+                for j in jLo...jHi {
+                    for i in iLo...iHi {
+                        let si = (j * W + i) * 4
+                        rS += Double(image.pixels[si]); gS += Double(image.pixels[si + 1])
+                        bS += Double(image.pixels[si + 2]); aS += Double(image.pixels[si + 3]); cnt += 1
+                    }
+                }
+                out[di] = toUint8Clamp(rS / cnt); out[di + 1] = toUint8Clamp(gS / cnt)
+                out[di + 2] = toUint8Clamp(bS / cnt); out[di + 3] = toUint8Clamp(aS / cnt)
+            }
+        }
+        return RGBAImage(width: sw, height: sh, pixels: out)
+    }
+
+    static func nearestResample(_ image: RGBAImage, toW W: Int, toH H: Int) -> RGBAImage {
+        let sw = image.width, sh = image.height
+        if sw == W && sh == H { return image }
+        var out = [UInt8](repeating: 0, count: W * H * 4)
+        for Y in 0..<H {
+            let sy = min(sh - 1, max(0, Int(((Double(Y) + 0.5) * Double(sh) / Double(H)).rounded(.down))))
+            for X in 0..<W {
+                let sx = min(sw - 1, max(0, Int(((Double(X) + 0.5) * Double(sw) / Double(W)).rounded(.down))))
+                let si = (sy * sw + sx) * 4, di = (Y * W + X) * 4
+                out[di] = image.pixels[si]; out[di + 1] = image.pixels[si + 1]
+                out[di + 2] = image.pixels[si + 2]; out[di + 3] = image.pixels[si + 3]
+            }
+        }
+        return RGBAImage(width: W, height: H, pixels: out)
+    }
+
+    // Aether's clarity: an unsharp mask against a large box blur, its local
+    // contrast. Radius max(3, round(w/80)) on the current width.
+    static func clarity(_ image: inout RGBAImage, amount: Double) {
+        let w = image.width
+        var blurred = image
+        boxBlur(&blurred, radius: max(3, Int((Double(w) / 80).rounded())))
+        var d = image.pixels
+        for i in stride(from: 0, to: d.count, by: 4) {
+            for c in 0..<3 {
+                let diff = Double(image.pixels[i + c]) - Double(blurred.pixels[i + c])
+                d[i + c] = toUint8Clamp(Double(image.pixels[i + c]) + diff * amount)
             }
         }
         image.pixels = d
@@ -6163,7 +6303,7 @@ func themeError(_ error: Error) -> Never {
 
 // MARK: - CLI
 
-let themecoreVersion = "0.9.1"
+let themecoreVersion = "0.10.0"
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write("omacosy-themecore: \(message)\n".data(using: .utf8)!)
@@ -6508,6 +6648,12 @@ func takeImageFilterFlags(_ f: inout ImageFilters) {
     if let v = takeNumber("--vignette") { f.vignette = v }
     if let v = takeNumber("--sharpen") { f.sharpen = v }
     if let v = takeNumber("--grain") { f.grain = v }
+    if let v = takeNumber("--oil-paint") { f.oilPaint = v }
+    if let v = takeNumber("--pixelate") { f.pixelate = v }
+    if let v = takeNumber("--clarity") { f.clarity = v }
+    if let v = takeNumber("--fade") { f.fade = v }
+    if let v = takeNumber("--posterize") { f.posterize = v }
+    if let v = takeNumber("--noise") { f.noise = v }
     if let v = takeNumber("--shadows") { f.shadows = v }
     if let v = takeNumber("--highlights") { f.highlights = v }
     if let v = takeNumber("--temperature") { f.temperature = v }
