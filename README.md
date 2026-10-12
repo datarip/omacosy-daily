@@ -120,7 +120,7 @@ The fixes this build offers upstream, and their state today.
 | [#49](https://github.com/paulsp94/omacosy/pull/49) | MERGED | fix(overview): the overview keeps an old theme's colour and wallpaper |
 | [#47](https://github.com/paulsp94/omacosy/pull/47) | MERGED | feat(bar): the icon-only pills are squares |
 | [#46](https://github.com/paulsp94/omacosy/pull/46) | MERGED | fix(aerospace): Super+F comes out identical to Super+N |
-| [#45](https://github.com/paulsp94/omacosy/pull/45) | OPEN | fix(omniwm): Cmd+H leaves the workspace, and the Dock icon does not return to it |
+| [#45](https://github.com/paulsp94/omacosy/pull/45) | CLOSED | fix(omniwm): Cmd+H leaves the workspace, and the Dock icon does not return to it |
 | [#44](https://github.com/paulsp94/omacosy/pull/44) | MERGED | fix(spawn): a burst of launch chords opens one window, 13 s late |
 | [#42](https://github.com/paulsp94/omacosy/pull/42) | MERGED | fix(install): keep a real ~/.zshrc working, and out of the clone |
 | [#41](https://github.com/paulsp94/omacosy/pull/41) | MERGED | fix(uninstall): stop relinking ~/.zshrc to one machine's dotfiles path |
