@@ -4421,6 +4421,9 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
                     x: insetL, midTop: blurTop + 12, height: bounds.height)
         drawTopLeft("Palette Grade", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: gradeTop, height: bounds.height)
+        // Blur Desktop closes the Detail group; a rule separates it from the
+        // Transform section below.
+        drawRule(transformTop)
         drawTopLeft("Transform", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: transformTop, height: bounds.height)
         drawRule(presetTop)
