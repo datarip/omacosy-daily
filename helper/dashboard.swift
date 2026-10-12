@@ -3982,6 +3982,9 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     private var presetTop: CGFloat = 0
     private var histTop: CGFloat = 0
     private var blurTop: CGFloat = 0
+    // A rule above Detail: Palette Grade's Strength slider is the last thing
+    // in the unframed Palette Grade block, so the section needs its own line.
+    private var detailTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -4306,6 +4309,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         gradeStrengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
                                          x: insetL, w: contentW)
         top += AdjustmentSliderView.rowHeight + 12
+        detailTop = top
         laySection("Detail", EditorFilterFields.detail, &top, &i)
         blurTop = top
         blurToggle.frame = rect(top: top, h: 24, x: insetL + contentW - 46, w: 46)
@@ -4403,6 +4407,9 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
                     x: insetL, top: histTop, height: bounds.height)
         drawTopLeft("Curves", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: curveTop, height: bounds.height)
+        // Palette Grade is an unframed block; a rule separates its Strength
+        // slider from the Detail section under it.
+        drawRule(detailTop)
         for (title, top) in groupTops {
             drawTopLeft(title, nerdFont("Bold", 12), palette.accent,
                         x: insetL, top: top, height: bounds.height)
