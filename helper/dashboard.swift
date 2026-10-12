@@ -3456,6 +3456,10 @@ final class ThemesTabView: NSView, ScrollStepTab {
     // draw() renders it
     private var statusShown = ""
     private var needsGridRebuild = true
+    // Open at the top only when the tab is (re)shown. A reload from an apply,
+    // an edit or a delete must never move the viewport: the grid can be tall
+    // and the user is looking at the cell they just acted on.
+    private var pendingTopScroll = true
     var onApplied: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -3509,7 +3513,12 @@ final class ThemesTabView: NSView, ScrollStepTab {
     // so Esc on another tab is not swallowed by a stale selection.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { reload() } else { exitSelection() }
+        if window != nil {
+            pendingTopScroll = true
+            reload()
+        } else {
+            exitSelection()
+        }
     }
 
     // Off-screen review only.
@@ -3528,6 +3537,16 @@ final class ThemesTabView: NSView, ScrollStepTab {
         updateDeleteButton()
         needsLayout = true
     }
+    // Off-screen review/test only: the scroll position and the top it should
+    // open at, plus a scroll to the bottom and a reload with no user action.
+    func debugOriginY() -> CGFloat { scroll.contentView.bounds.origin.y }
+    func debugTopY() -> CGFloat { max(0, grid.frame.height - scroll.contentSize.height) }
+    func debugScrollToBottom() {
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        scroller.refresh()
+    }
+    func debugReload() { reload() }
 
     // --- bulk selection ----------------------------------------------------
 
@@ -3741,8 +3760,12 @@ final class ThemesTabView: NSView, ScrollStepTab {
             if needsGridRebuild {
                 grid.rebuild()
                 needsGridRebuild = false
-                // open at the top (the non-flipped document's origin is the
-                // bottom, which otherwise shows the custom section first)
+            }
+            // open at the top (the non-flipped document's origin is the
+            // bottom, which otherwise shows the custom section first) — but
+            // only on a (re)show, never on a reload from an apply or an edit
+            if pendingTopScroll {
+                pendingTopScroll = false
                 let top = max(0, grid.frame.height - scroll.contentSize.height)
                 scroll.contentView.scroll(to: NSPoint(x: 0, y: top))
                 scroll.reflectScrolledClipView(scroll.contentView)
@@ -14819,6 +14842,47 @@ func editorStateSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--image-editor-selftest") {
     exit(editorStateSelfTest() == 0 ? 0 : 1)
+}
+
+// The Themes gallery must open at the top when the tab is (re)shown, and must
+// NOT move when an apply or an edit reloads the shelf. Drives the view
+// off-screen and asserts both, so a future rebuild-path change cannot quietly
+// bring the jump back.
+func themesScrollSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    palette = loadPalette()
+    let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 720),
+                       styleMask: .borderless, backing: .buffered, defer: false)
+    let tab = ThemesTabView(frame: NSRect(x: 0, y: 0, width: 860, height: 720))
+    win.contentView = tab
+    tab.layoutSubtreeIfNeeded()
+    let top = tab.debugTopY()
+    guard top > 100 else {
+        print("themes-scroll selftest: SKIP (not enough wallpapers to scroll)")
+        return 0
+    }
+    check("opens at the top", abs(tab.debugOriginY() - top) < 1)
+    tab.debugScrollToBottom()
+    let bottom = tab.debugOriginY()
+    tab.debugReload()
+    tab.layoutSubtreeIfNeeded()
+    check("an apply reload keeps the scroll position", abs(tab.debugOriginY() - bottom) < 1)
+    check("an apply reload does not jump to the top", abs(tab.debugOriginY() - top) > 1)
+    win.contentView = NSView(frame: win.contentView?.frame ?? .zero)
+    win.contentView = tab
+    tab.layoutSubtreeIfNeeded()
+    check("a re-show opens at the top", abs(tab.debugOriginY() - top) < 1)
+    print(failures == 0 ? "themes-scroll selftest: all checks passed"
+                        : "themes-scroll selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--themes-scroll-selftest") {
+    exit(themesScrollSelfTest() == 0 ? 0 : 1)
 }
 
 // The wallpaper editor's preview door (Phase 8b): render the in-process
