@@ -179,7 +179,7 @@ cmd_current() {
 
 # The next item in the combined custom order the Themes grid shows: named
 # editions A→Z first, then the raw wallpapers in sorted order. Prints
-# "theme:<id>" for an edition, or the wallpaper path. SUPER+B (the wallpaper
+# "theme:<id>" for an edition, or the wallpaper path. Super+Shift+B (the
 # cycle) reads this so the keyboard and the grid agree on what "next" is.
 cmd_cycle() {
   local editions=() files=() i

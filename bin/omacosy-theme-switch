@@ -214,7 +214,7 @@ case "$mode" in
       [ -n "$logical" ] || logical="${list[0]}"
     fi
 
-    # SUPER+B on the custom theme follows the Themes grid's one order: the
+    # Super+Shift+B on the custom theme follows the Themes grid's one order: the
     # named editions A→Z first, then the raw wallpapers. omacosy-custom-theme
     # cycle resolves "the next one" so the keyboard and the grid never drift.
     if [ "$mode" = wallpaper ] && [ "$cur_bucket" = custom ]; then
@@ -232,7 +232,10 @@ case "$mode" in
           show_overlay_then_relink "$wall" "$theme_dir" "theme:$id" "$source"
           exit 0 ;;
         ?*)
-          theme_dir="$("$CUSTOM" theme "$next")" || exit 1
+          # --raw forces the derived dir: a wallpaper that also has an
+          # edition must still land on its raw "Wallpaper #N" cell, not route
+          # back to the edition and loop among editions
+          theme_dir="$("$CUSTOM" theme --raw "$next")" || exit 1
           shown="$(find -L "$theme_dir/backgrounds" -maxdepth 1 -type f 2>/dev/null | sort | head -1)"
           wall="$next"
           [ -n "$shown" ] && wall="$(readlink -f "$shown" 2>/dev/null || true)"
