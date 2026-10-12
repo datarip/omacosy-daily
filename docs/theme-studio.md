@@ -26,13 +26,35 @@ text, pills and accent follow the draft as you transform the palette, before
 you apply. The centre pane's toolbar toggles the mock **menu bar**, the
 **terminal**, the focus **ring** and a fake **cheat sheet** (the one surface
 that shows Muted as the descriptions, Label as the keys and Accent as the
-headings). And the **Semantic Colors** section carries two **Omacosy** groups —
-the bar's own colours (**Background, Pill, Muted, Label, Accent**) and its
-signals (**Ring, Red, Green, Yellow**) — that are editable **independently of
-the palette the terminal tools use**. Overriding one changes only that Omacosy
-surface, never the `colors.toml` the terminal follows; click a card to open the
-colour inspector, and the pin dot plus the header Reset or "Reset N pinned"
-return them to auto.
+headings). And the **Semantic Colors** section carries two Omacosy-owned
+groups — **Omacosy** (**Background, Pill, Muted, Label, Accent**) and
+**Ring & Status** (**Ring, Red, Green, Yellow**) — that are editable
+**independently of the palette the terminal tools use**. Overriding one
+changes only that Omacosy surface, never the `colors.toml` the terminal
+follows; click a card to open the colour inspector, and the pin dot plus the
+header Reset or "Reset N pinned" return them to auto.
+
+## Saved editions
+
+Every picture in the wallpaper folder is already a theme of its own: the Themes
+tab shows each as a `Wallpaper #N` cell whose colours come from that picture
+(the same Magic extraction the raw cells use).
+**Customize** on a raw cell opens the editor on a new, unsaved theme; **Save**
+or **Apply & Save** stores it as a named **edition**, and from then on it sits
+above the raw cells, sorted A→Z, with its own name and card — **Edit** reopens
+it. With an untouched Magic palette the edition and the raw cell it came from
+write byte-identical desktop files; an edition is the picture's own theme plus,
+only when you change them, its palette, its picture edits and its per-app
+overrides.
+
+The theme on the desktop right now carries a green **Active** pill in the
+bottom-left of its card. While the `custom` theme is on, `Super+Shift+B` walks
+the grid's own order — the saved editions A→Z first, then the `Wallpaper #N`
+cells — and wraps, so the keyboard and the grid never disagree. Right-click a
+named edition for **Duplicate Theme**. The hover **trash** asks before removing:
+an edition's trash deletes just the record, while a raw wallpaper's trash moves
+the picture to the Finder Trash and, as a separate choice, can delete the
+editions built from it. Nothing is ever hard-deleted.
 
 ## Exporting a theme
 
@@ -137,8 +159,9 @@ Omacosy's Theme Studio is built on **[Aether](https://github.com/omacom/aether)*
 (MIT, © Bjarne Overli): the colour science, the extraction and palette
 generators, the tone curve, the image pipeline and the template engine are
 ports of Aether's Go and TypeScript. Ported functions carry a header naming
-Aether; the vendored templates under `config/theme-templates/` carry the same
-header.
+Aether, and so does the vendored Neovim template under
+`config/theme-templates/`; the Zed and VS Code templates are JSON, which
+cannot hold a comment.
 
 The 40 palettes in the Method / Presets pickers are Aether's `PRESET_THEMES`,
 kept verbatim (names and colours). The five Omacosy-adjacent entries are

@@ -3234,8 +3234,8 @@ final class ThemeGridView: NSView {
             }
         }
 
-        // the applied theme carries an "Active" pill, top-left, so the grid
-        // says at a glance which one is live
+        // the applied theme carries a green "Active" pill, bottom-left, so the
+        // grid says at a glance which one is live
         if isActiveCell(i) {
             let label = "\u{f00c}  Active"
             let pill = activePillRect(f, label: label)

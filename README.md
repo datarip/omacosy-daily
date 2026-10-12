@@ -1170,4 +1170,7 @@ copyright notice `LICENSE` keeps. Standing on: [omarchy](https://omarchy.org)
 [Karabiner-Elements](https://karabiner-elements.pqrs.org),
 [aerospace-swipe](https://github.com/acsandmann/aerospace-swipe) (MIT;
 its gesture engine lives on here as `omacosy-gesture`, notice kept in
-`helper/gesture/`).
+`helper/gesture/`), and
+[Aether](https://github.com/omacom/aether) (MIT, © Bjarne Overli; the colour
+science, extraction, palette generators, image pipeline and template engine
+the Theme Studio ports).

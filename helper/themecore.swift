@@ -3605,10 +3605,11 @@ func imageHistogram(url: URL, maxWidth: Int = 512) throws -> [Int] {
 // Ported from Aether's frontend `canvas-filters.ts` (v4.32.0). The filter
 // fields, the strength scaling, the per-pixel pass, the box blur, the
 // sharpen pass, the vignette and the transform order follow that file
-// operation for operation; the slider ranges come from
-// docs/wallpaper-editor.md. The engine is the single implementation of
-// record for export; the dashboard draws a best-effort CoreImage preview of
-// the same recipe (ImageFilters there mirrors these fields).
+// operation for operation; the slider ranges come from Aether's
+// `wallpaper-editor/FilterControls.svelte`. The engine is the single
+// implementation of record for export; the dashboard draws a best-effort
+// CoreImage preview of the same recipe (ImageFilters there mirrors these
+// fields).
 //
 // All 30 fields of Aether's Filters are typed here. Pixelate is the one that
 // cannot be matched to the browser exactly: Aether hands the shrink to the
@@ -4002,9 +4003,11 @@ enum CustomPresets {
 }
 
 // The quick presets, verbatim from Aether's FilterControls.svelte (its own
-// eighteen built-ins at v4.32.0). Each is a delta applied over the current
-// state, so absent fields keep whatever the user already chose (Aether's
-// applyPreset). The dashboard's EditorPresets mirrors this list.
+// eighteen built-ins at v4.32.0). `image render --preset` lays one over
+// neutral defaults, so absent fields are neutral. The dashboard's
+// EditorPresets mirrors this list and, per Aether's applyPreset, keeps the
+// structural fields a preset does not carry (crop, resize, rotate, flip,
+// curve, strength) while resetting every absent stylistic field.
 struct ImagePreset {
     let name: String
     let values: [String: Any]
