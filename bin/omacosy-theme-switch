@@ -41,7 +41,7 @@ SETTLER_PID="$STATE_DIR/settler.pid"
 APPLY_PID="$STATE_DIR/apply.pid"
 LOG="$STATE_DIR/switch.log"
 
-SETTLE_SECONDS="${OMACOSY_SETTLE_SECONDS:-4}"
+SETTLE_SECONDS="${OMACOSY_SETTLE_SECONDS:-10}"
 
 mkdir -p "$STATE_DIR"
 log() { printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" >> "$LOG"; }

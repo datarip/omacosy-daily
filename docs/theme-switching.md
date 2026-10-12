@@ -106,7 +106,7 @@ OmniWM, `aerospace.toml` under AeroSpace). On each press it:
 
 **The settle and the handoff are events, not polls:**
 
-- a few seconds with no further press (`OMACOSY_SETTLE_SECONDS`, default 4) is
+- a quiet pause with no further press (`OMACOSY_SETTLE_SECONDS`, default 10) is
   taken as the choice — one one-shot deadline, the only timer in the feature;
 - the coordinator then asks macOS for the real wallpaper and writes the path
   to `~/.local/state/omacosy/overlay-target`;
@@ -153,7 +153,7 @@ is crisp.
   wallpaper changes at once, and the bar and the ring change with it.
 - **Browse:** keep pressing. Every press is instant; the real wallpaper
   request is collapsed to the last one, so nothing stacks and nothing lags.
-- **Settle:** after ~4 s with no press, the chosen wallpaper is applied for
+- **Settle:** after ~10 s with no press, the chosen wallpaper is applied for
   real, underneath the overlay; when macOS has caught up the overlay is
   removed on top of the same picture, so you see no second change.
 - **External displays:** the same wallpaper fills each one, sharp, and a
