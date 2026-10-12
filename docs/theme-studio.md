@@ -102,6 +102,33 @@ omacosy-themecore theme import <file> [--id ID] [--name NAME] \
 Without `--replace` or `--rename`, an id that already exists is refused, and
 the message names both flags.
 
+## Custom presets
+
+The Wallpaper Editor's **Presets** section keeps Aether's built-in looks (the
+dropdown) and lets you save your own. **Save Current** stores the filter
+adjustments you have made to the picture — only the values that differ from the
+defaults — under a name you type. Saved presets show as rows under **Custom**:
+click a name to apply it, click its **✕** to delete it. A preset lays its values
+over the picture's current settings, so a field it does not mention keeps what
+you already chose.
+
+**Import** and **Export** move the whole list as one JSON file in Aether's
+`aether-presets.json` shape (an array of `{name, values}`), so a preset file
+made in Aether loads in Omacosy and the other way round. Import **merges by
+name**: a preset the file shares with one of yours replaces it, the rest are
+added. The list lives in `~/.config/omacosy/presets.json`, which survives both
+`install.sh` and `uninstall.sh`.
+
+From the command line:
+
+```sh
+omacosy-themecore image presets custom list
+omacosy-themecore image presets custom save --name NAME --filters JSON
+omacosy-themecore image presets custom delete --name NAME
+omacosy-themecore image presets custom import FILE
+omacosy-themecore image presets custom export FILE
+```
+
 ## Credits and attribution
 
 Omacosy's Theme Studio is built on **[Aether](https://github.com/omacom/aether)**

@@ -2844,6 +2844,19 @@ func importErrorMessage(_ output: String) -> String {
     return "Import failed."
 }
 
+// The bare engine message from a failed command, or the fallback when there is
+// none. Unlike importErrorMessage it does not assume the word "Import".
+func themecoreMessage(_ output: String, fallback: String) -> String {
+    for line in output.split(separator: "\n") {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("omacosy-themecore:") else { continue }
+        let msg = String(t.dropFirst("omacosy-themecore:".count))
+            .trimmingCharacters(in: .whitespaces)
+        if !msg.isEmpty { return msg }
+    }
+    return fallback
+}
+
 // WCAG relative luminance, so the Edit pill can pick a label colour that
 // stays readable on the accent fill. 0.179 is the sRGB pivot where black
 // and white trade places.
@@ -3801,6 +3814,39 @@ final class HistogramView: NSView {
     }
 }
 
+// One row of the picture editor's Custom presets list: the name on the left,
+// a delete ✕ on the right. Clicking the name applies the preset, clicking the
+// ✕ deletes it. Drawn and hit-tested from shared rects, like the semantic
+// cards, so it needs no subview bookkeeping.
+final class PresetRowView: NSView {
+    var presetName = "" { didSet { needsDisplay = true } }
+    var onApply: (() -> Void)?
+    var onDelete: (() -> Void)?
+
+    private var deleteRect: NSRect {
+        NSRect(x: bounds.maxX - 26, y: 0, width: 26, height: bounds.height)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        palette.itemBG.withAlphaComponent(0.35).setFill()
+        box.fill()
+        palette.muted.withAlphaComponent(0.3).setStroke()
+        box.lineWidth = 1
+        box.stroke()
+        drawMidLeft(truncate(presetName, nerdFont("Regular", 11), bounds.width - 42),
+                    nerdFont("Regular", 11), palette.label,
+                    x: 10, midTop: bounds.midY, height: bounds.height)
+        drawMidCenter("\u{2715}", nerdFont("Regular", 10), palette.muted,
+                      centerX: deleteRect.midX, midTop: bounds.midY, height: bounds.height)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if deleteRect.contains(p) { onDelete?() } else { onApply?() }
+    }
+}
+
 // The scrollable editor body: Strength and the Auto Enhance buttons, then the
 // picture's controls. The luminance histogram sits above the tone curve and is
 // also the curve's backdrop. The picture history's own Undo / Redo / Reset sit
@@ -3931,6 +3977,12 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     // The built-in presets, chosen from the same dropdown the palette builder's
     // Presets control uses.
     let presetsButton = PopupButtonView()
+    // Snapshots: Save the current adjustments, move a presets file in/out, and
+    // the user's own presets as a list below the built-in dropdown.
+    let savePresetButton = ButtonView()
+    let importPresetsButton = ButtonView()
+    let exportPresetsButton = ButtonView()
+    private(set) var customRows: [PresetRowView] = []
     let cropButton = ButtonView()
     static let ratios: [(label: String, value: Double)] = [
         ("Free", 0), ("1:1", 1), ("16:9", 16.0 / 9), ("4:3", 4.0 / 3),
@@ -3952,6 +4004,11 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     var onCurveReset: (() -> Void)?
     var onGradeStops: (([String]) -> Void)?
     var onPreset: ((String) -> Void)?
+    var onSavePreset: (() -> Void)?
+    var onImportPresets: (() -> Void)?
+    var onExportPresets: (() -> Void)?
+    var onApplyCustomPreset: ((String) -> Void)?
+    var onDeletePreset: ((String) -> Void)?
     var onCropToggle: ((Bool) -> Void)?
     var onCropPreset: ((Double) -> Void)?
     var onCropReset: (() -> Void)?
@@ -3980,6 +4037,8 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     private var cropLabelTop: CGFloat = 0
     private var resizeLabelTop: CGFloat = 0
     private var presetTop: CGFloat = 0
+    private var presetActionsTop: CGFloat = 0
+    private var customLabelTop: CGFloat = 0
     private var histTop: CGFloat = 0
     private var blurTop: CGFloat = 0
     // A rule above Detail: Palette Grade's Strength slider is the last thing
@@ -4019,6 +4078,24 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
             }
         }
         addSubview(presetsButton)
+        // Snapshots: Save Current on the left, Import/Export icons on the
+        // right, matching Aether's Presets header row.
+        savePresetButton.title = "Save Current"
+        savePresetButton.fontSize = 11
+        savePresetButton.onClick = { [weak self] in self?.onSavePreset?() }
+        addSubview(savePresetButton)
+        importPresetsButton.title = "\u{f019}"
+        importPresetsButton.fontSize = 12
+        importPresetsButton.centeredByBounds = true
+        importPresetsButton.toolTip = "Import Presets"
+        importPresetsButton.onClick = { [weak self] in self?.onImportPresets?() }
+        addSubview(importPresetsButton)
+        exportPresetsButton.title = "\u{f093}"
+        exportPresetsButton.fontSize = 12
+        exportPresetsButton.centeredByBounds = true
+        exportPresetsButton.toolTip = "Export Presets"
+        exportPresetsButton.onClick = { [weak self] in self?.onExportPresets?() }
+        addSubview(exportPresetsButton)
         addSubview(histogram)
         applyButton.title = "Apply to Palette"
         applyButton.toolTip = "Recompute the palette from this edit"
@@ -4148,6 +4225,10 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         h += 262                                          // Transform
         h += 16                                           // "Original: W × H" line
         h += 34                                           // Presets dropdown
+        h += 34                                           // Save Current + Import/Export
+        if !customRows.isEmpty {
+            h += 18 + CGFloat(customRows.count) * 32      // Custom label + rows
+        }
         return h + 12
     }
 
@@ -4158,6 +4239,25 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         histogram.b = b
         // the curve also draws the luminance histogram as its backdrop
         curveView.histogram = lum
+    }
+
+    // Rebuild the Custom list from the engine's stored presets. Rows are reused
+    // views; the delete/apply closures capture the name, so a refresh keeps them
+    // correct. The Export icon hides while the list is empty (Aether disables
+    // it), and the panel grows or shrinks to fit.
+    func setCustomPresets(_ list: [(name: String, values: [String: Any])]) {
+        for row in customRows { row.removeFromSuperview() }
+        customRows = list.map { entry in
+            let row = PresetRowView()
+            row.presetName = entry.name
+            row.onApply = { [weak self] in self?.onApplyCustomPreset?(entry.name) }
+            row.onDelete = { [weak self] in self?.onDeletePreset?(entry.name) }
+            addSubview(row)
+            return row
+        }
+        exportPresetsButton.isHidden = list.isEmpty
+        needsLayout = true
+        needsDisplay = true
     }
 
     func setGradeStops(_ stops: [String]) {
@@ -4349,11 +4449,29 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         // clear line above the Presets section so nothing overlaps it.
         top += 16
         top += 16
-        // Snapshots: the built-in presets, chosen from the palette-style popup.
+        // Snapshots: the built-in presets (the palette-style dropdown), then
+        // Save Current / Import / Export, then the user's custom presets.
         presetTop = top
         presetsButton.frame = rect(top: top + 3, h: 26,
                                    x: insetL + max(0, contentW - 170), w: min(170, contentW))
         top += 34
+        presetActionsTop = top
+        let iconW: CGFloat = 26
+        exportPresetsButton.frame = rect(top: top + 1, h: 24, x: insetL + contentW - iconW, w: iconW)
+        importPresetsButton.frame = rect(top: top + 1, h: 24,
+                                         x: insetL + contentW - iconW * 2 - 6, w: iconW)
+        savePresetButton.frame = rect(top: top, h: 24,
+                                      x: insetL, w: contentW - iconW * 2 - 12)
+        top += 34
+        customLabelTop = 0
+        if !customRows.isEmpty {
+            customLabelTop = top
+            top += 18
+            for row in customRows {
+                row.frame = rect(top: top, h: 28, x: insetL, w: contentW)
+                top += 32
+            }
+        }
     }
 
     // One framed slider section: its accent title, then the sliders inside a
@@ -4430,6 +4548,10 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         drawRule(presetTop)
         drawMidLeft("Presets", nerdFont("Bold", 12), palette.accent,
                     x: insetL, midTop: presetTop + 16, height: bounds.height)
+        if customLabelTop > 0 {
+            drawTopLeft("Custom", nerdFont("Bold", 10), palette.muted,
+                        x: insetL, top: customLabelTop, height: bounds.height)
+        }
         drawTopLeft("ROTATE & FLIP", nerdFont("Bold", 10), palette.muted,
                     x: insetL, top: rotLabelTop, height: bounds.height)
         drawTopLeft("CROP", nerdFont("Bold", 10), palette.muted,
@@ -4456,6 +4578,11 @@ final class EditorColumnView: NSView {
     var onCurveReset: (() -> Void)? { didSet { doc.onCurveReset = onCurveReset } }
     var onGradeStops: (([String]) -> Void)? { didSet { doc.onGradeStops = onGradeStops } }
     var onPreset: ((String) -> Void)? { didSet { doc.onPreset = onPreset } }
+    var onSavePreset: (() -> Void)? { didSet { doc.onSavePreset = onSavePreset } }
+    var onImportPresets: (() -> Void)? { didSet { doc.onImportPresets = onImportPresets } }
+    var onExportPresets: (() -> Void)? { didSet { doc.onExportPresets = onExportPresets } }
+    var onApplyCustomPreset: ((String) -> Void)? { didSet { doc.onApplyCustomPreset = onApplyCustomPreset } }
+    var onDeletePreset: ((String) -> Void)? { didSet { doc.onDeletePreset = onDeletePreset } }
     var onCropToggle: ((Bool) -> Void)? { didSet { doc.onCropToggle = onCropToggle } }
     var onCropPreset: ((Double) -> Void)? { didSet { doc.onCropPreset = onCropPreset } }
     var onCropReset: (() -> Void)? { didSet { doc.onCropReset = onCropReset } }
@@ -4559,6 +4686,13 @@ final class EditorColumnView: NSView {
 
     func setBlur(_ on: Bool) { doc.setBlur(on) }
 
+    // The editor hands the stored presets here; the list changes the panel's
+    // height, so the column re-lays out around it.
+    func setCustomPresets(_ list: [(name: String, values: [String: Any])]) {
+        doc.setCustomPresets(list)
+        needsLayout = true
+    }
+
     func setApplyProgress(_ p: CGFloat) { doc.applyButton.progress = p }
 
     override func layout() {
@@ -4649,6 +4783,12 @@ struct EditorFilters: Equatable {
     // snake_case aliases, so a recipe recorded by the engine round-trips.
     init(json: [String: Any]) {
         self.init()
+        applyJSON(json)
+    }
+
+    // Lay a recipe's fields onto this one; shared by init(json:) and the
+    // preset merge, so a built-in or a custom preset speaks one vocabulary.
+    mutating func applyJSON(_ json: [String: Any]) {
         let known: Set<String> = ["blur", "brightness", "contrast", "saturation", "hueRotate",
             "hue_rotate", "sepia", "invert", "exposure", "vignette", "sharpen", "grain",
             "oilPaint", "oil_paint", "pixelate", "clarity", "fade", "posterize", "noise",
@@ -4762,6 +4902,15 @@ struct EditorFilters: Equatable {
             && oilPaint == 0 && pixelate == 0 && clarity == 0 && fade == 0 && posterize == 0 && noise == 0
             && highlights == 0 && temperature == 0 && tint == 0 && rotate == 0 && !flipH && !flipV
             && cropX == 0 && cropY == 0 && cropW == 1 && cropH == 1 && resizeW == 0 && resizeH == 0
+    }
+
+    // Lay a preset's values over this recipe: a field the preset carries
+    // replaces, every absent field keeps the value already here. Shared by the
+    // built-in presets and the user's custom ones.
+    func merged(with values: [String: Any]) -> EditorFilters {
+        var f = self
+        f.applyJSON(values)
+        return f
     }
 
     // Keyed access to the numeric fields the editor's sliders drive.
@@ -10262,6 +10411,8 @@ final class ThemeEditor {
     private let model = PaletteModel()
     // the picture editor's own state and history, separate from the palette's
     private let editorState = EditorState()
+    // the user's saved filter presets, read from the engine's store
+    private var customPresets: [(name: String, values: [String: Any])] = []
     private let status: ((String) -> Void)?
     private var keyMonitor: Any?
     private var outsideMonitor: Any?
@@ -10325,10 +10476,20 @@ final class ThemeEditor {
         root.wallpaperEditor.onPreset = { [weak self] name in
             self?.editorState.edit("preset:" + name) { f in
                 if let preset = EditorPresets.all.first(where: { $0.name == name }) {
-                    for (k, v) in preset.values { f[k] = v }
+                    // a preset lays its values over the current recipe; absent
+                    // fields keep the user's own values (Phase 10c)
+                    f = f.merged(with: preset.values.mapValues { $0 as Any })
                 }
             }
         }
+        root.wallpaperEditor.onSavePreset = { [weak self] in self?.startSavePreset() }
+        root.wallpaperEditor.onImportPresets = { [weak self] in self?.startImportPresets() }
+        root.wallpaperEditor.onExportPresets = { [weak self] in self?.startExportPresets() }
+        root.wallpaperEditor.onApplyCustomPreset = { [weak self] name in
+            guard let self, let entry = self.customPresets.first(where: { $0.name == name }) else { return }
+            self.editorState.edit("preset:" + name) { $0 = $0.merged(with: entry.values) }
+        }
+        root.wallpaperEditor.onDeletePreset = { [weak self] name in self?.deletePreset(name) }
         root.wallpaperEditor.onCropToggle = { [weak self] on in
             guard let self else { return }
             self.root.paletteCanvas.setCropMode(on)
@@ -10441,6 +10602,7 @@ final class ThemeEditor {
         // the system resets its level to floating on every show — below the
         // editor card. Watch it and lift it back above on every appearance.
         Self.installPanelWatch()
+        refreshCustomPresets()
     }
 
     // --- the central pane's edited preview ------------------------------
@@ -11130,6 +11292,134 @@ final class ThemeEditor {
             self?.runImport(file: file, mode: .rename, name: name,
                             onFailure: { NamePrompt.showError($0) })
         })
+    }
+
+    // --- custom filter presets (Phase 10c) ---------------------------------
+
+    // Load the stored presets through the engine and hand them to the panel.
+    private func refreshCustomPresets() {
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            let (code, out) = shell("\(themecoreBin()) image presets custom list --json 2>/dev/null")
+            var list: [(name: String, values: [String: Any])] = []
+            if code == 0, let data = out.data(using: .utf8),
+               let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] {
+                list = arr.compactMap { e in
+                    guard let name = e["name"] as? String,
+                          let values = e["values"] as? [String: Any] else { return nil }
+                    return (name, values)
+                }
+            }
+            DispatchQueue.main.async {
+                self.customPresets = list
+                self.root.wallpaperEditor.setCustomPresets(list)
+            }
+        }
+    }
+
+    private func startSavePreset() {
+        NamePrompt.present(from: root, title: "Save Preset",
+                           subtitle: "Name these adjustments to reuse them.",
+                           confirmTitle: "Save", initial: "My Preset") { [weak self] name in
+            self?.savePreset(name, onFailure: { NamePrompt.showError($0) })
+        }
+    }
+
+    // The engine reduces the recipe to the fields that differ from the
+    // defaults and stores it; an unchanged recipe is refused.
+    private func savePreset(_ name: String, onFailure: @escaping (String) -> Void) {
+        let recipe = editorState.filters.jsonObject()
+        guard let data = try? JSONSerialization.data(withJSONObject: recipe),
+              let json = String(data: data, encoding: .utf8) else { return }
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            let (code, out) = shell("\(themecoreBin()) image presets custom save "
+                + "--name \(shellQuote(name)) --filters \(shellQuote(json)) --json 2>&1")
+            DispatchQueue.main.async {
+                if code == 0 {
+                    NamePrompt.closeCurrent()
+                    self.refreshCustomPresets()
+                    self.showMessage("Saved preset \(name)", red: false)
+                } else {
+                    onFailure(themecoreMessage(out, fallback: "Could not save the preset."))
+                }
+            }
+        }
+    }
+
+    private func deletePreset(_ name: String) {
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            let (code, out) = shell("\(themecoreBin()) image presets custom delete "
+                + "--name \(shellQuote(name)) --json 2>&1")
+            DispatchQueue.main.async {
+                if code == 0 {
+                    self.refreshCustomPresets()
+                    self.showMessage("Deleted preset \(name)", red: false)
+                } else {
+                    self.showMessage(themecoreMessage(out, fallback: "Could not delete the preset."),
+                                     red: true)
+                }
+            }
+        }
+    }
+
+    private func startExportPresets() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "aether-presets.json"
+        panel.prompt = "Export"
+        panel.message = "An Aether/Omacosy preset file."
+        panel.allowedContentTypes = [.json]
+        panel.beginSheetModal(for: window) { [weak self] resp in
+            guard let self, resp == .OK, let url = panel.url else { return }
+            self.exportPresets(to: url.path)
+        }
+    }
+
+    private func exportPresets(to path: String) {
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            let (code, out) = shell("\(themecoreBin()) image presets custom export "
+                + "\(shellQuote(path)) --json 2>&1")
+            DispatchQueue.main.async {
+                if code == 0 {
+                    self.showMessage("Exported presets", red: false)
+                } else {
+                    self.showMessage(themecoreMessage(out, fallback: "Could not export the presets."),
+                                     red: true)
+                }
+            }
+        }
+    }
+
+    private func startImportPresets() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        panel.message = "An aether-presets.json file."
+        panel.allowedContentTypes = [.json]
+        panel.beginSheetModal(for: window) { [weak self] resp in
+            guard let self, resp == .OK, let url = panel.url else { return }
+            self.importPresets(from: url.path)
+        }
+    }
+
+    private func importPresets(from path: String) {
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            let (code, out) = shell("\(themecoreBin()) image presets custom import "
+                + "\(shellQuote(path)) --json 2>&1")
+            DispatchQueue.main.async {
+                if code == 0 {
+                    self.refreshCustomPresets()
+                    self.showMessage("Imported presets", red: false)
+                } else {
+                    self.showMessage(themecoreMessage(out, fallback: "Import failed."), red: true)
+                }
+            }
+        }
     }
 
     private func show() {
