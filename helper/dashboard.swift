@@ -917,7 +917,7 @@ final class OptionsTabView: NSView, ScrollStepTab {
                       desc: "Which tiling manager Omacosy switches to. Switching reloads Omacosy for a moment.",
                       seg: wmSeg),
             OptionRow(category: "Windows", title: "Window & UI Corners",
-                      desc: "macOS window corners and Omacosy UI components outside the menu bar and the Workspaces overview. The ring follows.", seg: cornerSeg),
+                      desc: "MacOS window corners and Omacosy UI components outside the menu bar and the Workspaces overview.", seg: cornerSeg),
             OptionRow(category: "Bar", title: "Menu Bar Mode",
                       desc: "Keep the bar visible, let it hide at rest, or follow the display.", seg: barSeg),
             OptionRow(category: "Fullscreen", title: "Full Screen Mode",
