@@ -184,9 +184,19 @@ cmd_current() {
 cmd_cycle() {
   local editions=() files=() i
   if [ -x "$THEMECORE" ]; then
-    while IFS= read -r id; do [ -n "$id" ] && editions+=("$id"); done < <(
+    local id media ipath
+    while IFS=$'\t' read -r id media ipath; do
+      [ -n "$id" ] || continue
+      # skip a record with no usable image (the grid does the same), so a
+      # broken edition cannot stall the cycle
+      if [ -n "$media" ] && [ -f "$HOME/.local/share/omacosy/theme-media/$media" ]; then
+        editions+=("$id")
+      elif [ -n "$ipath" ] && [ -f "$ipath" ]; then
+        editions+=("$id")
+      fi
+    done < <(
       "$THEMECORE" theme list --json 2>/dev/null \
-        | jq -r 'sort_by(.name | ascii_downcase) | .[] | .id' 2>/dev/null
+        | jq -r 'sort_by(.name | ascii_downcase) | .[] | [.id, (.wallpaper.media // ""), (.wallpaper.path // "")] | @tsv' 2>/dev/null
     )
   fi
   while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(cmd_list 2>/dev/null || true)

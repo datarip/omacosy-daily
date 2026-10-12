@@ -3260,13 +3260,14 @@ final class ThemeGridView: NSView {
         }
     }
 
-    // The Active pill sits over the thumbnail's top-left corner, clear of the
-    // hover Edit pill (bottom-right) and the selection checkbox (top-right).
+    // The Active pill sits over the thumbnail's bottom-left corner, like the
+    // Wallpapers grid's Added badge, clear of the hover Edit pill (bottom-
+    // right) and the selection checkbox (top-right).
     private func activePillRect(_ f: NSRect, label: String) -> NSRect {
         let thumbRect = NSRect(x: f.minX, y: f.minY + cellPaletteH + cellLabelH + cellThumbGap,
                                width: f.width, height: f.height - cellPaletteH - cellLabelH - cellThumbGap)
         let w = advance(label, nerdFont("Bold", 10)) + 20
-        return NSRect(x: thumbRect.minX + pillInset, y: thumbRect.maxY - pillInset - pillH,
+        return NSRect(x: thumbRect.minX + pillInset, y: thumbRect.minY + pillInset,
                       width: w, height: pillH)
     }
 
@@ -3434,6 +3435,9 @@ final class ThemesTabView: NSView, ScrollStepTab {
     private let grid = ThemeGridView()
     func scrollStep(_ dy: CGFloat) { scrollBy(scroll, dy) }
     func refreshColors() {
+        // a theme switch can land here (the current/theme watcher repaints
+        // every tab); the Active pill has to follow it
+        grid.active = activeThemeSpec()
         needsDisplay = true
         grid.needsDisplay = true
         scroller.refresh()
