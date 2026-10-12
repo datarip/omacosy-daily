@@ -4224,7 +4224,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         h += 24 + 16                                      // Blur Desktop toggle
         h += 262                                          // Transform
         h += 16                                           // "Original: W × H" line
-        h += 34                                           // Presets dropdown
+        h += 44                                           // Presets dropdown
         h += 34                                           // Save Current + Import/Export
         if !customRows.isEmpty {
             h += 18 + CGFloat(customRows.count) * 32      // Custom label + rows
@@ -4452,7 +4452,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         presetTop = top
         presetsButton.frame = rect(top: top + 3, h: 26,
                                    x: insetL + max(0, contentW - 170), w: min(170, contentW))
-        top += 34
+        top += 44
         presetActionsTop = top
         // three equal buttons filling the column width, with room to breathe
         let presetGap: CGFloat = 12
