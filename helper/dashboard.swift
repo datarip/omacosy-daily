@@ -3770,14 +3770,29 @@ final class HistogramView: NSView {
 // slider groups, then the picture history's own Undo / Redo / Reset (separate
 // from the palette's). The edited picture is shown in the central pane.
 // A text field whose text stays centred even while the shared field editor has
-// it. AppKit does not copy the cell's alignment onto the field editor, so an
-// editing field left-aligns; set it where the editor is configured.
+// it. AppKit does not copy the cell's alignment onto the field editor, and the
+// editor's text storage carries the cell's (left) paragraph style which wins
+// over `alignment`; set both, on the editor, wherever it is configured.
 final class CenteredTextField: NSTextField {
+    static func applyCenter(to textObj: NSText) {
+        guard let tv = textObj as? NSTextView else { return }
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        tv.alignment = .center
+        tv.defaultParagraphStyle = para
+        tv.typingAttributes[.paragraphStyle] = para
+        if let ts = tv.textStorage {
+            ts.addAttribute(.paragraphStyle, value: para,
+                            range: NSRange(location: 0, length: ts.length))
+        }
+        tv.needsDisplay = true
+    }
+
     override func select(withFrame rect: NSRect, editor textObj: NSText,
                          delegate: Any?, start selStart: Int, length selLength: Int) {
         super.select(withFrame: rect, editor: textObj, delegate: delegate,
                      start: selStart, length: selLength)
-        (textObj as? NSTextView)?.alignment = .center
+        CenteredTextField.applyCenter(to: textObj)
     }
 }
 
@@ -4071,6 +4086,9 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {    let histogram = His
     // only on Return/blur.
     func controlTextDidChange(_ obj: Notification) {
         guard let field = obj.object as? NSTextField else { return }
+        if let editor = obj.userInfo?["NSFieldEditor"] as? NSTextView {
+            CenteredTextField.applyCenter(to: editor)
+        }
         if resizeLinked, resizeRatio > 0 {
             if field === resizeWField, let w = Double(resizeWField.stringValue), w > 0 {
                 resizeHField.stringValue = "\(Int((w / resizeRatio).rounded()))"
@@ -4086,7 +4104,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {    let histogram = His
     func controlTextDidBeginEditing(_ obj: Notification) {
         guard let f = obj.object as? NSTextField, f === resizeWField || f === resizeHField,
               let editor = obj.userInfo?["NSFieldEditor"] as? NSTextView else { return }
-        editor.alignment = .center
+        CenteredTextField.applyCenter(to: editor)
     }
 
     func setOriginalSize(_ size: CGSize) {
