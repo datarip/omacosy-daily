@@ -8164,7 +8164,7 @@ case "image":
                     noExtraArguments()
                     let values = filters.diffFromDefaults()
                     guard !values.isEmpty else {
-                        throw ThemeError(message: "no adjustments to save")
+                        throw ThemeError(message: "No adjustments to save.")
                     }
                     let entry: [String: Any] = ["name": name, "values": values]
                     var list = try CustomPresets.load().filter { ($0["name"] as? String) != name }
@@ -8183,7 +8183,7 @@ case "image":
                     let before = list.count
                     list.removeAll { ($0["name"] as? String) == name }
                     guard list.count != before else {
-                        throw ThemeError(message: "no custom preset named \"\(name)\"")
+                        throw ThemeError(message: "No custom preset named \"\(name)\".")
                     }
                     try CustomPresets.write(list)
                     if jsonOut { printJSON(["deleted": name, "count": list.count]) }
