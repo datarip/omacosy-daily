@@ -3992,10 +3992,11 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {    let histogram = His
         }
         for f in [resizeWField, resizeHField] {
             f.isBezeled = false
-            // the box and the centred placeholder are drawn by the panel (draw),
-            // so the field itself stays transparent
+            // the box, the centred value and the caret are drawn by the panel
+            // (draw); the field's own text is hidden. AppKit's field editor
+            // will not honour any centring we give it, so we out-draw it.
             f.drawsBackground = false
-            f.textColor = palette.label
+            f.textColor = .clear
             f.font = nerdFont("Regular", 11)
             f.alignment = .center
             f.focusRingType = .none
@@ -4115,9 +4116,6 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {    let histogram = His
     // only on Return/blur.
     func controlTextDidChange(_ obj: Notification) {
         guard let field = obj.object as? NSTextField else { return }
-        if let editor = obj.userInfo?["NSFieldEditor"] as? NSTextView {
-            CenteredTextField.applyCenter(to: editor)
-        }
         if resizeLinked, resizeRatio > 0 {
             if field === resizeWField, let w = Double(resizeWField.stringValue), w > 0 {
                 resizeHField.stringValue = "\(Int((w / resizeRatio).rounded()))"
@@ -4126,14 +4124,26 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {    let histogram = His
             }
         }
         resizeCommit()
+        needsDisplay = true
     }
 
-    // The cell's .center is not applied to the shared field editor, so while a
-    // resize field is focused its text would left-align. Set it on the editor.
+    // Hand the shared field editor back with its own colours, since the resize
+    // fields borrow it with a clear text/insertion colour.
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let f = obj.object as? NSTextField, f === resizeWField || f === resizeHField,
+              let editor = obj.userInfo?["NSFieldEditor"] as? NSTextView else { return }
+        editor.textColor = palette.label
+        editor.insertionPointColor = palette.label
+        needsDisplay = true
+    }
+
     func controlTextDidBeginEditing(_ obj: Notification) {
         guard let f = obj.object as? NSTextField, f === resizeWField || f === resizeHField,
               let editor = obj.userInfo?["NSFieldEditor"] as? NSTextView else { return }
-        CenteredTextField.applyCenter(to: editor)
+        // the panel draws the value and the caret; hide ours
+        editor.insertionPointColor = .clear
+        editor.textColor = .clear
+        needsDisplay = true
     }
 
     func setOriginalSize(_ size: CGSize) {
@@ -4321,17 +4331,24 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {    let histogram = His
                         nerdFont("Regular", 10), palette.muted,
                         x: insetL, top: resizeLabelTop + 48, height: bounds.height)
         }
-        // the resize fields' boxes and centred placeholders (the fields are
-        // transparent; NSTextFieldCell will not centre a placeholder itself)
+        // the resize fields' boxes, centred values and carets, drawn by us (the
+        // fields' own text is clear; see the field setup)
         let phFont = nerdFont("Regular", 11)
         for (f, t) in [(resizeWField, "Width"), (resizeHField, "Height")] {
             let box = NSBezierPath(roundedRect: f.frame, xRadius: 4, yRadius: 4)
             palette.itemBG.withAlphaComponent(0.35).setFill()
             box.fill()
-            if f.stringValue.isEmpty && f.currentEditor() == nil {
-                drawMidCenter(t, phFont, palette.muted.withAlphaComponent(0.7),
-                              centerX: f.frame.midX,
-                              midTop: bounds.height - f.frame.midY, height: bounds.height)
+            let editing = f.currentEditor() != nil
+            let s = f.stringValue
+            let shown = s.isEmpty ? t : s
+            let ink = s.isEmpty ? palette.muted.withAlphaComponent(0.7) : palette.label
+            drawMidCenter(shown, phFont, ink,
+                          centerX: f.frame.midX,
+                          midTop: bounds.height - f.frame.midY, height: bounds.height)
+            if editing {
+                let cx = f.frame.midX + advance(shown, phFont) / 2 + 2
+                palette.accent.setFill()
+                NSRect(x: cx, y: f.frame.minY + 4, width: 1.5, height: f.frame.height - 8).fill()
             }
         }
     }
