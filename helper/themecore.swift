@@ -3753,6 +3753,13 @@ struct ImageFilters {
     // "auto levels|contrast|white-balance" returns a fragment, not a full set.
     init(json: [String: Any]) {
         self.init()
+        applyJSON(json)
+    }
+
+    // Lay a recipe's fields onto this one. Unknown keys are preserved in
+    // `extra`; snake_case aliases are accepted. Shared by init(json:) and the
+    // custom-preset merge, so both speak one vocabulary.
+    mutating func applyJSON(_ json: [String: Any]) {
         let known: Set<String> = ["blur", "brightness", "contrast", "saturation", "hueRotate",
             "hue_rotate", "sepia", "invert", "exposure", "vignette", "sharpen", "grain",
             "oilPaint", "oil_paint", "pixelate", "clarity", "fade", "posterize", "noise",
@@ -3886,6 +3893,120 @@ struct ImageFilters {
             && oilPaint == 0 && pixelate == 0 && clarity == 0 && fade == 0 && posterize == 0 && noise == 0
             && highlights == 0 && temperature == 0 && tint == 0 && rotate == 0 && !flipH && !flipV
             && cropX == 0 && cropY == 0 && cropW == 1 && cropH == 1 && resizeW == 0 && resizeH == 0
+    }
+
+    // Lay a stored preset over this recipe: the preset's fields replace, every
+    // absent field keeps the value already here (the phase-10c rule). Shared by
+    // the built-in presets and the user's custom ones.
+    func merged(with values: [String: Any]) -> ImageFilters {
+        var f = self
+        f.applyJSON(values)
+        return f
+    }
+
+    // Every typed field as canonical JSON — the shape a custom preset stores
+    // and the engine's `image render --filters` takes. curvePoints and
+    // paletteStops appear only when set, matching the dashboard's own
+    // jsonObject().
+    func canonicalJSON() -> [String: Any] {
+        var o: [String: Any] = [
+            "blur": blur, "brightness": brightness, "contrast": contrast,
+            "saturation": saturation, "hueRotate": hueRotate, "sepia": sepia,
+            "invert": invert, "exposure": exposure, "vignette": vignette,
+            "sharpen": sharpen, "grain": grain, "oilPaint": oilPaint, "pixelate": pixelate,
+            "clarity": clarity, "fade": fade, "posterize": posterize, "noise": noise,
+            "shadows": shadows, "highlights": highlights, "temperature": temperature,
+            "tint": tint, "paletteStrength": paletteStrength,
+            "cropX": cropX, "cropY": cropY, "cropW": cropW, "cropH": cropH,
+            "resizeW": resizeW, "resizeH": resizeH, "rotate": rotate,
+            "flipH": flipH, "flipV": flipV, "strength": strength,
+        ]
+        if !curvePoints.isEmpty { o["curvePoints"] = curvePoints }
+        if paletteStops.count >= 2 { o["paletteStops"] = paletteStops }
+        return o
+    }
+
+    // The fields that differ from the defaults — Aether's currentFilterDiff.
+    // A foreign key the engine kept in `extra` is carried too, so nothing the
+    // user set is dropped.
+    func diffFromDefaults() -> [String: Any] {
+        let current = canonicalJSON()
+        let defaults = ImageFilters().canonicalJSON()
+        var out: [String: Any] = [:]
+        for (key, value) in current where !jsonValuesEqual(value, defaults[key]) {
+            out[key] = value
+        }
+        for (key, value) in extra { out[key] = value }
+        return out
+    }
+}
+
+// Loose equality for the values a recipe holds: numbers (NSNumber), booleans
+// and nested arrays compare by value, not identity. Used by the preset diff.
+func jsonValuesEqual(_ a: Any?, _ b: Any?) -> Bool {
+    switch (a, b) {
+    case (nil, nil): return true
+    case (nil, _), (_, nil): return false
+    default: break
+    }
+    if let na = a as? NSNumber, let nb = b as? NSNumber { return na.doubleValue == nb.doubleValue }
+    if let sa = a as? String, let sb = b as? String { return sa == sb }
+    if let aa = a as? [Any], let bb = b as? [Any] {
+        return aa.count == bb.count && zip(aa, bb).allSatisfy { jsonValuesEqual($0, $1) }
+    }
+    if let da = a as? [String: Any], let db = b as? [String: Any] {
+        return da.count == db.count && da.allSatisfy { jsonValuesEqual($0.value, db[$0.key]) }
+    }
+    return "\(a!)" == "\(b!)"
+}
+
+// The wallpaper editor's custom presets: one JSON array under
+// ~/.config/omacosy/presets.json, exactly Aether's `aether-presets.json`
+// ({name, values}; values holds only the fields that differ from the filter
+// defaults). The engine owns the file so the CLI and the GUI write one format.
+enum CustomPresets {
+    static var fileURL: URL {
+        let env = ProcessInfo.processInfo.environment
+        if let override = env["OMACOSY_PRESETS_FILE"], !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let config = env["OMACOSY_CONFIG_DIR"] ?? "\(home)/.config/omacosy"
+        return URL(fileURLWithPath: "\(config)/presets.json")
+    }
+
+    // The array as stored. A missing file is an empty list. Entries that are
+    // not {name: string, values: object} are skipped rather than failing the
+    // whole list, the way Aether's import filters.
+    static func load() throws -> [[String: Any]] {
+        let url = fileURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let data: Data
+        do { data = try Data(contentsOf: url) }
+        catch { throw ThemeError(message: "\(url.path): cannot read (\(error.localizedDescription))") }
+        guard let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
+            throw ThemeError(message: "\(url.path): expected a JSON array of {name, values}")
+        }
+        return parsed.compactMap(validEntry)
+    }
+
+    static func write(_ list: [[String: Any]]) throws {
+        let url = fileURL
+        do { try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true) }
+        catch { throw ThemeError(message: "cannot create \(url.deletingLastPathComponent().path): \(error.localizedDescription)") }
+        let data = try JSONSerialization.data(withJSONObject: list,
+                                              options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        try ThemeLibrary.writeAtomically(data, to: url)
+    }
+
+    // One valid entry, or nil. The top-level shape is {name, values}; anything
+    // else in an imported file is ignored.
+    static func validEntry(_ object: Any) -> [String: Any]? {
+        guard let d = object as? [String: Any],
+              let name = d["name"] as? String, !name.isEmpty,
+              let values = d["values"] as? [String: Any] else { return nil }
+        return ["name": name, "values": values]
     }
 }
 
@@ -6310,7 +6431,7 @@ func themeError(_ error: Error) -> Never {
 
 // MARK: - CLI
 
-let themecoreVersion = "0.10.0"
+let themecoreVersion = "0.11.0"
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write("omacosy-themecore: \(message)\n".data(using: .utf8)!)
@@ -6375,6 +6496,12 @@ func usage() -> Never {
                                            [--out FILE] [--max N] [--quality Q] [--json]
            omacosy-themecore image auto levels|contrast|white-balance <path> [--json]
            omacosy-themecore image presets [--json]
+           omacosy-themecore image presets custom list [--json]
+           omacosy-themecore image presets custom save --name NAME
+                                             [--filters JSON|@FILE] [filter flags] [--json]
+           omacosy-themecore image presets custom delete --name NAME [--json]
+           omacosy-themecore image presets custom import <file> [--json]
+           omacosy-themecore image presets custom export <file> [--json]
            omacosy-themecore version [--json]
 
     """.data(using: .utf8)!)
@@ -8015,6 +8142,114 @@ case "image":
         } catch { themeError(error) }
 
     case "presets":
+        // `image presets custom …` manages the user's own presets; plain
+        // `image presets` still lists the eighteen built-ins.
+        if args.first == "custom" {
+            args.removeFirst()
+            guard let action = args.first else {
+                fail("image presets custom needs list|save|delete|import|export")
+            }
+            args.removeFirst()
+            do {
+                switch action {
+                case "list":
+                    noExtraArguments()
+                    let list = try CustomPresets.load()
+                    if jsonOut { printJSON(list) }
+                    for entry in list { print(entry["name"] as? String ?? "?") }
+                    exit(0)
+
+                case "save":
+                    guard let rawName = takeFlag("--name") else {
+                        throw ThemeError(message: "image presets custom save needs --name NAME")
+                    }
+                    let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !name.isEmpty else {
+                        throw ThemeError(message: "image presets custom save needs a name")
+                    }
+                    var filters = ImageFilters()
+                    if let raw = takeFlag("--filters") { filters = ImageFilters(json: imageFiltersJSON(raw)) }
+                    takeImageFilterFlags(&filters)
+                    noExtraArguments()
+                    let values = filters.diffFromDefaults()
+                    guard !values.isEmpty else {
+                        throw ThemeError(message: "no adjustments to save")
+                    }
+                    let entry: [String: Any] = ["name": name, "values": values]
+                    var list = try CustomPresets.load().filter { ($0["name"] as? String) != name }
+                    list.append(entry)
+                    try CustomPresets.write(list)
+                    if jsonOut { printJSON(entry) }
+                    print(name)
+                    exit(0)
+
+                case "delete":
+                    guard let name = takeFlag("--name") else {
+                        throw ThemeError(message: "image presets custom delete needs --name NAME")
+                    }
+                    noExtraArguments()
+                    var list = try CustomPresets.load()
+                    let before = list.count
+                    list.removeAll { ($0["name"] as? String) == name }
+                    guard list.count != before else {
+                        throw ThemeError(message: "no custom preset named \"\(name)\"")
+                    }
+                    try CustomPresets.write(list)
+                    if jsonOut { printJSON(["deleted": name, "count": list.count]) }
+                    print("deleted \(name)")
+                    exit(0)
+
+                case "import":
+                    guard let raw = args.first else {
+                        throw ThemeError(message: "image presets custom import needs a file")
+                    }
+                    args.removeFirst()
+                    noExtraArguments()
+                    let path = Wallpapers.resolved(raw)
+                    let data: Data
+                    do { data = try Data(contentsOf: URL(fileURLWithPath: path)) }
+                    catch { throw ThemeError(message: "\(path): cannot read (\(error.localizedDescription))") }
+                    guard let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
+                        throw ThemeError(message: "\(path): expected a JSON array of {name, values}")
+                    }
+                    let incoming = parsed.compactMap(CustomPresets.validEntry)
+                    guard !incoming.isEmpty else {
+                        throw ThemeError(message: "\(path): no presets found")
+                    }
+                    var list = try CustomPresets.load()
+                    var index: [String: Int] = [:]
+                    for (i, entry) in list.enumerated() {
+                        if let n = entry["name"] as? String { index[n] = i }
+                    }
+                    for entry in incoming {
+                        let n = entry["name"] as! String
+                        if let i = index[n] { list[i] = entry } else { index[n] = list.count; list.append(entry) }
+                    }
+                    try CustomPresets.write(list)
+                    if jsonOut { printJSON(["imported": incoming.count, "count": list.count]) }
+                    print("imported \(incoming.count) preset(s)")
+                    exit(0)
+
+                case "export":
+                    guard let raw = args.first else {
+                        throw ThemeError(message: "image presets custom export needs a file")
+                    }
+                    args.removeFirst()
+                    noExtraArguments()
+                    let out = Wallpapers.resolved(raw)
+                    let list = try CustomPresets.load()
+                    let data = try JSONSerialization.data(withJSONObject: list,
+                                                          options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+                    try ThemeLibrary.writeAtomically(data, to: URL(fileURLWithPath: out))
+                    if jsonOut { printJSON(["exported": list.count, "path": out]) }
+                    print(out)
+                    exit(0)
+
+                default:
+                    fail("image presets custom needs list|save|delete|import|export")
+                }
+            } catch { themeError(error) }
+        }
         noExtraArguments()
         if jsonOut {
             printJSON(ImagePresets.all.map { ["name": $0.name, "values": $0.values] })
