@@ -320,7 +320,7 @@ Your values live in one file outside the clone,
 | `TERMINAL`, `BROWSER`, `EMAIL`, `MUSIC`, `MESSENGER` | the apps the launch chords open. The defaults are Ghostty, Spotify and Slack; an empty `BROWSER` or `EMAIL` makes that chord follow the Mac's default web browser or mail app (how to change those is in [docs/customising.md](docs/customising.md)) |
 | `APP_WORKSPACE_RULES` | the workspace an app's windows open on |
 | `APP_FLOAT_RULES` | the windows that float instead of tile, under OmniWM |
-| `RING_RADIUS`, `WINDOW_CORNER` | the focus ring radius, and the radius macOS draws window corners with. The `Super+K` cheatsheet, the popup panel under a bar pill and the Settings card (its theme thumbnails too) are drawn by Omacosy, so they follow the same corner; the bar's pills stay rounded |
+| `RING_RADIUS`, `WINDOW_CORNER` | the focus ring radius, and the radius macOS draws window corners with. The whole Settings dashboard follows the same corner — buttons, toggles, dropdowns, chips, the palette swatches and the colour wells, plus the card and its theme thumbnails — and so do the `Super+K` cheatsheet and the popup panel under a bar pill. The bar's own pills and the workspace overview stay rounded by choice |
 | `AUTOHIDE` | whether the bar hides at rest: `off`, `on` or `auto`. `omacosy-bar-autohide` keeps it current, so your choice survives a reinstall |
 | `SERIALIZE_APP_SPAWNS` | one window at a time from a burst of presses on the music and messenger chords |
 
@@ -342,7 +342,7 @@ file loads `~/.zshrc.local`.
 `Super`+`,` opens a cheatsheet-style modal — the same card as `Super`+`k` —
 with seven tabs:
 
-- **Options** — the window manager (AeroSpace or OmniWM), window corners,
+- **Options** — the window manager (AeroSpace or OmniWM), window & UI corners,
   menu-bar mode, fullscreen, terminal auto-theme, and a global **Hide NSFW
   Content** switch.
 - **Workspaces** — which apps open on which workspace, per display, with a
@@ -351,7 +351,8 @@ with seven tabs:
   also prunes the manager's own rule).
 - **Themes** — every theme as a card with its colours; click one to apply it.
   Your own wallpapers appear below the stock themes as `Wallpaper #N`;
-  each saved variation gets a named card of its own, and its picture
+  the theme in use carries a green **Active** pill, each saved variation
+  gets a named card of its own, and its picture
   carries a `· N variation(s)` badge. Hovering a card shows its pill —
   **Edit** reopens a saved variation, **Customize** starts a new one from
   a wallpaper in the Theme Editor — and a small **trash**. The trash asks
@@ -391,7 +392,7 @@ The commands you run:
 | `omacosy-toggle [on\|off]` | parks the whole setup without uninstalling it. No argument flips |
 | `omacosy-bar-autohide on\|off\|auto\|status` | sets whether the bar hides at rest, and the top gap that goes with it |
 | `omacosy-solo-fullscreen on\|off\|status` | a workspace with one tiled window fills the display. Off by default |
-| `omacosy-window-corners [square\|round\|<radius>]` | sets the radius macOS draws window corners with; the `Super+K` cheatsheet, the popup panel under a bar pill and the Settings card (theme thumbnails included) follow it. No argument shows it |
+| `omacosy-window-corners [square\|round\|<radius>]` | sets the radius macOS draws window corners with; the whole Settings dashboard (buttons, toggles, swatches, the colour wells, the card and its theme thumbnails), the `Super+K` cheatsheet and the popup panel under a bar pill follow it, while the bar's pills and the overview stay rounded. No argument shows it |
 | `omacosy-harvest-zshrc` | moves the lines installers appended to `~/.zshrc` into `~/.zshrc.local` |
 | `omacosy-term-auto-theme on\|off\|status` | whether the terminal and its tools follow the wallpaper theme. Off by default; the desktop, the bar, the ring and the cheat sheet always follow |
 | `theme-set <name>` | switches the whole theme |
@@ -673,8 +674,8 @@ picture; omacosy instead draws the chosen wallpaper itself, in a desktop-level
 window, in about 0.15 s (`helper/overlay.swift`), recolours the bar and the
 focus ring the moment it is on screen, and only then asks macOS for the real
 wallpaper — hiding the overlay when macOS has caught up with the same picture,
-so the handoff is invisible. A few seconds with no further press
-(`OMACOSY_SETTLE_SECONDS`, default 4) is taken as the choice; the wallpaper
+so the handoff is invisible. A quiet pause with no further press
+(`OMACOSY_SETTLE_SECONDS`, default 10) is taken as the choice; the wallpaper
 request itself is never stacked. It works the same for the four shipped themes
 and for `custom`. [docs/theme-switching.md](docs/theme-switching.md) has the
 problem, the rejected options and the measurements.
@@ -700,7 +701,10 @@ which is how you end up with osaka-jade's dark green pills on a red bar.
 Put images in `~/Pictures/wallpapers` and
 `Super+Shift+T` reaches a fifth theme, `custom`, after the four. Inside it **every wallpaper is its own
 theme**: `Super+Shift+B` moves to the next picture and recomputes the bar
-color, the pill color, the icon color and the focus ring from it. The
+color, the pill color, the icon color and the focus ring from it. On this
+theme B walks the Settings grid's own order — your saved variations A→Z
+first, then the wallpapers — and wraps, so it steps from a variation into
+the next one (or the first wallpaper). The
 terminal and its apps follow only when you ask them to (see *Terminal
 auto-theme* below).
 

@@ -158,12 +158,13 @@ omacosy-window-corners             # show what is set now
 An app reads the corner radius when it opens a window. Relaunch an app to
 see the new corners.
 
-The `Super+K` cheatsheet, the popup panel under a bar pill and the
-`Super+,` Settings card (its theme thumbnails included) are drawn by
-Omacosy itself on borderless windows, so macOS's own preference never
-reaches them. They read the same value and follow it too, and they pick it
-up on their next opening with no relaunch. The bar's pills are left
-rounded.
+The `Super+K` cheatsheet, the popup panel under a bar pill and the whole
+`Super+,` Settings dashboard — buttons, toggles, dropdowns, chips, the
+palette swatches and the colour wells, the card itself and its theme
+thumbnails — are drawn by Omacosy itself on borderless windows, so macOS's
+own preference never reaches them. They read the same value and follow it
+too, and they pick it up with no relaunch. The bar's own pills and the
+workspace overview are left rounded by choice.
 
 ### Whether the bar hides at rest
 
