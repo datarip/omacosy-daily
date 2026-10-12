@@ -114,18 +114,19 @@ func isOwnedWallpaper(_ url: URL, _ roots: [String]) -> Bool {
 // theme-set and theme-bg-next already fall back to when omacosy-helper is
 // not installed.
 //
-// WHY IT RUNS BESIDE THE PUBLIC API. `wallpaper <path>` first asks
-// NSWorkspace (the API macOS persists), then also asks this. They are two
-// independent mechanisms, so a switch still lands when one of them breaks.
-// It is needed here today: on macOS 27.2 build 26B5101f the API returns
-// success but the wallpaper image extension rejects the request
-// (WallpaperURLError 2) and nothing moves. The picture still seems to
-// change because the theme switch draws its own overlay window; away from
-// that window — the lock screen, the first picture at boot, Mission
-// Control — the old one shows. Asking both costs one short-lived child
-// process per apply and needs no detection, no retry and no poll: whichever
-// mechanism still works is the one that wins, and on a healthy build the
-// two agree.
+// WHY IT IS A FALLBACK, NOT A SECOND REQUEST. `wallpaper <path>` asks
+// NSWorkspace first (the API macOS persists, and the one
+// `NSWorkspace.desktopImageURL` reports). It asks this only if the API's
+// URL never flipped. Asking BOTH for every change queued two wallpaper
+// transitions: measured on macOS 27.2, either mechanism alone paints in
+// ~4.4 s, but both together paint in ~8.4 s while desktopImageURL still
+// flipped after the first ~4.4 s. The theme switch's overlay hides when
+// that URL flips, so it hid ~4 s before the picture was really on screen —
+// the flash between the overlay and the system wallpaper. It exists
+// because on macOS 27.2 build 26B5101f the wallpaper image extension can
+// reject the API's request (WallpaperURLError 2): then the URL does not
+// flip and this keeps the live picture moving, while the lock screen and
+// first boot picture still wait on Apple to fix the persisted store.
 //
 // The path is passed as an ARGUMENT and never spliced into the script
 // text. A theme is third-party content, and a filename such as
@@ -372,11 +373,24 @@ case "wallpaper":
         do { try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [:]) }
         catch { failures += 1 }
     }
-    // The second, independent mechanism. The API above is the one macOS
-    // persists; this one still moves the picture on builds where the API
-    // silently fails. Both, every time, with no detection: see
-    // setPictureViaSystemEvents for the full reason.
-    setPictureViaSystemEvents(args[2])
+    // Wait for the API to actually land. `desktopImageURL` flips when the
+    // picture is applied (~4.4 s), and the theme switch's overlay hides on
+    // that same signal, so waiting here keeps the two in step. System Events
+    // is asked ONLY if it never flipped — the broken-build fallback above.
+    // Asking it unconditionally used to queue a second transition and hide
+    // the overlay ~4 s early (the flash).
+    let want = url.resolvingSymlinksInPath().path
+    func apiApplied() -> Bool {
+        NSScreen.screens.allSatisfy { screen in
+            NSWorkspace.shared.desktopImageURL(for: screen)?
+                .resolvingSymlinksInPath().path == want
+        }
+    }
+    let deadline = Date().addingTimeInterval(6)
+    while Date() < deadline, !apiApplied() {
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    if !apiApplied() { setPictureViaSystemEvents(args[2]) }
     exit(failures == 0 ? 0 : 1)
 
 case "nightshift":

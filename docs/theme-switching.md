@@ -115,25 +115,32 @@ OmniWM, `aerospace.toml` under AeroSpace). On each press it:
   hides the overlay. That event lands *after* macOS has painted, so no grace
   timer is needed either.
 
-**The real wallpaper is asked for by two mechanisms, not one.** `omacosy-helper
-wallpaper <path>` sets it through `NSWorkspace.setDesktopImageURL` (the public
-API, and the one whose choice macOS stores) **and** through System Events'
-`set picture`, the legacy AppleScript that `theme-set` and `theme-bg-next`
-already fall back to when the helper is not installed. They are independent, so
-a switch still lands when one of them breaks. This is not detection: both are
-asked every time, whichever works does the work, and on a healthy build the two
-agree. There is no retry, no poll and no new timer — the apply is a short-lived
-child process beside the API call, and the handoff watch above is unchanged
-because both mechanisms update the same `desktopImageURL` the watch reads.
+**The real wallpaper is asked for through one mechanism, with the other as a
+fallback.** `omacosy-helper wallpaper <path>` sets it through
+`NSWorkspace.setDesktopImageURL` (the public API, and the one whose choice
+macOS stores) and then waits for `desktopImageURL` to report it — the same
+signal the overlay's handoff watches, which flips when the picture is
+applied (~4.4 s). Only if that never happens does it fall back to System
+Events' `set picture`, the legacy AppleScript that `theme-set` and
+`theme-bg-next` already use when the helper is not installed. There is no
+retry, no poll and no new timer.
 
-It exists because macOS **27.2 build 26B5101f** (the Beta 3 patch, seen
-2026-10-06) changed the wallpaper image extension: the public API returns
-success but the request is rejected (`WallpaperFoundation.WallpaperURLError
-(2)`, logged by `com.apple.wallpaper.extension.image`) and nothing moves. The
-picture still *seems* to change because the overlay above draws it; the lock
-screen and the first picture at boot keep the old one. Asking System Events as
-well restores the live picture on that build. See "Limitations" for the half it
-cannot restore.
+Asking **both** for every change is what the first cut did, and it is what
+produced the flash. Measured on macOS 27.2: either mechanism alone paints in
+~4.4 s, but both together paint in **~8.4 s**, because macOS queues the two
+requests as two wallpaper transitions; `desktopImageURL` still flips after
+the first ~4.4 s. The overlay hid when that URL flipped — ~4 s before the
+second transition had put the picture on screen — so the old wallpaper
+showed through in between: the flash. One mechanism at a time keeps the URL
+and the visible picture in step, so the handoff is invisible again.
+
+System Events remains because macOS **27.2 build 26B5101f** (the Beta 3
+patch, seen 2026-10-06) could reject the public API's request
+(`WallpaperFoundation.WallpaperURLError (2)`, logged by
+`com.apple.wallpaper.extension.image`): the URL does not flip, the fallback
+moves the live picture instead, and the lock screen and first picture at
+boot still wait on Apple to fix the persisted store. See "Limitations" for
+that half.
 
 **Memory.** ImageIO leaks about 18 MB per decoded wallpaper on macOS 27.2
 (decoding the same image repeatedly grows the same way; a plain alloc/free
