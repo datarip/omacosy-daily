@@ -4454,8 +4454,8 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
                                    x: insetL + max(0, contentW - 170), w: min(170, contentW))
         top += 34
         presetActionsTop = top
-        // three equal buttons filling the column width
-        let presetGap: CGFloat = 8
+        // three equal buttons filling the column width, with room to breathe
+        let presetGap: CGFloat = 12
         let presetBW = max(60, (contentW - presetGap * 2) / 3)
         savePresetButton.frame = rect(top: top, h: 24, x: insetL, w: presetBW)
         importPresetsButton.frame = rect(top: top, h: 24, x: insetL + presetBW + presetGap, w: presetBW)
@@ -14792,3 +14792,5 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--contextmenu-
     exit(0)
 }
 let delegate = AppDelegate()
+app.delegate = delegate
+app.run()
