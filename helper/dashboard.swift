@@ -11811,6 +11811,8 @@ final class StorageTabView: NSView {
     private let cacheOpenButton = ButtonView()
     private var dir = ""
     private var status = ""
+    // the cache survey is filled in off the main thread (see reload())
+    private var cacheSummaryText = "…"
     // three buttons right-aligned as one group; every text button in the
     // dashboard shares one compact size (96×24, font 12 — the chips and
     // segmented controls' scale), the folder glyph keeps its icon width
@@ -11875,6 +11877,20 @@ final class StorageTabView: NSView {
     func reload() {
         dir = wallpapersDir()
         needsDisplay = true
+        refreshCacheSummary()
+    }
+
+    // The cache size stats every file under two directories, so it is measured
+    // OFF the main thread and shown from a cached string. Measuring it inside
+    // draw() stalled the tab for as long as the stat of every cached file took.
+    private func refreshCacheSummary() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let text = StorageTabView.computeCacheSummary()
+            DispatchQueue.main.async {
+                self?.cacheSummaryText = text
+                self?.needsDisplay = true
+            }
+        }
     }
 
     override func layout() {
@@ -11909,7 +11925,7 @@ final class StorageTabView: NSView {
         drawMidLeft("Thumbnail Cache", nerdFont("Bold", 13), palette.accent,
                     x: 0, midTop: bounds.height - mid2, height: bounds.height)
         let tw2 = advance("Thumbnail Cache", nerdFont("Bold", 13)) + 14
-        drawMidLeft(cacheSummary(), nerdFont("Regular", 11), palette.muted,
+        drawMidLeft(cacheSummaryText, nerdFont("Regular", 11), palette.muted,
                     x: tw2, midTop: bounds.height - mid2, height: bounds.height)
 
         if !status.isEmpty {
@@ -11923,11 +11939,11 @@ final class StorageTabView: NSView {
     // browse cache and the dashboard's decoded previews. Flushing clears the
     // pictures only; the wallpapers and bookmarks stay, and the thumbnails
     // rebuild as the tabs are opened again.
-    private func cacheDirs() -> [String] {
+    private static func cacheDirs() -> [String] {
         [whThumbsDir(), HOME + "/.local/state/omacosy/dashboard/thumbs"]
     }
 
-    private func cacheSummary() -> String {
+    private static func computeCacheSummary() -> String {
         let fm = FileManager.default
         var files = 0
         var bytes = 0
@@ -11945,13 +11961,14 @@ final class StorageTabView: NSView {
     private func clearCache() {
         let fm = FileManager.default
         var count = 0
-        for d in cacheDirs() {
+        for d in StorageTabView.cacheDirs() {
             for e in (try? fm.contentsOfDirectory(atPath: d)) ?? [] {
                 if (try? fm.removeItem(atPath: d + "/" + e)) != nil { count += 1 }
             }
         }
         status = count == 0 ? "Cache already empty" : "Cleared \(count) cached thumbnails"
         needsDisplay = true
+        refreshCacheSummary()
     }
 
     // Images picked from anywhere — a USB key, a NAS, another folder — are
