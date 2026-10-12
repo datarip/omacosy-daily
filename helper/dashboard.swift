@@ -3769,63 +3769,85 @@ final class HistogramView: NSView {
 // The scrollable editor body: the histogram and its Auto buttons, the four
 // slider groups, then the picture history's own Undo / Redo / Reset (separate
 // from the palette's). The edited picture is shown in the central pane.
-// A text field whose value stays centred while the shared field editor has it.
-// AppKit configures that editor in the CELL's setUpFieldEditorAttributes, which
-// runs AFTER the field's own select(...) — so a custom cell is the only hook
-// late enough to win, and it must set a centred paragraph style, because a
-// paragraph style beats the text view's `alignment`.
-final class CenteredFieldCell: NSTextFieldCell {
-    override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
-        let t = super.setUpFieldEditorAttributes(textObj)
-        if let tv = t as? NSTextView {
-            let para = NSMutableParagraphStyle()
-            para.alignment = .center
-            tv.alignment = .center
-            tv.defaultParagraphStyle = para
-            tv.typingAttributes[.paragraphStyle] = para
-            if let ts = tv.textStorage {
-                ts.addAttribute(.paragraphStyle, value: para,
-                                range: NSRange(location: 0, length: ts.length))
-            }
-        }
-        return t
-    }
-}
 
-final class CenteredTextField: NSTextField {
-    static func applyCenter(to textObj: NSText) {
-        guard let tv = textObj as? NSTextView else { return }
-        let para = NSMutableParagraphStyle()
-        para.alignment = .center
-        tv.alignment = .center
-        tv.defaultParagraphStyle = para
-        tv.typingAttributes[.paragraphStyle] = para
-        if let ts = tv.textStorage {
-            ts.addAttribute(.paragraphStyle, value: para,
-                            range: NSRange(location: 0, length: ts.length))
-        }
-        tv.needsDisplay = true
-    }
+// A text field that DRAWS its own value, because AppKit's shared field editor
+// honours neither the cell's `alignment` nor a paragraph style we give it, so
+// the editing text jumps to the left. This field hides the editor's own text
+// and caret (both made clear) and draws the value — and a caret — itself, in
+// `horizontal` alignment, focused or not. Self-contained: it draws its own box
+// too (set boxAlpha to 0 for none).
+final class DrawnTextField: NSTextField {
+    var centeredPlaceholder = "" { didSet { needsDisplay = true } }
+    var boxAlpha: CGFloat = 0.35 { didSet { needsDisplay = true } }
+    var horizontal: NSTextAlignment = .center { didSet { needsDisplay = true } }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        let c = CenteredFieldCell()
-        c.alignment = .center
-        c.isEditable = true
-        c.isSelectable = true
-        cell = c
+        isBezeled = false
+        drawsBackground = false
+        textColor = .clear
+        alignment = horizontal
+        focusRingType = .none
+        font = nerdFont("Regular", 11)
+        NotificationCenter.default.addObserver(self, selector: #selector(redraw),
+            name: NSControl.textDidChangeNotification, object: self)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
+    deinit { NotificationCenter.default.removeObserver(self) }
 
-    override func select(withFrame rect: NSRect, editor textObj: NSText,
-                         delegate: Any?, start selStart: Int, length selLength: Int) {
-        super.select(withFrame: rect, editor: textObj, delegate: delegate,
-                     start: selStart, length: selLength)
-        CenteredTextField.applyCenter(to: textObj)
+    @objc private func redraw() { needsDisplay = true }
+
+    // programmatic value changes (syncFromState, setTransform) must repaint too
+    override var stringValue: String { didSet { needsDisplay = true } }
+
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if let e = currentEditor() as? NSTextView {
+            e.textColor = .clear
+            e.insertionPointColor = .clear
+        }
+        needsDisplay = true
+        return ok
+    }
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if let e = currentEditor() as? NSTextView {
+            e.textColor = palette.label
+            e.insertionPointColor = palette.label
+        }
+        needsDisplay = true
+        return ok
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if boxAlpha > 0 {
+            let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
+            palette.itemBG.withAlphaComponent(boxAlpha).setFill()
+            box.fill()
+        }
+        let f = font ?? nerdFont("Regular", 11)
+        let s = stringValue
+        let shown = s.isEmpty ? centeredPlaceholder : s
+        guard !shown.isEmpty else { return }
+        let ink = s.isEmpty ? palette.muted.withAlphaComponent(0.7) : palette.label
+        let width = advance(shown, f)
+        let textX: CGFloat
+        switch horizontal {
+        case .right: textX = bounds.maxX - width
+        case .left:  textX = bounds.minX
+        default:     textX = bounds.midX - width / 2
+        }
+        drawBaseline(shown, f, ink, x: textX,
+                     baseline: bounds.midY - f.capHeight / 2)
+        if currentEditor() != nil {
+            palette.accent.setFill()
+            NSRect(x: textX + width + 2, y: 4, width: 1.5, height: bounds.height - 8).fill()
+        }
     }
 }
 
-final class EditorPanelDoc: NSView, NSTextFieldDelegate {    let histogram = HistogramView()
+final class EditorPanelDoc: NSView, NSTextFieldDelegate {
+    let histogram = HistogramView()
     let strengthSlider = AdjustmentSliderView(
         spec: SliderField(key: "strength", label: "Strength", min: 0, max: 100, step: 1, def: 100))
     let curveView = CurveEditorView()
@@ -3851,8 +3873,8 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {    let histogram = His
     let rotateCWButton = ButtonView()
     let flipHButton = ButtonView()
     let flipVButton = ButtonView()
-    let resizeWField = CenteredTextField()
-    let resizeHField = CenteredTextField()
+    let resizeWField = DrawnTextField()
+    let resizeHField = DrawnTextField()
     let resizeLinkButton = ButtonView()
     let cropResetButton = ButtonView()
     let transformResetButton = ButtonView()
@@ -3991,29 +4013,20 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {    let histogram = His
             addSubview(b)
         }
         for f in [resizeWField, resizeHField] {
-            f.isBezeled = false
-            // the box, the centred value and the caret are drawn by the panel
-            // (draw); the field's own text is hidden. AppKit's field editor
-            // will not honour any centring we give it, so we out-draw it.
-            f.drawsBackground = false
-            f.textColor = .clear
-            f.font = nerdFont("Regular", 11)
-            f.alignment = .center
-            f.focusRingType = .none
+            // DrawnTextField draws its own box, centred value and caret;
+            // it only needs the input wiring.
             f.target = self
             f.action = #selector(resizeCommit)
             f.delegate = self
             addSubview(f)
         }
+        resizeWField.centeredPlaceholder = "Width"
+        resizeHField.centeredPlaceholder = "Height"
         transformResetButton.title = "Reset"
         transformResetButton.fontSize = 10
         transformResetButton.secondary = true
         transformResetButton.onClick = { [weak self] in self?.onTransformReset?() }
         addSubview(transformResetButton)
-        // Placeholders are drawn centred by us in draw() — NSTextFieldCell
-        // does not centre a placeholderString reliably.
-        resizeWField.placeholderString = nil
-        resizeHField.placeholderString = nil
         cropResetButton.title = "Reset Crop"
         cropResetButton.fontSize = 10
         cropResetButton.secondary = true
@@ -4330,26 +4343,6 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {    let histogram = His
             drawTopLeft("Original: \(Int(originalSize.width)) × \(Int(originalSize.height))",
                         nerdFont("Regular", 10), palette.muted,
                         x: insetL, top: resizeLabelTop + 48, height: bounds.height)
-        }
-        // the resize fields' boxes, centred values and carets, drawn by us (the
-        // fields' own text is clear; see the field setup)
-        let phFont = nerdFont("Regular", 11)
-        for (f, t) in [(resizeWField, "Width"), (resizeHField, "Height")] {
-            let box = NSBezierPath(roundedRect: f.frame, xRadius: 4, yRadius: 4)
-            palette.itemBG.withAlphaComponent(0.35).setFill()
-            box.fill()
-            let editing = f.currentEditor() != nil
-            let s = f.stringValue
-            let shown = s.isEmpty ? t : s
-            let ink = s.isEmpty ? palette.muted.withAlphaComponent(0.7) : palette.label
-            drawMidCenter(shown, phFont, ink,
-                          centerX: f.frame.midX,
-                          midTop: bounds.height - f.frame.midY, height: bounds.height)
-            if editing {
-                let cx = f.frame.midX + advance(shown, phFont) / 2 + 2
-                palette.accent.setFill()
-                NSRect(x: cx, y: f.frame.minY + 4, width: 1.5, height: f.frame.height - 8).fill()
-            }
         }
     }
 }
@@ -6912,7 +6905,7 @@ final class AdjustmentSliderView: NSView, NSTextFieldDelegate {
     let spec: SliderField
     var value: Double = 0 { didSet { needsDisplay = true } }
     var onChange: ((Double) -> Void)?
-    private let valueField = NSTextField()
+    private let valueField = DrawnTextField()
     private var dragging = false
 
     static let rowHeight: CGFloat = 26
@@ -6921,12 +6914,9 @@ final class AdjustmentSliderView: NSView, NSTextFieldDelegate {
         self.spec = spec
         super.init(frame: .zero)
         value = spec.def
-        valueField.isBezeled = false
-        valueField.drawsBackground = false
-        valueField.textColor = palette.label
-        valueField.font = nerdFont("Regular", 11)
-        valueField.alignment = .right
-        valueField.focusRingType = .none
+        // DrawnTextField: right-aligned value and caret, no box
+        valueField.horizontal = .right
+        valueField.boxAlpha = 0
         valueField.delegate = self
         valueField.target = self
         valueField.action = #selector(fieldReturn)
@@ -6942,7 +6932,7 @@ final class AdjustmentSliderView: NSView, NSTextFieldDelegate {
     }
 
     func refreshColors() {
-        valueField.textColor = palette.label
+        valueField.needsDisplay = true
         needsDisplay = true
     }
 
@@ -7740,19 +7730,16 @@ final class ChannelSliderView: NSView, NSTextFieldDelegate {
     var value = 0.0 { didSet { needsDisplay = true; syncField() } }
     var gradient: [NSColor]?
     var onChange: ((Double) -> Void)?
-    private let valueField = NSTextField()
+    private let valueField = DrawnTextField()
     private var dragging = false
 
     static let rowHeight: CGFloat = 24
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        valueField.isBezeled = false
-        valueField.drawsBackground = false
-        valueField.textColor = palette.label
-        valueField.font = nerdFont("Regular", 11)
-        valueField.alignment = .right
-        valueField.focusRingType = .none
+        // DrawnTextField: right-aligned value and caret, no box
+        valueField.horizontal = .right
+        valueField.boxAlpha = 0
         valueField.delegate = self
         valueField.target = self
         valueField.action = #selector(fieldReturn)
@@ -7767,7 +7754,7 @@ final class ChannelSliderView: NSView, NSTextFieldDelegate {
     }
 
     func refreshColors() {
-        valueField.textColor = palette.label
+        valueField.needsDisplay = true
         needsDisplay = true
     }
 
@@ -7851,7 +7838,7 @@ final class ChannelSliderView: NSView, NSTextFieldDelegate {
 final class ColorInspectorView: NSView, NSTextFieldDelegate {
     var onColor: ((String) -> Void)?
 
-    private let hexField = NSTextField()
+    private let hexField = DrawnTextField()
     private let tabs = SegmentedView()
     private var rgbSliders: [ChannelSliderView] = []
     private var hslSliders: [ChannelSliderView] = []
@@ -7885,13 +7872,9 @@ final class ColorInspectorView: NSView, NSTextFieldDelegate {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        hexField.isBezeled = false
-        hexField.drawsBackground = true
-        hexField.backgroundColor = palette.itemBG.withAlphaComponent(0.25)
-        hexField.textColor = palette.label
-        hexField.font = nerdFont("Regular", 11)
-        hexField.alignment = .center
-        hexField.focusRingType = .none
+        // DrawnTextField draws its own box + centred value, so it needs no
+        // bezel/background/alignment here; only the input wiring.
+        hexField.boxAlpha = 0.25
         hexField.delegate = self
         hexField.target = self
         hexField.action = #selector(hexReturn)
@@ -8145,8 +8128,7 @@ final class ColorInspectorView: NSView, NSTextFieldDelegate {
     }
 
     func refreshColors() {
-        hexField.textColor = palette.label
-        hexField.backgroundColor = palette.itemBG.withAlphaComponent(0.25)
+        hexField.needsDisplay = true
         for s in rgbSliders + hslSliders { s.refreshColors() }
         needsDisplay = true
     }
