@@ -3676,15 +3676,14 @@ final class EditorWindow: NSWindow {
     }
 }
 
-// The wallpaper editor's slider sections, sorted under Aether's five
-// uppercase group labels (Tone, Color, Detail, Geometry, Snapshots). Every
-// label, range, order and default is Aether's own — FilterControls.svelte at
-// v4.32.0, the same source the engine's filters were ported from, also the
-// scale the engine's /4 blur expects. Omacosy keeps its own look: the group
-// label is a muted uppercase heading, each section an accent title over a
-// framed block, and Aether's collapsible rows are deliberately not adopted,
-// so nothing is ever hidden. The non-slider sections (Curves, Palette Grade,
-// Transform, Presets) live in the panel's layout beside these.
+// The wallpaper editor's slider sections, in Aether's order and membership.
+// Every label, range, order and default is Aether's own — FilterControls.svelte
+// at v4.32.0, the same source the engine's filters were ported from, also the
+// scale the engine's /4 blur expects. Omacosy keeps its own look: each section
+// is an accent title over a framed block of sliders, no collapsible rows and
+// no extra group headings, so nothing is hidden and nothing is repeated. The
+// non-slider sections (Histogram, Curves, Palette Grade, Transform, Presets,
+// Blur Desktop) live in the panel's layout beside these.
 enum EditorFilterFields {
     // Light — Aether's tone controls, Brightness first.
     static let light: [SliderField] = [
@@ -3966,14 +3965,9 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
 
     private let insetL: CGFloat = 12
     private let insetR: CGFloat = 12
-    // Vertical space a muted uppercase group heading needs.
-    private let groupHeadingH: CGFloat = 34
     // The accent section titles with a framed block (Light / Color / Detail).
     private var groupTops: [(title: String, top: CGFloat)] = []
     private var groupFrames: [(top: CGFloat, bottom: CGFloat)] = []
-    // The muted uppercase group headings (Tone / Color / Detail / Geometry /
-    // Snapshots) and the y of each, in draw order.
-    private var groupLabelTops: [(title: String, top: CGFloat)] = []
     private var autoTop: CGFloat = 0
     private var curveTop: CGFloat = 0
     private var gradeTop: CGFloat = 0
@@ -4141,19 +4135,15 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         h += 24 + 12                                      // Apply to Palette
         h += AdjustmentSliderView.rowHeight + 10          // Strength
         h += 16 + 22 + 12                                 // Auto Enhance + buttons
-        h += groupHeadingH                                // Tone
         h += 26 + HistogramView.viewHeight + 12           // Histogram
         h += 26 + CurveEditorView.viewHeight + 12         // Curves
         h += sectionHeight(EditorFilterFields.light)      // Light
-        h += groupHeadingH                                // Color
         h += sectionHeight(EditorFilterFields.color)      // Color
         h += 26 + 24 + 8 + AdjustmentSliderView.rowHeight + 12   // Palette Grade
-        h += groupHeadingH                                // Detail
         h += sectionHeight(EditorFilterFields.detail)     // Detail
         h += 24 + 10                                      // Blur Desktop toggle
-        h += groupHeadingH                                // Geometry
         h += 262                                          // Transform
-        h += groupHeadingH                                // Snapshots
+        h += 16                                           // "Original: W × H" line
         h += 34                                           // Presets dropdown
         return h + 12
     }
@@ -4286,13 +4276,10 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         autoContrastButton.frame = rect(top: top, h: 22, x: insetL + bw + gap, w: bw)
         autoWBButton.frame = rect(top: top, h: 22, x: insetL + (bw + gap) * 2, w: bw)
         top += 22 + 12
-        groupLabelTops.removeAll()
         groupTops.removeAll()
         groupFrames.removeAll()
         var i = 0
-        // Tone: Curves (the histogram is its backdrop), then Light.
-        groupLabelTops.append(("Tone", top))
-        top += groupHeadingH
+        // Histogram (luminance + R/G/B) above the tone curve.
         histTop = top
         top += 26
         histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
@@ -4303,9 +4290,6 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         curveView.frame = rect(top: top, h: CurveEditorView.viewHeight, x: insetL, w: contentW)
         top += CurveEditorView.viewHeight + 12
         laySection("Light", EditorFilterFields.light, &top, &i)
-        // Color: the colour sliders, then Palette Grade.
-        groupLabelTops.append(("Color", top))
-        top += groupHeadingH
         laySection("Color", EditorFilterFields.color, &top, &i)
         // Palette Grade: 2-4 colour stops plus a strength slider.
         gradeTop = top
@@ -4322,16 +4306,10 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         gradeStrengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
                                          x: insetL, w: contentW)
         top += AdjustmentSliderView.rowHeight + 12
-        // Detail: the texture sliders, then the Blur Desktop switch.
-        groupLabelTops.append(("Detail", top))
-        top += groupHeadingH
         laySection("Detail", EditorFilterFields.detail, &top, &i)
         blurTop = top
         blurToggle.frame = rect(top: top, h: 24, x: insetL + contentW - 46, w: 46)
         top += 24 + 10
-        // Geometry: Transform.
-        groupLabelTops.append(("Geometry", top))
-        top += groupHeadingH
         // Transform, in Aether's order: ROTATE & FLIP, CROP, RESIZE.
         transformTop = top
         top += 26
@@ -4363,11 +4341,11 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         // the transform Reset rides the same line, right of the lock
         transformResetButton.frame = rect(top: top, h: 22, x: insetL + 200, w: 70)
         top += 22 + 4
-        // "Original: W × H" is drawn at a fixed offset (see draw)
+        // "Original: W × H" is drawn at a fixed offset (see draw); leave it a
+        // clear line above the Presets section so nothing overlaps it.
         top += 16
-        // Snapshots: the built-in presets in a two-column grid.
-        groupLabelTops.append(("Snapshots", top))
-        top += groupHeadingH
+        top += 16
+        // Snapshots: the built-in presets, chosen from the palette-style popup.
         presetTop = top
         presetsButton.frame = rect(top: top + 3, h: 26,
                                    x: insetL + max(0, contentW - 170), w: min(170, contentW))
@@ -4415,16 +4393,11 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
 
     override func draw(_ dirtyRect: NSRect) {
         drawRule(autoTop)
-        drawTopLeft("Auto Enhance", nerdFont("Bold", 12), palette.label,
+        // Auto Enhance and Blur Desktop are settings, not sections: a size
+        // below the accent section titles, in the label colour.
+        drawTopLeft("Auto Enhance", nerdFont("Bold", 11), palette.label,
                     x: insetL, top: autoTop, height: bounds.height)
-        // The muted uppercase group headings (Tone / Color / Detail / Geometry
-        // / Snapshots), each under the hairline that opens its group.
-        for (title, top) in groupLabelTops {
-            drawRule(top)
-            drawTopLeft(title.uppercased(), nerdFont("Bold", 10), palette.muted,
-                        x: insetL, top: top, height: bounds.height)
-        }
-        // The accent section titles.
+        // Section titles, each under its own hairline separator.
         drawRule(histTop)
         drawTopLeft("Histogram", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: histTop, height: bounds.height)
@@ -4437,12 +4410,13 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         for (top, bottom) in groupFrames {
             drawGroupFrame(top: top, bottom: bottom)
         }
-        drawMidLeft("Blur Desktop", nerdFont("Bold", 12), palette.label,
+        drawMidLeft("Blur Desktop", nerdFont("Bold", 11), palette.label,
                     x: insetL, midTop: blurTop + 12, height: bounds.height)
         drawTopLeft("Palette Grade", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: gradeTop, height: bounds.height)
         drawTopLeft("Transform", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: transformTop, height: bounds.height)
+        drawRule(presetTop)
         drawMidLeft("Presets", nerdFont("Bold", 12), palette.accent,
                     x: insetL, midTop: presetTop + 16, height: bounds.height)
         drawTopLeft("ROTATE & FLIP", nerdFont("Bold", 10), palette.muted,
@@ -10279,6 +10253,7 @@ final class ThemeEditor {
     private let status: ((String) -> Void)?
     private var keyMonitor: Any?
     private var outsideMonitor: Any?
+    private var resignObserver: NSObjectProtocol?
     private var messageWork: DispatchWorkItem?
     // what the later panels read: the edition's stored record, or the
     // draft's Magic seed
@@ -11175,16 +11150,26 @@ final class ThemeEditor {
             }
             return e
         }
-        // A click in the dashboard behind the editor closes it, like Esc and
-        // the ✕. Only the dashboard counts as "outside": the colour panel and
-        // the save/prompt windows are separate windows, and the editor's own
-        // window is the click inside it.
+        // A click outside the editor closes it, like Esc and the ✕. The
+        // editor's own window, its colour panel, its prompts/sheets (children
+        // of it) and system panels (save/open) are "inside"; anything else —
+        // the dashboard behind it, or another app — is outside.
         outsideMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
-            guard let self, let dash = self.window.parent as? DashboardWindow,
-                  e.window === dash else { return e }
+            guard let self, let w = e.window else { return e }
+            if w === self.window || w === NSColorPanel.shared { return e }
+            if w is NSPanel || w.parent === self.window { return e }
             self.close()
             return e
+        }
+        // Leaving the app (desktop, another app) closes it too, without
+        // grabbing focus back.
+        resignObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil,
+            queue: .main) { [weak self] _ in
+            guard let self, ThemeEditor.current === self else { return }
+            if NSColorPanel.shared.isVisible { return }
+            self.close(reactivate: false)
         }
         loadSubject()
     }
@@ -11342,7 +11327,9 @@ final class ThemeEditor {
         }
     }
 
-    private func close() {
+    // `reactivate` is false when the editor closes because the user moved to
+    // another app: the dashboard must not grab focus back then.
+    private func close(reactivate: Bool = true) {
         guard ThemeEditor.current === self else { return }
         ThemeEditor.current = nil
         // the editor swapped the global palette to the draft; put the applied
@@ -11353,15 +11340,18 @@ final class ThemeEditor {
         }
         if let k = keyMonitor { NSEvent.removeMonitor(k); keyMonitor = nil }
         if let m = outsideMonitor { NSEvent.removeMonitor(m); outsideMonitor = nil }
+        if let r = resignObserver { NotificationCenter.default.removeObserver(r); resignObserver = nil }
         NSColorPanel.shared.setTarget(nil)
         NSColorPanel.shared.orderOut(nil)
         model.teardown()
         if let dash = window.parent as? DashboardWindow {
             dash.hideSuppressed = false
             dash.removeChildWindow(window)
-            NSApp.activate(ignoringOtherApps: true)
-            dash.makeKeyAndOrderFront(nil)
-            if let root = dash.contentView { dash.makeFirstResponder(root) }
+            if reactivate {
+                NSApp.activate(ignoringOtherApps: true)
+                dash.makeKeyAndOrderFront(nil)
+                if let root = dash.contentView { dash.makeFirstResponder(root) }
+            }
         }
         window.orderOut(nil)
     }
