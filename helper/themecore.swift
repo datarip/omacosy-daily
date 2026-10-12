@@ -3889,9 +3889,10 @@ struct ImageFilters {
     }
 }
 
-// The 12 quick presets of docs/wallpaper-editor.md, verbatim from Aether's
-// FilterControls.svelte. Each is a delta applied over the current state, so
-// absent fields keep whatever the user already chose (Aether's applyPreset).
+// The quick presets, verbatim from Aether's FilterControls.svelte (its own
+// eighteen built-ins at v4.32.0). Each is a delta applied over the current
+// state, so absent fields keep whatever the user already chose (Aether's
+// applyPreset). The dashboard's EditorPresets mirrors this list.
 struct ImagePreset {
     let name: String
     let values: [String: Any]
@@ -3911,6 +3912,12 @@ enum ImagePresets {
         ImagePreset(name: "Film", values: ["contrast": 95, "saturation": 90, "grain": 3, "sepia": 15, "vignette": 20]),
         ImagePreset(name: "Crisp", values: ["contrast": 110, "saturation": 105, "sharpen": 40, "exposure": 5]),
         ImagePreset(name: "Portrait", values: ["brightness": 102, "contrast": 95, "saturation": 92, "shadows": 15, "vignette": 25]),
+        ImagePreset(name: "Golden Hour", values: ["temperature": 40, "brightness": 105, "saturation": 115, "fade": 10]),
+        ImagePreset(name: "Nordic", values: ["temperature": -30, "contrast": 110, "saturation": 80, "fade": 15, "clarity": 30]),
+        ImagePreset(name: "Retro", values: ["fade": 30, "saturation": 70, "contrast": 115, "grain": 4, "sepia": 10]),
+        ImagePreset(name: "Poster", values: ["posterize": 5, "contrast": 130, "saturation": 140]),
+        ImagePreset(name: "Dreamy", values: ["blur": 15, "brightness": 110, "saturation": 80, "fade": 20]),
+        ImagePreset(name: "Noir", values: ["saturation": 0, "contrast": 140, "grain": 3, "vignette": 40]),
     ]
     static func named(_ name: String) -> ImagePreset? {
         all.first { $0.name.lowercased() == name.lowercased() }

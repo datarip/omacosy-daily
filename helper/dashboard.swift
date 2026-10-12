@@ -3662,42 +3662,57 @@ final class EditorWindow: NSWindow {
     override var canBecomeKey: Bool { true }
 }
 
-// The wallpaper editor's four slider groups, in Aether's categories. Ranges
-// follow FilterControls.svelte (the real Aether UI, and the scale the engine's
-// /4 blur expects); the docs' §Filter Categories ranges differ for blur
-// (0-5px) and brightness/contrast (50-150), which do not fit the engine.
+// The wallpaper editor's slider sections, sorted under Aether's five
+// uppercase group labels (Tone, Color, Detail, Geometry, Snapshots). Every
+// label, range, order and default is Aether's own — FilterControls.svelte at
+// v4.32.0, the same source the engine's filters were ported from, also the
+// scale the engine's /4 blur expects. Omacosy keeps its own look: the group
+// label is a muted uppercase heading, each section an accent title over a
+// framed block, and Aether's collapsible rows are deliberately not adopted,
+// so nothing is ever hidden. The non-slider sections (Curves, Palette Grade,
+// Transform, Presets) live in the panel's layout beside these.
 enum EditorFilterFields {
-    static let basic: [SliderField] = [
-        SliderField(key: "blur", label: "Blur", min: 0, max: 100, step: 1, def: 0),
+    // Light — Aether's tone controls, Brightness first.
+    static let light: [SliderField] = [
         SliderField(key: "brightness", label: "Brightness", min: 0, max: 200, step: 1, def: 100),
         SliderField(key: "contrast", label: "Contrast", min: 0, max: 200, step: 1, def: 100),
-        SliderField(key: "saturation", label: "Saturation", min: 0, max: 200, step: 1, def: 100),
-        SliderField(key: "hueRotate", label: "Hue Shift", min: 0, max: 360, step: 1, def: 0),
-    ]
-    static let effects: [SliderField] = [
-        SliderField(key: "sepia", label: "Sepia", min: 0, max: 100, step: 1, def: 0),
-        SliderField(key: "invert", label: "Invert", min: 0, max: 100, step: 1, def: 0),
-    ]
-    static let advanced: [SliderField] = [
         SliderField(key: "exposure", label: "Exposure", min: -100, max: 100, step: 1, def: 0),
-        SliderField(key: "sharpen", label: "Sharpen", min: 0, max: 100, step: 1, def: 0),
-        SliderField(key: "vignette", label: "Vignette", min: 0, max: 100, step: 1, def: 0),
-        SliderField(key: "grain", label: "Grain", min: 0, max: 10, step: 1, def: 0),
         SliderField(key: "shadows", label: "Shadows", min: -100, max: 100, step: 1, def: 0),
         SliderField(key: "highlights", label: "Highlights", min: -100, max: 100, step: 1, def: 0),
+        SliderField(key: "clarity", label: "Clarity", min: 0, max: 100, step: 1, def: 0),
+        SliderField(key: "fade", label: "Fade", min: 0, max: 100, step: 1, def: 0),
     ]
-    static let colourTone: [SliderField] = [
+    // Color — saturation and the hue/colour shifts.
+    static let color: [SliderField] = [
+        SliderField(key: "saturation", label: "Saturation", min: 0, max: 200, step: 1, def: 100),
         SliderField(key: "temperature", label: "Temperature", min: -100, max: 100, step: 1, def: 0),
         SliderField(key: "tint", label: "Tint", min: -100, max: 100, step: 1, def: 0),
+        SliderField(key: "hueRotate", label: "Hue Shift", min: 0, max: 360, step: 1, def: 0),
+        SliderField(key: "sepia", label: "Sepia", min: 0, max: 100, step: 1, def: 0),
+        SliderField(key: "invert", label: "Invert", min: 0, max: 100, step: 1, def: 0),
+        SliderField(key: "posterize", label: "Posterize", min: 0, max: 10, step: 1, def: 0),
     ]
+    // Detail — the texture and grain controls.
+    static let detail: [SliderField] = [
+        SliderField(key: "sharpen", label: "Sharpen", min: 0, max: 100, step: 1, def: 0),
+        SliderField(key: "blur", label: "Blur", min: 0, max: 100, step: 1, def: 0),
+        SliderField(key: "grain", label: "Grain", min: 0, max: 10, step: 1, def: 0),
+        SliderField(key: "noise", label: "Color Noise", min: 0, max: 100, step: 1, def: 0),
+        SliderField(key: "vignette", label: "Vignette", min: 0, max: 100, step: 1, def: 0),
+        SliderField(key: "oilPaint", label: "Oil Paint", min: 0, max: 10, step: 1, def: 0),
+        SliderField(key: "pixelate", label: "Pixelate", min: 0, max: 100, step: 1, def: 0),
+    ]
+    // The framed slider sections, in Aether's order. The panel lays these out
+    // inside their group (Light under Tone, Color under Color, Detail under
+    // Detail) and draws the group labels itself.
     static let groups: [(title: String, fields: [SliderField])] = [
-        ("Basic", basic), ("Effects", effects), ("Advanced", advanced), ("Colour Tone", colourTone),
+        ("Light", light), ("Color", color), ("Detail", detail),
     ]
 }
 
-// The 12 quick presets of docs/wallpaper-editor.md, verbatim from Aether's
-// FilterControls.svelte (mirrors themecore's ImagePresets). Each is a delta
-// over the current state, so absent fields keep whatever the user chose.
+// The quick presets, verbatim from Aether's FilterControls.svelte (mirrors
+// themecore's ImagePresets). Each is a delta over the current state, so
+// absent fields keep whatever the user chose.
 enum EditorPresets {
     static let all: [(name: String, values: [String: Double])] = [
         ("Muted", ["brightness": 95, "contrast": 85, "saturation": 60, "exposure": -10]),
@@ -3712,63 +3727,20 @@ enum EditorPresets {
         ("Film", ["contrast": 95, "saturation": 90, "grain": 3, "sepia": 15, "vignette": 20]),
         ("Crisp", ["contrast": 110, "saturation": 105, "sharpen": 40, "exposure": 5]),
         ("Portrait", ["brightness": 102, "contrast": 95, "saturation": 92, "shadows": 15, "vignette": 25]),
+        ("Golden Hour", ["temperature": 40, "brightness": 105, "saturation": 115, "fade": 10]),
+        ("Nordic", ["temperature": -30, "contrast": 110, "saturation": 80, "fade": 15, "clarity": 30]),
+        ("Retro", ["fade": 30, "saturation": 70, "contrast": 115, "grain": 4, "sepia": 10]),
+        ("Poster", ["posterize": 5, "contrast": 130, "saturation": 140]),
+        ("Dreamy", ["blur": 15, "brightness": 110, "saturation": 80, "fade": 20]),
+        ("Noir", ["saturation": 0, "contrast": 140, "grain": 3, "vignette": 40]),
     ]
 }
 
-// The editor's histogram: the luminance as a filled backdrop, R/G/B as
-// coloured traces, each series normalised to its own peak.
-final class HistogramView: NSView {
-    var lum: [Int] = [] { didSet { needsDisplay = true } }
-    var r: [Int] = [] { didSet { needsDisplay = true } }
-    var g: [Int] = [] { didSet { needsDisplay = true } }
-    var b: [Int] = [] { didSet { needsDisplay = true } }
-
-    static let viewHeight: CGFloat = 72
-
-    override func draw(_ dirtyRect: NSRect) {
-        let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
-                               xRadius: 6, yRadius: 6)
-        palette.itemBG.withAlphaComponent(0.35).setFill()
-        box.fill()
-        palette.muted.withAlphaComponent(0.3).setStroke()
-        box.lineWidth = 1
-        box.stroke()
-        guard lum.count == 256 else {
-            drawMidCenter("Histogram", nerdFont("Regular", 11), palette.muted,
-                          centerX: bounds.midX, midTop: bounds.midY, height: bounds.height)
-            return
-        }
-        let inner = bounds.insetBy(dx: 6, dy: 6)
-        func point(_ i: Int, _ v: Int, _ maxV: Int) -> NSPoint {
-            NSPoint(x: inner.minX + inner.width * CGFloat(i) / 255,
-                    y: inner.minY + inner.height * CGFloat(Double(v) / Double(maxV)))
-        }
-        if let maxP = lum.max(), maxP > 0 {
-            let path = NSBezierPath()
-            path.move(to: NSPoint(x: inner.minX, y: inner.minY))
-            for i in 0..<256 { path.line(to: point(i, lum[i], maxP)) }
-            path.line(to: NSPoint(x: inner.maxX, y: inner.minY))
-            path.close()
-            palette.muted.withAlphaComponent(0.35).setFill()
-            path.fill()
-        }
-        for (bins, color) in [(r, NSColor.systemRed), (g, .systemGreen), (b, .systemBlue)] {
-            guard let maxP = bins.max(), maxP > 0 else { continue }
-            let path = NSBezierPath()
-            for i in 0..<256 {
-                if i == 0 { path.move(to: point(i, bins[i], maxP)) }
-                else { path.line(to: point(i, bins[i], maxP)) }
-            }
-            color.withAlphaComponent(0.85).setStroke()
-            path.lineWidth = 1
-            path.stroke()
-        }
-    }
-}
-
-// The scrollable editor body: the histogram and its Auto buttons, the four
-// slider groups, then the picture history's own Undo / Redo / Reset (separate
-// from the palette's). The edited picture is shown in the central pane.
+// The scrollable editor body: Strength and the Auto Enhance buttons, then the
+// picture's controls sorted under Aether's group labels (Tone / Color / Detail
+// / Geometry / Snapshots). The luminance histogram is the tone curve's own
+// backdrop. The picture history's own Undo / Redo / Reset sit in the header,
+// separate from the palette's. The edited picture is shown in the central pane.
 
 // A text field that DRAWS its own value, because AppKit's shared field editor
 // honours neither the cell's `alignment` nor a paragraph style we give it, so
@@ -3876,7 +3848,6 @@ final class DrawnTextField: NSTextField {
 }
 
 final class EditorPanelDoc: NSView, NSTextFieldDelegate {
-    let histogram = HistogramView()
     let strengthSlider = AdjustmentSliderView(
         spec: SliderField(key: "strength", label: "Strength", min: 0, max: 100, step: 1, def: 100))
     let curveView = CurveEditorView()
@@ -3891,7 +3862,8 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     let gradeAddButton = ButtonView()
     let gradeRemoveButton = ButtonView()
     let gradeWells = (0..<4).map { _ in ColorWellView() }
-    let presetsButton = PopupButtonView()
+    // Aether's built-in presets, one button each, in a two-column grid.
+    let presetButtons = (0..<EditorPresets.all.count).map { _ in ButtonView() }
     let cropButton = ButtonView()
     static let ratios: [(label: String, value: Double)] = [
         ("Free", 0), ("1:1", 1), ("16:9", 16.0 / 9), ("4:3", 4.0 / 3),
@@ -3926,8 +3898,18 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
 
     private let insetL: CGFloat = 12
     private let insetR: CGFloat = 12
+    // Vertical space a muted uppercase group heading needs, and one framed
+    // slider section's title row. Presets sit in a two-column grid.
+    private let groupHeadingH: CGFloat = 34
+    private let presetButtonH: CGFloat = 26
+    private let presetButtonGap: CGFloat = 4
+    private var presetRows: Int { (EditorPresets.all.count + 1) / 2 }
+    // The accent section titles with a framed block (Light / Color / Detail).
     private var groupTops: [(title: String, top: CGFloat)] = []
     private var groupFrames: [(top: CGFloat, bottom: CGFloat)] = []
+    // The muted uppercase group headings (Tone / Color / Detail / Geometry /
+    // Snapshots) and the y of each, in draw order.
+    private var groupLabelTops: [(title: String, top: CGFloat)] = []
     private var autoTop: CGFloat = 0
     private var curveTop: CGFloat = 0
     private var gradeTop: CGFloat = 0
@@ -3940,7 +3922,6 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     private var cropLabelTop: CGFloat = 0
     private var resizeLabelTop: CGFloat = 0
     private var presetTop: CGFloat = 0
-    private var histTop: CGFloat = 0
     private var blurTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
@@ -3962,21 +3943,14 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
             b.onClick = { [weak self] in self?.onAuto?(op) }
             addSubview(b)
         }
-        presetsButton.title = "Choose…"
-        presetsButton.onClick = { [weak self] in
-            guard let self else { return }
-            let rows = EditorPresets.all.map {
-                MethodPicker.Row(header: nil, value: $0.name, label: $0.name)
-            }
-            MethodPicker.present(from: self.presetsButton, rows: rows, strips: [:],
-                                 currentMethod: "", title: "Presets") { [weak self] name in
-                self?.presetsButton.title = name
-                self?.presetsButton.needsDisplay = true
-                self?.onPreset?(name)
-            }
+        for (i, preset) in EditorPresets.all.enumerated() {
+            let b = presetButtons[i]
+            b.title = preset.name
+            b.fontSize = 10
+            b.secondary = true
+            b.onClick = { [weak self] in self?.onPreset?(preset.name) }
+            addSubview(b)
         }
-        addSubview(presetsButton)
-        addSubview(histogram)
         applyButton.title = "Apply to Palette"
         applyButton.toolTip = "Recompute the palette from this edit"
         applyButton.onClick = { [weak self] in self?.onApply?() }
@@ -4085,30 +4059,34 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
 
     private var contentW: CGFloat { max(0, bounds.width - insetL - insetR) }
 
+    // One framed slider section: its accent title, the sliders, then a gap.
+    private func sectionHeight(_ fields: [SliderField]) -> CGFloat {
+        30 + CGFloat(fields.count) * AdjustmentSliderView.rowHeight + 24
+    }
+
     func contentHeight() -> CGFloat {
         var h: CGFloat = 10
         h += 24 + 12                                      // Apply to Palette
         h += AdjustmentSliderView.rowHeight + 10          // Strength
-        h += 16 + 22 + 12                                 // AUTO ENHANCE + buttons
-        h += 34 + 12                                      // Presets + gap
-        h += 26 + HistogramView.viewHeight + 12           // Histogram
+        h += 16 + 22 + 12                                 // Auto Enhance + buttons
+        h += groupHeadingH                                // Tone
         h += 26 + CurveEditorView.viewHeight + 12         // Curves
-        h += 24 + 10                                      // Blur Desktop toggle
-        for group in EditorFilterFields.groups {
-            h += 30
-            h += CGFloat(group.fields.count) * AdjustmentSliderView.rowHeight
-            h += 24
-        }
+        h += sectionHeight(EditorFilterFields.light)      // Light
+        h += groupHeadingH                                // Color
+        h += sectionHeight(EditorFilterFields.color)      // Color
         h += 26 + 24 + 8 + AdjustmentSliderView.rowHeight + 12   // Palette Grade
-        h += 262                                                 // Transform
-        return h
+        h += groupHeadingH                                // Detail
+        h += sectionHeight(EditorFilterFields.detail)     // Detail
+        h += 24 + 10                                      // Blur Desktop toggle
+        h += groupHeadingH                                // Geometry
+        h += 262                                          // Transform
+        h += groupHeadingH                                // Snapshots
+        h += 26 + CGFloat(presetRows) * presetButtonH
+            + CGFloat(presetRows - 1) * presetButtonGap   // Presets grid
+        return h + 12
     }
 
     func setHistogram(_ lum: [Int], _ r: [Int], _ g: [Int], _ b: [Int]) {
-        histogram.lum = lum
-        histogram.r = r
-        histogram.g = g
-        histogram.b = b
         // the curve draws the luminance histogram as its backdrop
         curveView.histogram = lum
     }
@@ -4232,40 +4210,23 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         autoContrastButton.frame = rect(top: top, h: 22, x: insetL + bw + gap, w: bw)
         autoWBButton.frame = rect(top: top, h: 22, x: insetL + (bw + gap) * 2, w: bw)
         top += 22 + 12
-        presetTop = top
-        presetsButton.frame = rect(top: top + 3, h: 26,
-                                   x: insetL + max(0, contentW - 170), w: min(170, contentW))
-        top += 34 + 12
-        histTop = top
-        top += 26
-        histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
-        top += HistogramView.viewHeight + 12
+        groupLabelTops.removeAll()
+        groupTops.removeAll()
+        groupFrames.removeAll()
+        var i = 0
+        // Tone: Curves (the histogram is its backdrop), then Light.
+        groupLabelTops.append(("Tone", top))
+        top += groupHeadingH
         curveTop = top
         curveResetButton.frame = rect(top: top, h: 20, x: insetL + contentW - 60, w: 60)
         top += 26
         curveView.frame = rect(top: top, h: CurveEditorView.viewHeight, x: insetL, w: contentW)
         top += CurveEditorView.viewHeight + 12
-        blurTop = top
-        blurToggle.frame = rect(top: top, h: 24, x: insetL + contentW - 46, w: 46)
-        top += 24 + 10
-        groupTops.removeAll()
-        groupFrames.removeAll()
-        var i = 0
-        for group in EditorFilterFields.groups {
-            groupTops.append((group.title, top))
-            top += 30
-            let blockTop = top
-            for _ in group.fields {
-                // inset inside the frame so the label and value never touch
-                // its line; the frame itself keeps the column edges
-                sliders[i].frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
-                                        x: insetL + 10, w: contentW - 20)
-                top += AdjustmentSliderView.rowHeight
-                i += 1
-            }
-            groupFrames.append((blockTop, top))
-            top += 24
-        }
+        laySection("Light", EditorFilterFields.light, &top, &i)
+        // Color: the colour sliders, then Palette Grade.
+        groupLabelTops.append(("Color", top))
+        top += groupHeadingH
+        laySection("Color", EditorFilterFields.color, &top, &i)
         // Palette Grade: 2-4 colour stops plus a strength slider.
         gradeTop = top
         top += 26
@@ -4281,6 +4242,16 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         gradeStrengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
                                          x: insetL, w: contentW)
         top += AdjustmentSliderView.rowHeight + 12
+        // Detail: the texture sliders, then the Blur Desktop switch.
+        groupLabelTops.append(("Detail", top))
+        top += groupHeadingH
+        laySection("Detail", EditorFilterFields.detail, &top, &i)
+        blurTop = top
+        blurToggle.frame = rect(top: top, h: 24, x: insetL + contentW - 46, w: 46)
+        top += 24 + 10
+        // Geometry: Transform.
+        groupLabelTops.append(("Geometry", top))
+        top += groupHeadingH
         // Transform, in Aether's order: ROTATE & FLIP, CROP, RESIZE.
         transformTop = top
         top += 26
@@ -4314,6 +4285,45 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         top += 22 + 4
         // "Original: W × H" is drawn at a fixed offset (see draw)
         top += 16
+        // Snapshots: the built-in presets in a two-column grid.
+        groupLabelTops.append(("Snapshots", top))
+        top += groupHeadingH
+        presetTop = top
+        top += 26
+        layPresetGrid(&top)
+    }
+
+    // One framed slider section: its accent title, then the sliders inside a
+    // rounded frame. `i` walks the shared `sliders` array in section order.
+    private func laySection(_ title: String, _ fields: [SliderField],
+                            _ top: inout CGFloat, _ i: inout Int) {
+        groupTops.append((title, top))
+        top += 30
+        let blockTop = top
+        for _ in fields {
+            // inset inside the frame so the label and value never touch its
+            // line; the frame itself keeps the column edges
+            sliders[i].frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
+                                    x: insetL + 10, w: contentW - 20)
+            top += AdjustmentSliderView.rowHeight
+            i += 1
+        }
+        groupFrames.append((blockTop, top))
+        top += 24
+    }
+
+    // The built-in presets, two per row, Aether's grid.
+    private func layPresetGrid(_ top: inout CGFloat) {
+        let colGap: CGFloat = 8
+        let colW = (contentW - colGap) / 2
+        for (i, b) in presetButtons.enumerated() {
+            let row = i / 2, col = i % 2
+            b.frame = rect(top: top + CGFloat(row) * (presetButtonH + presetButtonGap),
+                           h: presetButtonH,
+                           x: insetL + CGFloat(col) * (colW + colGap), w: colW)
+        }
+        top += CGFloat(presetRows) * presetButtonH
+            + CGFloat(presetRows - 1) * presetButtonGap
     }
 
     // A hairline 6 pt above a section's heading: long scrolling panels read
@@ -4340,15 +4350,16 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         drawRule(autoTop)
         drawTopLeft("Auto Enhance", nerdFont("Bold", 12), palette.label,
                     x: insetL, top: autoTop, height: bounds.height)
-        drawMidLeft("Presets", nerdFont("Bold", 12), palette.label,
-                    x: insetL, midTop: presetTop + 16, height: bounds.height)
-        drawRule(histTop)
-        drawTopLeft("Histogram", nerdFont("Bold", 12), palette.accent,
-                    x: insetL, top: histTop, height: bounds.height)
+        // The muted uppercase group headings (Tone / Color / Detail / Geometry
+        // / Snapshots), each under the hairline that opens its group.
+        for (title, top) in groupLabelTops {
+            drawRule(top)
+            drawTopLeft(title.uppercased(), nerdFont("Bold", 10), palette.muted,
+                        x: insetL, top: top, height: bounds.height)
+        }
+        // The accent section titles.
         drawTopLeft("Curves", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: curveTop, height: bounds.height)
-        drawMidLeft("Blur Desktop", nerdFont("Bold", 12), palette.label,
-                    x: insetL, midTop: blurTop + 12, height: bounds.height)
         for (title, top) in groupTops {
             drawTopLeft(title, nerdFont("Bold", 12), palette.accent,
                         x: insetL, top: top, height: bounds.height)
@@ -4356,12 +4367,14 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         for (top, bottom) in groupFrames {
             drawGroupFrame(top: top, bottom: bottom)
         }
-        // no rule between the last frame and Palette Grade: the frame separates
+        drawMidLeft("Blur Desktop", nerdFont("Bold", 12), palette.label,
+                    x: insetL, midTop: blurTop + 12, height: bounds.height)
         drawTopLeft("Palette Grade", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: gradeTop, height: bounds.height)
-        drawRule(transformTop)
         drawTopLeft("Transform", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: transformTop, height: bounds.height)
+        drawTopLeft("Presets", nerdFont("Bold", 12), palette.accent,
+                    x: insetL, top: presetTop, height: bounds.height)
         drawTopLeft("ROTATE & FLIP", nerdFont("Bold", 10), palette.muted,
                     x: insetL, top: rotLabelTop, height: bounds.height)
         drawTopLeft("CROP", nerdFont("Bold", 10), palette.muted,
@@ -4551,6 +4564,12 @@ struct EditorFilters: Equatable {
     var vignette = 0.0
     var sharpen = 0.0
     var grain = 0.0
+    var oilPaint = 0.0
+    var pixelate = 0.0
+    var clarity = 0.0
+    var fade = 0.0
+    var posterize = 0.0
+    var noise = 0.0
     var shadows = 0.0
     var highlights = 0.0
     var temperature = 0.0
@@ -4577,6 +4596,7 @@ struct EditorFilters: Equatable {
         self.init()
         let known: Set<String> = ["blur", "brightness", "contrast", "saturation", "hueRotate",
             "hue_rotate", "sepia", "invert", "exposure", "vignette", "sharpen", "grain",
+            "oilPaint", "oil_paint", "pixelate", "clarity", "fade", "posterize", "noise",
             "shadows", "highlights", "temperature", "tint", "curvePoints", "curve_points",
             "paletteStops", "palette_stops", "paletteStrength", "palette_strength",
             "cropX", "cropY", "cropW", "cropH", "crop_x", "crop_y", "crop_w", "crop_h",
@@ -4595,6 +4615,12 @@ struct EditorFilters: Equatable {
             case "vignette": vignette = num(value)
             case "sharpen": sharpen = num(value)
             case "grain": grain = num(value)
+            case "oilPaint", "oil_paint": oilPaint = num(value)
+            case "pixelate": pixelate = num(value)
+            case "clarity": clarity = num(value)
+            case "fade": fade = num(value)
+            case "posterize": posterize = num(value)
+            case "noise": noise = num(value)
             case "shadows": shadows = num(value)
             case "highlights": highlights = num(value)
             case "temperature": temperature = num(value)
@@ -4662,6 +4688,12 @@ struct EditorFilters: Equatable {
         f.vignette = vignette * s
         f.sharpen = sharpen * s
         f.grain = grain * s
+        f.oilPaint = oilPaint * s
+        f.pixelate = pixelate * s
+        f.clarity = clarity * s
+        f.fade = fade * s
+        f.posterize = posterize * s
+        f.noise = noise * s
         f.blur = blur * s
         f.paletteStrength = paletteStrength * s
         f.curvePoints = curvePoints.map { [$0[0], $0[0] + ($0[1] - $0[0]) * s] }
@@ -4672,6 +4704,7 @@ struct EditorFilters: Equatable {
         curvePoints.isEmpty && paletteStops.count < 2 && blur == 0 && brightness == 100
             && contrast == 100 && saturation == 100 && hueRotate == 0 && sepia == 0 && invert == 0
             && exposure == 0 && vignette == 0 && sharpen == 0 && grain == 0 && shadows == 0
+            && oilPaint == 0 && pixelate == 0 && clarity == 0 && fade == 0 && posterize == 0 && noise == 0
             && highlights == 0 && temperature == 0 && tint == 0 && rotate == 0 && !flipH && !flipV
             && cropX == 0 && cropY == 0 && cropW == 1 && cropH == 1 && resizeW == 0 && resizeH == 0
     }
@@ -4691,6 +4724,12 @@ struct EditorFilters: Equatable {
             case "vignette": return vignette
             case "sharpen": return sharpen
             case "grain": return grain
+            case "oilPaint": return oilPaint
+            case "pixelate": return pixelate
+            case "clarity": return clarity
+            case "fade": return fade
+            case "posterize": return posterize
+            case "noise": return noise
             case "shadows": return shadows
             case "highlights": return highlights
             case "temperature": return temperature
@@ -4720,6 +4759,12 @@ struct EditorFilters: Equatable {
             case "vignette": vignette = newValue
             case "sharpen": sharpen = newValue
             case "grain": grain = newValue
+            case "oilPaint": oilPaint = newValue
+            case "pixelate": pixelate = newValue
+            case "clarity": clarity = newValue
+            case "fade": fade = newValue
+            case "posterize": posterize = newValue
+            case "noise": noise = newValue
             case "shadows": shadows = newValue
             case "highlights": highlights = newValue
             case "temperature": temperature = newValue
@@ -4744,7 +4789,9 @@ struct EditorFilters: Equatable {
             "blur": blur, "brightness": brightness, "contrast": contrast,
             "saturation": saturation, "hueRotate": hueRotate, "sepia": sepia,
             "invert": invert, "exposure": exposure, "vignette": vignette,
-            "sharpen": sharpen, "grain": grain, "shadows": shadows,
+            "sharpen": sharpen, "grain": grain, "oilPaint": oilPaint, "pixelate": pixelate,
+            "clarity": clarity, "fade": fade, "posterize": posterize, "noise": noise,
+            "shadows": shadows,
             "highlights": highlights, "temperature": temperature, "tint": tint,
             "paletteStrength": paletteStrength, "cropX": cropX, "cropY": cropY,
             "cropW": cropW, "cropH": cropH, "resizeW": resizeW, "resizeH": resizeH,
@@ -4850,8 +4897,9 @@ func editorFiltersJSON(_ raw: String) -> [String: Any]? {
 // The in-process preview: the same recipe through CoreImage, best-effort.
 // CoreImage cannot always match the engine's scalar maths (the engine's
 // brightness multiplies; the tone curve and the palette grade are the engine's
-// own LUTs and arrive with their controls; grain is random). Where the two
-// differ, the engine's `image render` is the record.
+// own LUTs and arrive with their controls; grain and color noise are random,
+// so both are applied only by the engine's render). Where the two differ, the
+// engine's `image render` is the record.
 private let editorCIContext = CIContext(options: [
     .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
 ])
@@ -5104,9 +5152,35 @@ func editorPreviewRender(_ input: CIImage, raw: EditorFilters, maxSize: Int) -> 
     ci = ci.cropped(to: target)
     let spatialScale = fullLong > 0 ? max(outW, outH) / fullLong : 1
 
+    // Pixelate runs before blur in the engine; the block size is the same
+    // round(pixelate/5 * spatialScale) the engine uses.
+    if f.pixelate > 0 {
+        let block = max(2, ((f.pixelate / 5) * spatialScale).rounded())
+        if let px = CIFilter(name: "CIPixellate") {
+            px.setValue(ci, forKey: kCIInputImageKey)
+            px.setValue(block, forKey: kCIInputScaleKey)
+            ci = (px.outputImage ?? ci).cropped(to: target)
+        }
+    }
+
     if f.blur > 0 {
         let radius = max(1, ((f.blur / 4) * spatialScale).rounded())
         if let blur = CIFilter(name: "CIGaussianBlur") {
+            blur.setValue(ci, forKey: kCIInputImageKey)
+            blur.setValue(radius, forKey: kCIInputRadiusKey)
+            ci = (blur.outputImage ?? ci).cropped(to: target)
+        }
+    }
+
+    // Oil paint is a box blur in the engine (radius oilPaint*2*spatialScale);
+    // CoreImage's own box blur stands in where it exists.
+    if f.oilPaint > 0 {
+        let radius = max(2, ((f.oilPaint * 2) * spatialScale).rounded())
+        if let box = CIFilter(name: "CIBoxBlur") {
+            box.setValue(ci, forKey: kCIInputImageKey)
+            box.setValue(radius, forKey: kCIInputRadiusKey)
+            ci = (box.outputImage ?? ci).cropped(to: target)
+        } else if let blur = CIFilter(name: "CIGaussianBlur") {
             blur.setValue(ci, forKey: kCIInputImageKey)
             blur.setValue(radius, forKey: kCIInputRadiusKey)
             ci = (blur.outputImage ?? ci).cropped(to: target)
@@ -5187,10 +5261,28 @@ func editorPreviewRender(_ input: CIImage, raw: EditorFilters, maxSize: Int) -> 
                                           y: -n * 20 / 255,
                                           z: -t * 30 / 255 + n * 10 / 255, w: 0))
     }
+    // Fade lifts the blacks: out = c + lift*(1 - c/255), the engine's curve.
+    if f.fade > 0 {
+        let lift = (f.fade / 100) * 60
+        let lut = (0..<256).map { i -> Double in
+            min(255, Double(i) + lift * (1 - Double(i) / 255)) / 255
+        }
+        ci = ciCurveCube(ci, lut: lut)
+    }
     // Palette grade: the engine's lightness-indexed LUT, reproduced as a cube.
     if f.paletteStops.count >= 2, f.paletteStrength > 0,
        let lut = dashboardPaletteLUT(f.paletteStops) {
         ci = ciPaletteGradeCube(ci, lut: lut, strength: f.paletteStrength / 100)
+    }
+    // Posterize runs after the palette grade, as in the engine; its level
+    // count is the engine's max(2, round(11 - posterize)).
+    if f.posterize > 0 {
+        let levels = max(2, (11 - f.posterize).rounded())
+        if let poster = CIFilter(name: "CIColorPosterize") {
+            poster.setValue(ci, forKey: kCIInputImageKey)
+            poster.setValue(levels, forKey: "inputLevels")
+            ci = poster.outputImage ?? ci
+        }
     }
     if f.sharpen > 0 {
         if let conv = CIFilter(name: "CIConvolution3X3") {
@@ -5202,6 +5294,16 @@ func editorPreviewRender(_ input: CIImage, raw: EditorFilters, maxSize: Int) -> 
             conv.setValue(k, forKey: kCIInputWeightsKey)
             conv.setValue(0.0, forKey: kCIInputBiasKey)
             ci = (conv.outputImage ?? ci).cropped(to: target)
+        }
+    }
+    // Clarity is an unsharp mask against a large blur (radius round(w/80),
+    // floor 3); CoreImage's unsharp mask stands in for the engine's box pass.
+    if f.clarity > 0 {
+        if let sharp = CIFilter(name: "CIUnsharpMask") {
+            sharp.setValue(ci, forKey: kCIInputImageKey)
+            sharp.setValue(max(3, (Double(target.width) / 80).rounded()), forKey: kCIInputRadiusKey)
+            sharp.setValue(f.clarity / 100, forKey: kCIInputIntensityKey)
+            ci = (sharp.outputImage ?? ci).cropped(to: target)
         }
     }
     if f.vignette > 0 {
