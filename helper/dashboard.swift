@@ -3660,6 +3660,20 @@ enum EditorSubject {
 
 final class EditorWindow: NSWindow {
     override var canBecomeKey: Bool { true }
+
+    // End a value field's editing when a click falls outside it. The editor's
+    // controls are custom views that never take first responder, so AppKit
+    // would otherwise leave the shared field editor first responder: a typed
+    // value kept the keyboard and every later click was swallowed until the
+    // editor was reopened.
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown || event.type == .rightMouseDown,
+           let fieldEditor = firstResponder as? NSTextView, fieldEditor.isFieldEditor {
+            let p = fieldEditor.convert(event.locationInWindow, from: nil)
+            if !fieldEditor.bounds.contains(p) { makeFirstResponder(nil) }
+        }
+        super.sendEvent(event)
+    }
 }
 
 // The wallpaper editor's slider sections, sorted under Aether's five
@@ -3736,11 +3750,63 @@ enum EditorPresets {
     ]
 }
 
+// The editor's histogram: the luminance as a filled backdrop, R/G/B as
+// coloured traces, each series normalised to its own peak. It sits above the
+// tone curve, which also draws the luminance as its own backdrop.
+final class HistogramView: NSView {
+    var lum: [Int] = [] { didSet { needsDisplay = true } }
+    var r: [Int] = [] { didSet { needsDisplay = true } }
+    var g: [Int] = [] { didSet { needsDisplay = true } }
+    var b: [Int] = [] { didSet { needsDisplay = true } }
+
+    static let viewHeight: CGFloat = 72
+
+    override func draw(_ dirtyRect: NSRect) {
+        let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                               xRadius: 6, yRadius: 6)
+        palette.itemBG.withAlphaComponent(0.35).setFill()
+        box.fill()
+        palette.muted.withAlphaComponent(0.3).setStroke()
+        box.lineWidth = 1
+        box.stroke()
+        guard lum.count == 256 else {
+            drawMidCenter("Histogram", nerdFont("Regular", 11), palette.muted,
+                          centerX: bounds.midX, midTop: bounds.midY, height: bounds.height)
+            return
+        }
+        let inner = bounds.insetBy(dx: 6, dy: 6)
+        func point(_ i: Int, _ v: Int, _ maxV: Int) -> NSPoint {
+            NSPoint(x: inner.minX + inner.width * CGFloat(i) / 255,
+                    y: inner.minY + inner.height * CGFloat(Double(v) / Double(maxV)))
+        }
+        if let maxP = lum.max(), maxP > 0 {
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: inner.minX, y: inner.minY))
+            for i in 0..<256 { path.line(to: point(i, lum[i], maxP)) }
+            path.line(to: NSPoint(x: inner.maxX, y: inner.minY))
+            path.close()
+            palette.muted.withAlphaComponent(0.35).setFill()
+            path.fill()
+        }
+        for (bins, color) in [(r, NSColor.systemRed), (g, .systemGreen), (b, .systemBlue)] {
+            guard let maxP = bins.max(), maxP > 0 else { continue }
+            let path = NSBezierPath()
+            for i in 0..<256 {
+                if i == 0 { path.move(to: point(i, bins[i], maxP)) }
+                else { path.line(to: point(i, bins[i], maxP)) }
+            }
+            color.withAlphaComponent(0.85).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+    }
+}
+
 // The scrollable editor body: Strength and the Auto Enhance buttons, then the
-// picture's controls sorted under Aether's group labels (Tone / Color / Detail
-// / Geometry / Snapshots). The luminance histogram is the tone curve's own
-// backdrop. The picture history's own Undo / Redo / Reset sit in the header,
-// separate from the palette's. The edited picture is shown in the central pane.
+// picture's controls. The luminance histogram sits above the tone curve and is
+// also the curve's backdrop. The picture history's own Undo / Redo / Reset sit
+// in the header, separate from the palette's. The edited picture is shown in
+// the central pane.
 
 // A text field that DRAWS its own value, because AppKit's shared field editor
 // honours neither the cell's `alignment` nor a paragraph style we give it, so
@@ -3848,6 +3914,7 @@ final class DrawnTextField: NSTextField {
 }
 
 final class EditorPanelDoc: NSView, NSTextFieldDelegate {
+    let histogram = HistogramView()
     let strengthSlider = AdjustmentSliderView(
         spec: SliderField(key: "strength", label: "Strength", min: 0, max: 100, step: 1, def: 100))
     let curveView = CurveEditorView()
@@ -3862,8 +3929,9 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     let gradeAddButton = ButtonView()
     let gradeRemoveButton = ButtonView()
     let gradeWells = (0..<4).map { _ in ColorWellView() }
-    // Aether's built-in presets, one button each, in a two-column grid.
-    let presetButtons = (0..<EditorPresets.all.count).map { _ in ButtonView() }
+    // The built-in presets, chosen from the same dropdown the palette builder's
+    // Presets control uses.
+    let presetsButton = PopupButtonView()
     let cropButton = ButtonView()
     static let ratios: [(label: String, value: Double)] = [
         ("Free", 0), ("1:1", 1), ("16:9", 16.0 / 9), ("4:3", 4.0 / 3),
@@ -3898,12 +3966,8 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
 
     private let insetL: CGFloat = 12
     private let insetR: CGFloat = 12
-    // Vertical space a muted uppercase group heading needs, and one framed
-    // slider section's title row. Presets sit in a two-column grid.
+    // Vertical space a muted uppercase group heading needs.
     private let groupHeadingH: CGFloat = 34
-    private let presetButtonH: CGFloat = 26
-    private let presetButtonGap: CGFloat = 4
-    private var presetRows: Int { (EditorPresets.all.count + 1) / 2 }
     // The accent section titles with a framed block (Light / Color / Detail).
     private var groupTops: [(title: String, top: CGFloat)] = []
     private var groupFrames: [(top: CGFloat, bottom: CGFloat)] = []
@@ -3922,6 +3986,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     private var cropLabelTop: CGFloat = 0
     private var resizeLabelTop: CGFloat = 0
     private var presetTop: CGFloat = 0
+    private var histTop: CGFloat = 0
     private var blurTop: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
@@ -3943,14 +4008,21 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
             b.onClick = { [weak self] in self?.onAuto?(op) }
             addSubview(b)
         }
-        for (i, preset) in EditorPresets.all.enumerated() {
-            let b = presetButtons[i]
-            b.title = preset.name
-            b.fontSize = 10
-            b.secondary = true
-            b.onClick = { [weak self] in self?.onPreset?(preset.name) }
-            addSubview(b)
+        presetsButton.title = "Choose…"
+        presetsButton.onClick = { [weak self] in
+            guard let self else { return }
+            let rows = EditorPresets.all.map {
+                MethodPicker.Row(header: nil, value: $0.name, label: $0.name)
+            }
+            MethodPicker.present(from: self.presetsButton, rows: rows, strips: [:],
+                                 currentMethod: "", title: "Presets") { [weak self] name in
+                self?.presetsButton.title = name
+                self?.presetsButton.needsDisplay = true
+                self?.onPreset?(name)
+            }
         }
+        addSubview(presetsButton)
+        addSubview(histogram)
         applyButton.title = "Apply to Palette"
         applyButton.toolTip = "Recompute the palette from this edit"
         applyButton.onClick = { [weak self] in self?.onApply?() }
@@ -4070,6 +4142,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         h += AdjustmentSliderView.rowHeight + 10          // Strength
         h += 16 + 22 + 12                                 // Auto Enhance + buttons
         h += groupHeadingH                                // Tone
+        h += 26 + HistogramView.viewHeight + 12           // Histogram
         h += 26 + CurveEditorView.viewHeight + 12         // Curves
         h += sectionHeight(EditorFilterFields.light)      // Light
         h += groupHeadingH                                // Color
@@ -4081,13 +4154,16 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         h += groupHeadingH                                // Geometry
         h += 262                                          // Transform
         h += groupHeadingH                                // Snapshots
-        h += 26 + CGFloat(presetRows) * presetButtonH
-            + CGFloat(presetRows - 1) * presetButtonGap   // Presets grid
+        h += 34                                           // Presets dropdown
         return h + 12
     }
 
     func setHistogram(_ lum: [Int], _ r: [Int], _ g: [Int], _ b: [Int]) {
-        // the curve draws the luminance histogram as its backdrop
+        histogram.lum = lum
+        histogram.r = r
+        histogram.g = g
+        histogram.b = b
+        // the curve also draws the luminance histogram as its backdrop
         curveView.histogram = lum
     }
 
@@ -4217,6 +4293,10 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         // Tone: Curves (the histogram is its backdrop), then Light.
         groupLabelTops.append(("Tone", top))
         top += groupHeadingH
+        histTop = top
+        top += 26
+        histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
+        top += HistogramView.viewHeight + 12
         curveTop = top
         curveResetButton.frame = rect(top: top, h: 20, x: insetL + contentW - 60, w: 60)
         top += 26
@@ -4289,8 +4369,9 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         groupLabelTops.append(("Snapshots", top))
         top += groupHeadingH
         presetTop = top
-        top += 26
-        layPresetGrid(&top)
+        presetsButton.frame = rect(top: top + 3, h: 26,
+                                   x: insetL + max(0, contentW - 170), w: min(170, contentW))
+        top += 34
     }
 
     // One framed slider section: its accent title, then the sliders inside a
@@ -4310,20 +4391,6 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         }
         groupFrames.append((blockTop, top))
         top += 24
-    }
-
-    // The built-in presets, two per row, Aether's grid.
-    private func layPresetGrid(_ top: inout CGFloat) {
-        let colGap: CGFloat = 8
-        let colW = (contentW - colGap) / 2
-        for (i, b) in presetButtons.enumerated() {
-            let row = i / 2, col = i % 2
-            b.frame = rect(top: top + CGFloat(row) * (presetButtonH + presetButtonGap),
-                           h: presetButtonH,
-                           x: insetL + CGFloat(col) * (colW + colGap), w: colW)
-        }
-        top += CGFloat(presetRows) * presetButtonH
-            + CGFloat(presetRows - 1) * presetButtonGap
     }
 
     // A hairline 6 pt above a section's heading: long scrolling panels read
@@ -4358,6 +4425,9 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
                         x: insetL, top: top, height: bounds.height)
         }
         // The accent section titles.
+        drawRule(histTop)
+        drawTopLeft("Histogram", nerdFont("Bold", 12), palette.accent,
+                    x: insetL, top: histTop, height: bounds.height)
         drawTopLeft("Curves", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: curveTop, height: bounds.height)
         for (title, top) in groupTops {
@@ -4373,8 +4443,8 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
                     x: insetL, top: gradeTop, height: bounds.height)
         drawTopLeft("Transform", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: transformTop, height: bounds.height)
-        drawTopLeft("Presets", nerdFont("Bold", 12), palette.accent,
-                    x: insetL, top: presetTop, height: bounds.height)
+        drawMidLeft("Presets", nerdFont("Bold", 12), palette.accent,
+                    x: insetL, midTop: presetTop + 16, height: bounds.height)
         drawTopLeft("ROTATE & FLIP", nerdFont("Bold", 10), palette.muted,
                     x: insetL, top: rotLabelTop, height: bounds.height)
         drawTopLeft("CROP", nerdFont("Bold", 10), palette.muted,
@@ -10208,6 +10278,7 @@ final class ThemeEditor {
     private let editorState = EditorState()
     private let status: ((String) -> Void)?
     private var keyMonitor: Any?
+    private var outsideMonitor: Any?
     private var messageWork: DispatchWorkItem?
     // what the later panels read: the edition's stored record, or the
     // draft's Magic seed
@@ -11104,6 +11175,17 @@ final class ThemeEditor {
             }
             return e
         }
+        // A click in the dashboard behind the editor closes it, like Esc and
+        // the ✕. Only the dashboard counts as "outside": the colour panel and
+        // the save/prompt windows are separate windows, and the editor's own
+        // window is the click inside it.
+        outsideMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
+            guard let self, let dash = self.window.parent as? DashboardWindow,
+                  e.window === dash else { return e }
+            self.close()
+            return e
+        }
         loadSubject()
     }
 
@@ -11270,6 +11352,7 @@ final class ThemeEditor {
             markTreeNeedsDisplay(v)
         }
         if let k = keyMonitor { NSEvent.removeMonitor(k); keyMonitor = nil }
+        if let m = outsideMonitor { NSEvent.removeMonitor(m); outsideMonitor = nil }
         NSColorPanel.shared.setTarget(nil)
         NSColorPanel.shared.orderOut(nil)
         model.teardown()
