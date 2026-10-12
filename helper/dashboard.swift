@@ -14408,7 +14408,10 @@ final class RootView: NSView {
             if rect.contains(p) { showTab(i); return }
             x += w
         }
-        onHide?()
+        // A click on the card's own body (padding, section rules, labels) is
+        // inert. The card is this view, so hiding here would dismiss the
+        // dashboard under the pointer; only a click OUTSIDE the window
+        // (AppDelegate's global monitor), Esc, or Super+, closes it.
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -14512,6 +14515,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // its clicks reach this monitor as "another app"; while such a
                 // sheet is up, its clicks must not hide the dashboard
                 guard let self, self.window?.hideSuppressed != true else { return }
+                // A global monitor also sees the click that re-activates an
+                // inactive app, so a click INSIDE the dashboard can arrive
+                // here as the window is raised. Only a click outside its
+                // frame is a dismiss (the colour panel already guards this
+                // way); otherwise the modal closed under the pointer.
+                if let w = self.window, w.isVisible, w.frame.contains(NSEvent.mouseLocation) { return }
                 self.hide()
             }
         }
