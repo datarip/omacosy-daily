@@ -3769,10 +3769,29 @@ final class HistogramView: NSView {
 // The scrollable editor body: the histogram and its Auto buttons, the four
 // slider groups, then the picture history's own Undo / Redo / Reset (separate
 // from the palette's). The edited picture is shown in the central pane.
-// A text field whose text stays centred even while the shared field editor has
-// it. AppKit does not copy the cell's alignment onto the field editor, and the
-// editor's text storage carries the cell's (left) paragraph style which wins
-// over `alignment`; set both, on the editor, wherever it is configured.
+// A text field whose value stays centred while the shared field editor has it.
+// AppKit configures that editor in the CELL's setUpFieldEditorAttributes, which
+// runs AFTER the field's own select(...) — so a custom cell is the only hook
+// late enough to win, and it must set a centred paragraph style, because a
+// paragraph style beats the text view's `alignment`.
+final class CenteredFieldCell: NSTextFieldCell {
+    override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
+        let t = super.setUpFieldEditorAttributes(textObj)
+        if let tv = t as? NSTextView {
+            let para = NSMutableParagraphStyle()
+            para.alignment = .center
+            tv.alignment = .center
+            tv.defaultParagraphStyle = para
+            tv.typingAttributes[.paragraphStyle] = para
+            if let ts = tv.textStorage {
+                ts.addAttribute(.paragraphStyle, value: para,
+                                range: NSRange(location: 0, length: ts.length))
+            }
+        }
+        return t
+    }
+}
+
 final class CenteredTextField: NSTextField {
     static func applyCenter(to textObj: NSText) {
         guard let tv = textObj as? NSTextView else { return }
@@ -3787,6 +3806,16 @@ final class CenteredTextField: NSTextField {
         }
         tv.needsDisplay = true
     }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        let c = CenteredFieldCell()
+        c.alignment = .center
+        c.isEditable = true
+        c.isSelectable = true
+        cell = c
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
 
     override func select(withFrame rect: NSRect, editor textObj: NSText,
                          delegate: Any?, start selStart: Int, length selLength: Int) {
