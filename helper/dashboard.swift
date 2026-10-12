@@ -3830,18 +3830,29 @@ final class DrawnTextField: NSTextField {
         let shown = s.isEmpty ? centeredPlaceholder : s
         guard !shown.isEmpty else { return }
         let ink = s.isEmpty ? palette.muted.withAlphaComponent(0.7) : palette.label
-        let width = advance(shown, f)
-        let textX: CGFloat
-        switch horizontal {
-        case .right: textX = bounds.maxX - width
-        case .left:  textX = bounds.minX
-        default:     textX = bounds.midX - width / 2
-        }
-        drawBaseline(shown, f, ink, x: textX,
-                     baseline: bounds.midY - f.capHeight / 2)
+        // NSAttributedString.draw honours the view's flippedness (CTLineDraw
+        // does not, which rendered the value upside down in this flipped view)
+        let para = NSMutableParagraphStyle()
+        para.alignment = horizontal
+        para.lineBreakMode = .byClipping
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: f, .foregroundColor: ink, .paragraphStyle: para,
+        ]
+        let lineH = ceil(f.ascender - f.descender)
+        let textRect = NSRect(x: 0, y: bounds.midY - lineH / 2, width: bounds.width, height: lineH)
+        NSAttributedString(string: shown, attributes: attrs).draw(in: textRect)
+
         if currentEditor() != nil {
+            let width = advance(shown, f)
+            let textX: CGFloat
+            switch horizontal {
+            case .right: textX = bounds.maxX - width
+            case .left:  textX = bounds.minX
+            default:     textX = bounds.midX - width / 2
+            }
             palette.accent.setFill()
-            NSRect(x: textX + width + 2, y: 4, width: 1.5, height: bounds.height - 8).fill()
+            NSRect(x: textX + width + 2, y: bounds.midY - f.capHeight / 2,
+                   width: 1.5, height: f.capHeight).fill()
         }
     }
 }
