@@ -4902,13 +4902,25 @@ struct EditorFilters: Equatable {
             && cropX == 0 && cropY == 0 && cropW == 1 && cropH == 1 && resizeW == 0 && resizeH == 0
     }
 
-    // Lay a preset's values over this recipe: a field the preset carries
-    // replaces, every absent field keeps the value already here. Shared by the
-    // built-in presets and the user's custom ones.
-    func merged(with values: [String: Any]) -> EditorFilters {
-        var f = self
-        f.applyJSON(values)
-        return f
+    // Aether's FilterControls.applyPreset: start from the defaults, lay the
+    // preset's values on top, then let the structural fields the preset does
+    // not carry keep the user's current value (crop, resize, rotate, flip,
+    // curve, strength). Every absent stylistic field therefore returns to its
+    // neutral default — applying a preset is a clean look, not a merge.
+    func applyingPreset(_ values: [String: Any]) -> EditorFilters {
+        var next = EditorFilters(json: values)
+        if values["cropX"] == nil { next.cropX = cropX }
+        if values["cropY"] == nil { next.cropY = cropY }
+        if values["cropW"] == nil { next.cropW = cropW }
+        if values["cropH"] == nil { next.cropH = cropH }
+        if values["resizeW"] == nil { next.resizeW = resizeW }
+        if values["resizeH"] == nil { next.resizeH = resizeH }
+        if values["rotate"] == nil { next.rotate = rotate }
+        if values["flipH"] == nil { next.flipH = flipH }
+        if values["flipV"] == nil { next.flipV = flipV }
+        if values["curvePoints"] == nil { next.curvePoints = curvePoints }
+        if values["strength"] == nil { next.strength = strength }
+        return next
     }
 
     // Keyed access to the numeric fields the editor's sliders drive.
@@ -10474,9 +10486,10 @@ final class ThemeEditor {
         root.wallpaperEditor.onPreset = { [weak self] name in
             self?.editorState.edit("preset:" + name) { f in
                 if let preset = EditorPresets.all.first(where: { $0.name == name }) {
-                    // a preset lays its values over the current recipe; absent
-                    // fields keep the user's own values (Phase 10c)
-                    f = f.merged(with: preset.values.mapValues { $0 as Any })
+                    // Aether's applyPreset: absent sliders reset to neutral,
+                    // absent structural fields (crop/rotate/curve/strength)
+                    // keep the user's own (Phase 10c)
+                    f = f.applyingPreset(preset.values.mapValues { $0 as Any })
                 }
             }
         }
@@ -10485,7 +10498,7 @@ final class ThemeEditor {
         root.wallpaperEditor.onExportPresets = { [weak self] in self?.startExportPresets() }
         root.wallpaperEditor.onApplyCustomPreset = { [weak self] name in
             guard let self, let entry = self.customPresets.first(where: { $0.name == name }) else { return }
-            self.editorState.edit("preset:" + name) { $0 = $0.merged(with: entry.values) }
+            self.editorState.edit("preset:" + name) { $0 = $0.applyingPreset(entry.values) }
         }
         root.wallpaperEditor.onDeletePreset = { [weak self] name in self?.deletePreset(name) }
         root.wallpaperEditor.onCropToggle = { [weak self] on in

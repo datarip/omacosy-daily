@@ -108,9 +108,11 @@ The Wallpaper Editor's **Presets** section keeps Aether's built-in looks (the
 dropdown) and lets you save your own. **Save Current** stores the filter
 adjustments you have made to the picture — only the values that differ from the
 defaults — under a name you type. Saved presets show as rows under **Custom**:
-click a name to apply it, click its **✕** to delete it. A preset lays its values
-over the picture's current settings, so a field it does not mention keeps what
-you already chose.
+click a name to apply it, click its **✕** to delete it. Applying a preset is a
+clean look, exactly Aether's rule: every slider the preset does not mention
+returns to its neutral default, while the structural settings it does not carry
+— crop, rotate/flip, resize, the tone curve and the master strength — are left
+as they are.
 
 **Import** and **Export** move the whole list as one JSON file in Aether's
 `aether-presets.json` shape (an array of `{name, values}`), so a preset file

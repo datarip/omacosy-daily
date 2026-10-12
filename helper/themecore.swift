@@ -3895,15 +3895,6 @@ struct ImageFilters {
             && cropX == 0 && cropY == 0 && cropW == 1 && cropH == 1 && resizeW == 0 && resizeH == 0
     }
 
-    // Lay a stored preset over this recipe: the preset's fields replace, every
-    // absent field keeps the value already here (the phase-10c rule). Shared by
-    // the built-in presets and the user's custom ones.
-    func merged(with values: [String: Any]) -> ImageFilters {
-        var f = self
-        f.applyJSON(values)
-        return f
-    }
-
     // Every typed field as canonical JSON — the shape a custom preset stores
     // and the engine's `image render --filters` takes. curvePoints and
     // paletteStops appear only when set, matching the dashboard's own
