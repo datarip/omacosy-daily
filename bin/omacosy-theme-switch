@@ -200,8 +200,9 @@ case "$mode" in
     while IFS= read -r t; do list+=("$t"); done < <(stock_themes)
     have_custom && list+=(custom)
     cur="$(current_logical)"
-    # A saved edition (theme:<id>) is not a cycle entry: for T and B it
-    # counts as plain custom, which is where both cycles continue from it.
+    # An edition (theme:<id>) counts as the custom bucket for both keys. T
+    # continues from it as plain custom; B, below, walks the grid's full
+    # order (editions then wallpapers) from it.
     cur_bucket="$cur"
     case "$cur_bucket" in theme:*) cur_bucket=custom ;; esac
 
@@ -211,6 +212,36 @@ case "$mode" in
     else
       logical="$cur_bucket"
       [ -n "$logical" ] || logical="${list[0]}"
+    fi
+
+    # SUPER+B on the custom theme follows the Themes grid's one order: the
+    # named editions A→Z first, then the raw wallpapers. omacosy-custom-theme
+    # cycle resolves "the next one" so the keyboard and the grid never drift.
+    if [ "$mode" = wallpaper ] && [ "$cur_bucket" = custom ]; then
+      next="$("$CUSTOM" cycle 2>/dev/null || true)"
+      case "$next" in
+        theme:*)
+          id="${next#theme:}"
+          json="$HOME/.config/omacosy/themes/$id.json"
+          theme_dir="$("$THEMECORE" theme materialize "$json")" || exit 1
+          shown="$(find -L "$theme_dir/backgrounds" -maxdepth 1 -type f 2>/dev/null | sort | head -1)"
+          wall="$(readlink -f "$shown" 2>/dev/null || true)"; [ -n "$wall" ] || wall="$shown"
+          [ -n "$wall" ] || exit 1
+          source="$("$THEMECORE" theme wallpaper "$json" --source 2>/dev/null || true)"
+          log "switch wallpaper -> theme:$id / $(basename "$wall")"
+          show_overlay_then_relink "$wall" "$theme_dir" "theme:$id" "$source"
+          exit 0 ;;
+        ?*)
+          theme_dir="$("$CUSTOM" theme "$next")" || exit 1
+          shown="$(find -L "$theme_dir/backgrounds" -maxdepth 1 -type f 2>/dev/null | sort | head -1)"
+          wall="$next"
+          [ -n "$shown" ] && wall="$(readlink -f "$shown" 2>/dev/null || true)"
+          [ -n "$wall" ] || wall="$shown"
+          [ -n "$wall" ] || exit 1
+          log "switch wallpaper -> custom / $(basename "$wall")"
+          show_overlay_then_relink "$wall" "$theme_dir" custom "$next"
+          exit 0 ;;
+      esac
     fi
 
     curwall="$(readlink -f "$BACKGROUND_LINK" 2>/dev/null || true)"

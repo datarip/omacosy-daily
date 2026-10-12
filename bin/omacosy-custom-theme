@@ -14,6 +14,8 @@
 #   omacosy-custom-theme path <dir>      point the custom theme somewhere else
 #   omacosy-custom-theme day <spec>      what to show in the light appearance
 #   omacosy-custom-theme night <spec>    what to show in the dark appearance
+#   omacosy-custom-theme cycle           print the next custom item (edition
+#                                        or wallpaper) in the grid's order
 #   omacosy-custom-theme resolve <spec>  say what a spec would do, without doing it
 #   omacosy-custom-theme apply <spec>    put a spec on screen now
 #   omacosy-custom-theme follow on|off   follow the macOS appearance
@@ -173,6 +175,46 @@ cmd_current() {
       fi ;;
     *)            printf '%s\n' "$(basename "$t")" ;;
   esac
+}
+
+# The next item in the combined custom order the Themes grid shows: named
+# editions A→Z first, then the raw wallpapers in sorted order. Prints
+# "theme:<id>" for an edition, or the wallpaper path. SUPER+B (the wallpaper
+# cycle) reads this so the keyboard and the grid agree on what "next" is.
+cmd_cycle() {
+  local editions=() files=() i
+  if [ -x "$THEMECORE" ]; then
+    while IFS= read -r id; do [ -n "$id" ] && editions+=("$id"); done < <(
+      "$THEMECORE" theme list --json 2>/dev/null \
+        | jq -r 'sort_by(.name | ascii_downcase) | .[] | .id' 2>/dev/null
+    )
+  fi
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(cmd_list 2>/dev/null || true)
+  local ne=${#editions[@]} nf=${#files[@]} total=$(( ${#editions[@]} + ${#files[@]} ))
+  [ "$total" -gt 0 ] || return 1
+
+  local idx=-1 cur path=""
+  cur="$(cmd_current 2>/dev/null || true)"
+  case "$cur" in
+    theme:*)
+      local want="${cur#theme:}"
+      for (( i=0; i<ne; i++ )); do
+        [ "${editions[$i]}" = "$want" ] && { idx=$i; break; }
+      done ;;
+    custom)
+      [ -f "$CUSTOM_INDEX" ] && path="$(cat "$CUSTOM_INDEX" 2>/dev/null || true)"
+      [ -n "$path" ] || path="$(readlink -f "$HOME/.local/state/omacosy/background" 2>/dev/null || true)"
+      for (( i=0; i<nf; i++ )); do
+        [ "${files[$i]}" = "$path" ] && { idx=$(( ne + i )); break; }
+      done ;;
+  esac
+
+  local next=$(( (idx + 1) % total ))
+  if [ "$next" -lt "$ne" ]; then
+    printf 'theme:%s\n' "${editions[$next]}"
+  else
+    printf '%s\n' "${files[$(( next - ne ))]}"
+  fi
 }
 
 cmd_path() {
@@ -366,6 +408,7 @@ case "${1:-status}" in
   night)    shift; cmd_day_night night "${1:-}" ;;
   resolve)  shift; cmd_resolve "${1:-}" ;;
   apply)    shift; cmd_apply "${1:-}" ;;
+  cycle)    cmd_cycle ;;
   follow)   shift; cmd_follow "${1:-}" ;;
   rebuild)  cmd_rebuild ;;
   status)   cmd_status ;;
