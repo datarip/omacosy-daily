@@ -4078,21 +4078,21 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
             }
         }
         addSubview(presetsButton)
-        // Snapshots: Save Current on the left, Import/Export icons on the
-        // right, matching Aether's Presets header row.
+        // Snapshots: Save Current, Import and Export as one row of three equal
+        // buttons, matching Aether's Presets header.
         savePresetButton.title = "Save Current"
         savePresetButton.fontSize = 11
         savePresetButton.onClick = { [weak self] in self?.onSavePreset?() }
         addSubview(savePresetButton)
-        importPresetsButton.title = "\u{f019}"
-        importPresetsButton.fontSize = 12
-        importPresetsButton.centeredByBounds = true
+        importPresetsButton.title = "Import"
+        importPresetsButton.fontSize = 11
+        importPresetsButton.secondary = true
         importPresetsButton.toolTip = "Import Presets"
         importPresetsButton.onClick = { [weak self] in self?.onImportPresets?() }
         addSubview(importPresetsButton)
-        exportPresetsButton.title = "\u{f093}"
-        exportPresetsButton.fontSize = 12
-        exportPresetsButton.centeredByBounds = true
+        exportPresetsButton.title = "Export"
+        exportPresetsButton.fontSize = 11
+        exportPresetsButton.secondary = true
         exportPresetsButton.toolTip = "Export Presets"
         exportPresetsButton.onClick = { [weak self] in self?.onExportPresets?() }
         addSubview(exportPresetsButton)
@@ -4243,8 +4243,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
 
     // Rebuild the Custom list from the engine's stored presets. Rows are reused
     // views; the delete/apply closures capture the name, so a refresh keeps them
-    // correct. The Export icon hides while the list is empty (Aether disables
-    // it), and the panel grows or shrinks to fit.
+    // correct. The panel grows or shrinks to fit.
     func setCustomPresets(_ list: [(name: String, values: [String: Any])]) {
         for row in customRows { row.removeFromSuperview() }
         customRows = list.map { entry in
@@ -4255,7 +4254,6 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
             addSubview(row)
             return row
         }
-        exportPresetsButton.isHidden = list.isEmpty
         needsLayout = true
         needsDisplay = true
     }
@@ -4456,12 +4454,12 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
                                    x: insetL + max(0, contentW - 170), w: min(170, contentW))
         top += 34
         presetActionsTop = top
-        let iconW: CGFloat = 26
-        exportPresetsButton.frame = rect(top: top + 1, h: 24, x: insetL + contentW - iconW, w: iconW)
-        importPresetsButton.frame = rect(top: top + 1, h: 24,
-                                         x: insetL + contentW - iconW * 2 - 6, w: iconW)
-        savePresetButton.frame = rect(top: top, h: 24,
-                                      x: insetL, w: contentW - iconW * 2 - 12)
+        // three equal buttons filling the column width
+        let presetGap: CGFloat = 8
+        let presetBW = max(60, (contentW - presetGap * 2) / 3)
+        savePresetButton.frame = rect(top: top, h: 24, x: insetL, w: presetBW)
+        importPresetsButton.frame = rect(top: top, h: 24, x: insetL + presetBW + presetGap, w: presetBW)
+        exportPresetsButton.frame = rect(top: top, h: 24, x: insetL + contentW - presetBW, w: presetBW)
         top += 34
         customLabelTop = 0
         if !customRows.isEmpty {
@@ -11365,6 +11363,10 @@ final class ThemeEditor {
     }
 
     private func startExportPresets() {
+        guard !customPresets.isEmpty else {
+            showMessage("No presets to export", red: false)
+            return
+        }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "aether-presets.json"
         panel.prompt = "Export"
@@ -14790,5 +14792,3 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--contextmenu-
     exit(0)
 }
 let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
