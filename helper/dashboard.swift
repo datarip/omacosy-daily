@@ -819,8 +819,19 @@ final class OptionsDocView: NSView {
             let rowMid = top + 20
             drawMidLeft(row.title, nerdFont("Bold", 13), palette.label,
                         x: 0, midTop: rowMid, height: bounds.height)
-            drawMidLeft(row.desc, nerdFont("Regular", 11), palette.muted,
-                        x: 0, midTop: rowMid + 18, height: bounds.height)
+            // keep the description clear of the row's control on the right,
+            // wrapping to a second line when it is long
+            var controlMinX = bounds.width
+            if let seg = row.seg { controlMinX = min(controlMinX, bounds.width - seg.sizeThatFits().width) }
+            if row.slider != nil { controlMinX = min(controlMinX, bounds.width - 220) }
+            if let check = row.check { controlMinX = min(controlMinX, bounds.width - check.sizeThatFits().width) }
+            if let toggle = row.toggle { controlMinX = min(controlMinX, bounds.width - toggle.sizeThatFits().width) }
+            let descW = max(140, controlMinX - 18)
+            let descLines = wrapText(row.desc, nerdFont("Regular", 11), descW, maxLines: 2)
+            for (li, line) in descLines.enumerated() {
+                drawMidLeft(line, nerdFont("Regular", 11), palette.muted,
+                            x: 0, midTop: rowMid + 18 + CGFloat(li) * 13, height: bounds.height)
+            }
             if let slider = row.slider {
                 drawMidLeft(slider.value.map { "\($0)%" } ?? "—", nerdFont("Bold", 11),
                             palette.label, x: bounds.width - 264, midTop: rowMid, height: bounds.height)
@@ -905,8 +916,8 @@ final class OptionsTabView: NSView, ScrollStepTab {
             OptionRow(category: "Window Manager", title: "Window Manager",
                       desc: "Which tiling manager Omacosy switches to. Switching reloads Omacosy for a moment.",
                       seg: wmSeg),
-            OptionRow(category: "Windows", title: "Window Corners",
-                      desc: "Radius macOS draws window corners with; the ring follows.", seg: cornerSeg),
+            OptionRow(category: "Windows", title: "Window & UI Corners",
+                      desc: "macOS window corners and Omacosy UI components outside the menu bar and the Workspaces overview. The ring follows.", seg: cornerSeg),
             OptionRow(category: "Bar", title: "Menu Bar Mode",
                       desc: "Keep the bar visible, let it hide at rest, or follow the display.", seg: barSeg),
             OptionRow(category: "Fullscreen", title: "Full Screen Mode",
@@ -3320,6 +3331,36 @@ func truncate(_ s: String, _ font: NSFont, _ maxW: CGFloat) -> String {
     var out = s
     while !out.isEmpty, advance(out + "…", font) > maxW { out.removeLast() }
     return out + "…"
+}
+
+// Break a description into at most `maxLines` lines that each fit `maxW`, at
+// word boundaries. If a final line still overflows a single word it is clipped
+// with an ellipsis. Most strings yield one line.
+func wrapText(_ s: String, _ font: NSFont, _ maxW: CGFloat, maxLines: Int = 2) -> [String] {
+    let words = s.split(separator: " ").map(String.init)
+    var lines: [String] = []
+    var current = ""
+    var i = 0
+    while i < words.count {
+        let candidate = current.isEmpty ? words[i] : current + " " + words[i]
+        if current.isEmpty || advance(candidate, font) <= maxW {
+            current = candidate
+            i += 1
+            continue
+        }
+        if lines.count == maxLines - 1 {
+            current = words[i...].joined(separator: " ")
+            i = words.count
+            break
+        }
+        lines.append(current)
+        current = ""
+    }
+    if !current.isEmpty { lines.append(current) }
+    if let last = lines.last, advance(last, font) > maxW {
+        lines[lines.count - 1] = truncate(last, font, maxW)
+    }
+    return lines.isEmpty ? [""] : lines
 }
 
 final class ThemesTabView: NSView, ScrollStepTab {
