@@ -4136,15 +4136,15 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     func contentHeight() -> CGFloat {
         var h: CGFloat = 10
         h += 24 + 12                                      // Apply to Palette
-        h += AdjustmentSliderView.rowHeight + 10          // Strength
-        h += 16 + 22 + 12                                 // Auto Enhance + buttons
+        h += AdjustmentSliderView.rowHeight + 16          // Strength
+        h += 16 + 22 + 18                                 // Auto Enhance + buttons
         h += 26 + HistogramView.viewHeight + 12           // Histogram
         h += 26 + CurveEditorView.viewHeight + 12         // Curves
         h += sectionHeight(EditorFilterFields.light)      // Light
         h += sectionHeight(EditorFilterFields.color)      // Color
-        h += 26 + 24 + 8 + AdjustmentSliderView.rowHeight + 12   // Palette Grade
+        h += 26 + 24 + 8 + AdjustmentSliderView.rowHeight + 18   // Palette Grade
         h += sectionHeight(EditorFilterFields.detail)     // Detail
-        h += 24 + 10                                      // Blur Desktop toggle
+        h += 24 + 16                                      // Blur Desktop toggle
         h += 262                                          // Transform
         h += 16                                           // "Original: W × H" line
         h += 34                                           // Presets dropdown
@@ -4270,7 +4270,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         top += 24 + 12
         strengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
                                     x: insetL, w: contentW)
-        top += AdjustmentSliderView.rowHeight + 10
+        top += AdjustmentSliderView.rowHeight + 16
         autoTop = top
         top += 16                                         // AUTO ENHANCE label
         let gap: CGFloat = 2
@@ -4278,7 +4278,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         autoLevelsButton.frame = rect(top: top, h: 22, x: insetL, w: bw)
         autoContrastButton.frame = rect(top: top, h: 22, x: insetL + bw + gap, w: bw)
         autoWBButton.frame = rect(top: top, h: 22, x: insetL + (bw + gap) * 2, w: bw)
-        top += 22 + 12
+        top += 22 + 18
         groupTops.removeAll()
         groupFrames.removeAll()
         var i = 0
@@ -4308,12 +4308,12 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         top += sw + 8
         gradeStrengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
                                          x: insetL, w: contentW)
-        top += AdjustmentSliderView.rowHeight + 12
+        top += AdjustmentSliderView.rowHeight + 18
         detailTop = top
         laySection("Detail", EditorFilterFields.detail, &top, &i)
         blurTop = top
         blurToggle.frame = rect(top: top, h: 24, x: insetL + contentW - 46, w: 46)
-        top += 24 + 10
+        top += 24 + 16
         // Transform, in Aether's order: ROTATE & FLIP, CROP, RESIZE.
         transformTop = top
         top += 26
@@ -4375,11 +4375,12 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         top += 24
     }
 
-    // A hairline 6 pt above a section's heading: long scrolling panels read
-    // as separate feature blocks instead of one continuous column.
+    // A hairline above a section's heading: long scrolling panels read as
+    // separate feature blocks instead of one continuous column. It sits
+    // 10 pt above the heading so the title has room to breathe under it.
     private func drawRule(_ top: CGFloat) {
         palette.muted.withAlphaComponent(0.25).setFill()
-        NSRect(x: insetL, y: bounds.height - (top - 6), width: contentW, height: 1).fill()
+        NSRect(x: insetL, y: bounds.height - (top - 10), width: contentW, height: 1).fill()
     }
 
     // A rounded 1 px frame around a multi-slider block: the heading stays
@@ -8640,8 +8641,8 @@ final class PaletteBuilderDoc: NSView {
     func contentHeight() -> CGFloat {
         var h: CGFloat = 10
         h += 34 + 34                                        // Method + Mode
-        h += 34 + 10 + 60 + 60                              // Presets, From Colour, Gradient
-        if editorVisible { h += ColorInspectorView.viewHeight + 20 }
+        h += 34 + 16 + 64 + 64                              // Presets, From Colour, Gradient
+        if editorVisible { h += ColorInspectorView.viewHeight + 26 }
         h += 24                                             // Adjustments
         h += CurveEditorView.viewHeight + 14
         h += CGFloat(sliders.count) * AdjustmentSliderView.rowHeight
@@ -8670,14 +8671,14 @@ final class PaletteBuilderDoc: NSView {
         presetsTop = top
         presetsButton.frame = rect(top: top + 3, h: 26, x: insetL + max(0, contentW - 170), w: 170)
         top += 34
-        // the two generator sections run on the same rhythm: 10 above the
-        // heading, 22 to its controls, 60 per section
-        fromColorTop = top + 10
+        // the two generator sections run on the same rhythm: 16 above the
+        // heading, 22 to its controls, 64 per section
+        fromColorTop = top + 16
         let wellS: CGFloat = 24, buildW: CGFloat = 64
         fromColorWell.frame = rect(top: fromColorTop + 22, h: wellS, x: insetL, w: wellS)
         fromColorField.frame = rect(top: fromColorTop + 23, h: 22, x: insetL + wellS + 6, w: 62)
         fromColorBuild.frame = rect(top: fromColorTop + 22, h: 24, x: insetL + contentW - buildW, w: buildW)
-        top = fromColorTop + 60
+        top = fromColorTop + 64
         gradientTop = top
         let gW: CGFloat = 62
         gradientStartWell.frame = rect(top: gradientTop + 22, h: wellS, x: insetL, w: wellS)
@@ -8687,9 +8688,9 @@ final class PaletteBuilderDoc: NSView {
         gradientEnd.frame = rect(top: gradientTop + 23, h: 22,
                                  x: insetL + wellS + 6 + gW + 6 + wellS + 6, w: gW)
         gradientBuild.frame = rect(top: gradientTop + 22, h: 24, x: insetL + contentW - buildW, w: buildW)
-        top = gradientTop + 60
+        top = gradientTop + 64
         if editorVisible {
-            editorTop = top + 10
+            editorTop = top + 16
             inspector.frame = rect(top: editorTop, h: ColorInspectorView.viewHeight,
                                    x: insetL, w: contentW)
             top += ColorInspectorView.viewHeight + 20
@@ -8710,11 +8711,12 @@ final class PaletteBuilderDoc: NSView {
         contrastTop = top
     }
 
-    // A hairline 6 pt above a section's heading, matching the wallpaper
-    // editor's rules: each feature block gets its own visual panel.
+    // A hairline above a section's heading, matching the wallpaper editor's
+    // rules: each feature block gets its own visual panel, with 10 pt between
+    // the line and its heading.
     private func drawRule(_ top: CGFloat) {
         palette.muted.withAlphaComponent(0.25).setFill()
-        NSRect(x: insetL, y: bounds.height - (top - 6), width: contentW, height: 1).fill()
+        NSRect(x: insetL, y: bounds.height - (top - 10), width: contentW, height: 1).fill()
     }
 
     override func draw(_ dirtyRect: NSRect) {
