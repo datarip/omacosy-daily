@@ -769,7 +769,9 @@ final class OptionsDocView: NSView {
     private let rowH: CGFloat = 58
     private let catH: CGFloat = 30
     private let sectionGap: CGFloat = 6
-    private let topPad: CGFloat = 6
+    // 11 puts the first category title's centre on the shared 16 pt line that
+    // every tab's first title uses (see the other tabs' first draw call).
+    private let topPad: CGFloat = 11
 
     func contentHeight() -> CGFloat {
         topPad + CGFloat(rows.count) * (catH + rowH + sectionGap) + 10
@@ -2497,8 +2499,8 @@ final class WorkspacesTabView: NSView, ScrollStepTab {
 
     override func draw(_ dirtyRect: NSRect) {
         if screens.count <= 1, let s = screens.first {
-            drawMidLeft("Screen: \(s.name)", nerdFont("Bold", 12), palette.accent,
-                        x: 0, midTop: headerH / 2, height: bounds.height)
+            drawMidLeft("Screen: \(s.name)", nerdFont("Bold", 13), palette.accent,
+                        x: 0, midTop: 16, height: bounds.height)
         }
         palette.muted.withAlphaComponent(0.25).setFill()
         NSRect(x: 0, y: bottomBarH - 0.5, width: bounds.width, height: 1).fill()
@@ -4185,7 +4187,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         addSubview(strengthSlider)
         curveView.onChange = { [weak self] points in self?.onCurve?(points) }
         addSubview(curveView)
-        curveResetButton.title = "Reset"
+        curveResetButton.title = "Reset Curve"
         curveResetButton.fontSize = 10
         curveResetButton.secondary = true
         curveResetButton.onClick = { [weak self] in self?.onCurveReset?() }
@@ -4345,18 +4347,20 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     }
 
     func contentHeight() -> CGFloat {
-        var h: CGFloat = 10
+        // One vertical rhythm shared with the palette column (see layout):
+        // outer padding 12, heading->content 24, section gap 24, sub-gap 12.
+        var h: CGFloat = 12
         h += 24 + 12                                      // Apply to Palette
-        h += AdjustmentSliderView.rowHeight + 16          // Strength
-        h += 16 + 22 + 18                                 // Auto Enhance + buttons
-        h += 26 + HistogramView.viewHeight + 12           // Histogram
-        h += 26 + CurveEditorView.viewHeight + 12         // Curves
-        h += sectionHeight(EditorFilterFields.light)      // Light
+        h += AdjustmentSliderView.rowHeight + 24          // Strength
+        h += 24 + 22 + 24                                 // Auto Enhance + buttons
+        h += 24 + HistogramView.viewHeight + 24           // Histogram
+        h += 24 + CurveEditorView.viewHeight + 12 + 20 + 24  // Curves + Reset Curve row
+        h += sectionHeight(EditorFilterFields.light)      // Light (framed: 30)
         h += sectionHeight(EditorFilterFields.color)      // Color
-        h += 26 + 24 + 8 + AdjustmentSliderView.rowHeight + 18   // Palette Grade
+        h += 24 + 24 + 8 + AdjustmentSliderView.rowHeight + 24   // Palette Grade
         h += sectionHeight(EditorFilterFields.detail)     // Detail
-        h += 24 + 16                                      // Blur Desktop toggle
-        h += 262                                          // Transform
+        h += 24 + 24                                      // Blur Desktop toggle
+        h += 260                                          // Transform
         h += 16                                           // "Original: W × H" line
         h += 44                                           // Presets dropdown
         h += 34                                           // Save Current + Import/Export
@@ -4497,38 +4501,39 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
 
     override func layout() {
         super.layout()
-        var top: CGFloat = 10
+        var top: CGFloat = 12
         applyButton.frame = rect(top: top, h: 24, x: insetL, w: contentW)
         top += 24 + 12
         strengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
-                                    x: insetL, w: contentW)
-        top += AdjustmentSliderView.rowHeight + 16
+                                    x: insetL + 10, w: contentW - 20)
+        top += AdjustmentSliderView.rowHeight + 24
         autoTop = top
-        top += 16                                         // AUTO ENHANCE label
+        top += 24                                         // AUTO ENHANCE label
         let gap: CGFloat = 2
         let bw = max(50, (contentW - gap * 2) / 3)
         autoLevelsButton.frame = rect(top: top, h: 22, x: insetL, w: bw)
         autoContrastButton.frame = rect(top: top, h: 22, x: insetL + bw + gap, w: bw)
         autoWBButton.frame = rect(top: top, h: 22, x: insetL + (bw + gap) * 2, w: bw)
-        top += 22 + 18
+        top += 22 + 24
         groupTops.removeAll()
         groupFrames.removeAll()
         var i = 0
         // Histogram (luminance + R/G/B) above the tone curve.
         histTop = top
-        top += 26
+        top += 24
         histogram.frame = rect(top: top, h: HistogramView.viewHeight, x: insetL, w: contentW)
-        top += HistogramView.viewHeight + 12
+        top += HistogramView.viewHeight + 24
         curveTop = top
-        curveResetButton.frame = rect(top: top, h: 20, x: insetL + contentW - 60, w: 60)
-        top += 26
+        top += 24
         curveView.frame = rect(top: top, h: CurveEditorView.viewHeight, x: insetL, w: contentW)
         top += CurveEditorView.viewHeight + 12
+        curveResetButton.frame = rect(top: top, h: 20, x: insetL + contentW - 84, w: 84)
+        top += 20 + 24
         laySection("Light", EditorFilterFields.light, &top, &i)
         laySection("Color", EditorFilterFields.color, &top, &i)
         // Palette Grade: 2-4 colour stops plus a strength slider.
         gradeTop = top
-        top += 26
+        top += 24
         let sw: CGFloat = 24, swGap: CGFloat = 6
         var gx = insetL
         for (i, w) in gradeWells.enumerated() where i < gradeStops.count {
@@ -4539,16 +4544,16 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         gradeRemoveButton.frame = rect(top: top, h: sw, x: gx + 30, w: 24)
         top += sw + 8
         gradeStrengthSlider.frame = rect(top: top, h: AdjustmentSliderView.rowHeight,
-                                         x: insetL, w: contentW)
-        top += AdjustmentSliderView.rowHeight + 18
+                                         x: insetL + 10, w: contentW - 20)
+        top += AdjustmentSliderView.rowHeight + 24
         detailTop = top
         laySection("Detail", EditorFilterFields.detail, &top, &i)
         blurTop = top
         blurToggle.frame = rect(top: top, h: 24, x: insetL + contentW - 46, w: 46)
-        top += 24 + 16
+        top += 24 + 24
         // Transform, in Aether's order: ROTATE & FLIP, CROP, RESIZE.
         transformTop = top
-        top += 26
+        top += 24
         rotLabelTop = top
         top += 18
         let q = (contentW - 18) / 4
@@ -8742,6 +8747,7 @@ final class PaletteBuilderView: NSView {
         doc.modeSeg.onChange = { [weak self] i in self?.model?.setMode(i) }
         doc.inspector.onColor = { [weak self] hex in self?.model?.writeEditTarget(hex) }
         doc.curveView.onChange = { [weak self] points in self?.model?.setCurve(points) }
+        doc.curveResetButton.onClick = { [weak self] in self?.model?.resetCurve() }
         for slider in doc.sliders {
             let key = slider.spec.key
             slider.onChange = { [weak self] v in self?.model?.setAdjustment(key, v) }
@@ -8825,7 +8831,9 @@ final class PaletteBuilderView: NSView {
                                   width: 24, height: 24)
         undoButton.frame = NSRect(x: redoButton.frame.minX - 6 - 24, y: bounds.height - 30,
                                   width: 24, height: 24)
-        scroll.frame = NSRect(x: 0, y: 0, width: max(0, bounds.width - scrollerW - 14), height: h)
+        // 12 matches the picture column's scroll gap, so both documents get the
+        // same content width.
+        scroll.frame = NSRect(x: 0, y: 0, width: max(0, bounds.width - scrollerW - 12), height: h)
         scroller.frame = NSRect(x: bounds.width - scrollerW, y: 0, width: scrollerW, height: h)
         scroller.refresh()
         let w = scroll.contentSize.width
@@ -8868,6 +8876,7 @@ final class PaletteBuilderDoc: NSView {
     let modeSeg = SegmentedView()
     let inspector = ColorInspectorView()
     let curveView = CurveEditorView()
+    let curveResetButton = ButtonView()
     var sliders: [AdjustmentSliderView] = []
     // palette sources
     let presetsButton = PopupButtonView()
@@ -8885,7 +8894,9 @@ final class PaletteBuilderDoc: NSView {
     // the inspector appears only while a card is selected
     var editorVisible = false
 
-    private let insetL: CGFloat = 16
+    // The same side padding as the picture column (EditorPanelDoc), so the two
+    // panels' contents come out the same width and matching elements line up.
+    private let insetL: CGFloat = 12
     private let insetR: CGFloat = 12
     private var methodTop: CGFloat = 0
     private var modeTop: CGFloat = 0
@@ -8894,6 +8905,7 @@ final class PaletteBuilderDoc: NSView {
     private var gradientTop: CGFloat = 0
     private var editorTop: CGFloat = 0
     private var adjTop: CGFloat = 0
+    private var adjustmentsTop: CGFloat = 0
     private var adjSliderTop: CGFloat = 0
     private var adjSliderBottom: CGFloat = 0
     private var contrastTop: CGFloat = 0
@@ -8906,6 +8918,10 @@ final class PaletteBuilderDoc: NSView {
         inspector.isHidden = true
         addSubview(inspector)
         addSubview(curveView)
+        curveResetButton.title = "Reset Curve"
+        curveResetButton.fontSize = 10
+        curveResetButton.secondary = true
+        addSubview(curveResetButton)
         for f in EditorAdjustments.fields {
             let s = AdjustmentSliderView(spec: f.spec)
             sliders.append(s)
@@ -8947,16 +8963,17 @@ final class PaletteBuilderDoc: NSView {
     }
 
     func contentHeight() -> CGFloat {
-        var h: CGFloat = 10
+        var h: CGFloat = 12
         h += 34 + 34                                        // Method + Mode
-        h += 34 + 16 + 64 + 64                              // Presets, From Colour, Gradient
+        h += 34 + 24 + 72 + 72                              // Presets, From Colour, Gradient
         if editorVisible { h += ColorInspectorView.viewHeight + 26 }
-        h += 24                                             // Adjustments
-        h += CurveEditorView.viewHeight + 14
+        h += 24                                             // Curves
+        h += CurveEditorView.viewHeight + 12 + 20 + 24      // curve + Reset Curve row + gap
+        h += 30                                             // Adjustments (framed)
         h += CGFloat(sliders.count) * AdjustmentSliderView.rowHeight
-        h += 12                                             // gap under the frame
-        h += 38 + CGFloat(contrast.count) * 26              // Accessibility
-        h += 10
+        h += 24                                             // gap under the frame
+        h += 52 + CGFloat(contrast.count) * 26              // Accessibility (framed)
+        h += 12
         return h
     }
 
@@ -8966,7 +8983,7 @@ final class PaletteBuilderDoc: NSView {
 
     override func layout() {
         super.layout()
-        var top: CGFloat = 10
+        var top: CGFloat = 12
         modeTop = top
         let segSize = modeSeg.sizeThatFits()
         // same width as the Method and Presets popups: one flush column
@@ -8979,24 +8996,24 @@ final class PaletteBuilderDoc: NSView {
         presetsTop = top
         presetsButton.frame = rect(top: top + 3, h: 26, x: insetL + max(0, contentW - 170), w: 170)
         top += 34
-        // the two generator sections run on the same rhythm: 16 above the
-        // heading, 22 to its controls, 64 per section
-        fromColorTop = top + 16
+        // the two generator sections run on the same rhythm: 24 above the
+        // heading, 24 to its controls, 72 per section
+        fromColorTop = top + 24
         let wellS: CGFloat = 24, buildW: CGFloat = 64
-        fromColorWell.frame = rect(top: fromColorTop + 22, h: wellS, x: insetL, w: wellS)
-        fromColorField.frame = rect(top: fromColorTop + 23, h: 22, x: insetL + wellS + 6, w: 62)
-        fromColorBuild.frame = rect(top: fromColorTop + 22, h: 24, x: insetL + contentW - buildW, w: buildW)
-        top = fromColorTop + 64
+        fromColorWell.frame = rect(top: fromColorTop + 24, h: wellS, x: insetL, w: wellS)
+        fromColorField.frame = rect(top: fromColorTop + 25, h: 22, x: insetL + wellS + 6, w: 62)
+        fromColorBuild.frame = rect(top: fromColorTop + 24, h: 24, x: insetL + contentW - buildW, w: buildW)
+        top = fromColorTop + 72
         gradientTop = top
         let gW: CGFloat = 62
-        gradientStartWell.frame = rect(top: gradientTop + 22, h: wellS, x: insetL, w: wellS)
-        gradientStart.frame = rect(top: gradientTop + 23, h: 22, x: insetL + wellS + 6, w: gW)
-        gradientEndWell.frame = rect(top: gradientTop + 22, h: wellS,
+        gradientStartWell.frame = rect(top: gradientTop + 24, h: wellS, x: insetL, w: wellS)
+        gradientStart.frame = rect(top: gradientTop + 25, h: 22, x: insetL + wellS + 6, w: gW)
+        gradientEndWell.frame = rect(top: gradientTop + 24, h: wellS,
                                      x: insetL + wellS + 6 + gW + 6, w: wellS)
-        gradientEnd.frame = rect(top: gradientTop + 23, h: 22,
+        gradientEnd.frame = rect(top: gradientTop + 25, h: 22,
                                  x: insetL + wellS + 6 + gW + 6 + wellS + 6, w: gW)
-        gradientBuild.frame = rect(top: gradientTop + 22, h: 24, x: insetL + contentW - buildW, w: buildW)
-        top = gradientTop + 64
+        gradientBuild.frame = rect(top: gradientTop + 24, h: 24, x: insetL + contentW - buildW, w: buildW)
+        top = gradientTop + 72
         if editorVisible {
             editorTop = top + 16
             inspector.frame = rect(top: editorTop, h: ColorInspectorView.viewHeight,
@@ -9006,7 +9023,15 @@ final class PaletteBuilderDoc: NSView {
         adjTop = top
         top += 24
         curveView.frame = rect(top: top, h: CurveEditorView.viewHeight, x: insetL, w: contentW)
-        top += CurveEditorView.viewHeight + 14
+        top += CurveEditorView.viewHeight + 12
+        curveResetButton.frame = rect(top: top, h: 20, x: insetL + contentW - 84, w: 84)
+        top += 20 + 24
+        // the same 24 pt below the Reset Curve button as the picture column, so
+        // both curves lead into their next section title by the same amount
+        adjustmentsTop = top
+        // 30, like the picture column's framed sections: 24 to the frame edge
+        // plus the frame's 6 pt inner padding, so the rows sit the same way
+        top += 30
         adjSliderTop = top
         for s in sliders {
             // inset inside the frame so the label and value never touch its line
@@ -9015,7 +9040,10 @@ final class PaletteBuilderDoc: NSView {
             top += AdjustmentSliderView.rowHeight
         }
         adjSliderBottom = top
-        top += 20
+        // 24 below the last slider row: the Adjustments frame edge sits 6 lower,
+        // so the Accessibility heading clears it by 18 — the same distance the
+        // picture column's framed sections leave before their next title
+        top += 24
         contrastTop = top
     }
 
@@ -9028,22 +9056,25 @@ final class PaletteBuilderDoc: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        drawMidLeft("Mode", nerdFont("Bold", 12), palette.label,
+        drawMidLeft("Mode", nerdFont("Bold", 12), palette.accent,
                     x: insetL, midTop: modeTop + 16, height: bounds.height)
-        drawMidLeft("Method", nerdFont("Bold", 12), palette.label,
+        drawMidLeft("Method", nerdFont("Bold", 12), palette.accent,
                     x: insetL, midTop: methodTop + 16, height: bounds.height)
-        drawMidLeft("Presets", nerdFont("Bold", 12), palette.label,
+        drawMidLeft("Presets", nerdFont("Bold", 12), palette.accent,
                     x: insetL, midTop: presetsTop + 16, height: bounds.height)
         drawRule(fromColorTop)
-        drawTopLeft("From Colour", nerdFont("Bold", 12), palette.label,
+        drawTopLeft("From Colour", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: fromColorTop, height: bounds.height)
         drawRule(gradientTop)
-        drawTopLeft("Gradient", nerdFont("Bold", 12), palette.label,
+        drawTopLeft("Gradient", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: gradientTop, height: bounds.height)
         if editorVisible { drawRule(editorTop) }
         drawRule(adjTop)
-        drawTopLeft("Adjustments", nerdFont("Bold", 12), palette.accent,
+        drawTopLeft("Curves", nerdFont("Bold", 12), palette.accent,
                     x: insetL, top: adjTop, height: bounds.height)
+        // "Adjustments" titles the slider block that follows the curve frame
+        drawTopLeft("Adjustments", nerdFont("Bold", 12), palette.accent,
+                    x: insetL, top: adjustmentsTop, height: bounds.height)
         // a rounded 1 px frame around the twelve slider rows; it shares the
         // column's left and right edges with the controls above it
         let frame = NSRect(x: insetL, y: bounds.height - adjSliderBottom - 6,
@@ -9069,19 +9100,35 @@ final class PaletteBuilderDoc: NSView {
         drawMidLeft(summary, sf, palette.muted,
                     x: insetL + contentW - advance(summary, sf), midTop: contrastTop + 9,
                     height: h)
+
+        // the table sits in its own frame, the same shape as the Adjustments
+        // block above: heading +24 to the frame edge, 6 pt of inner padding
+        let frame = rect(top: contrastTop + 24, h: 28 + CGFloat(contrast.count) * 26,
+                         x: insetL, w: contentW)
+        let box = NSBezierPath(roundedRect: frame, xRadius: windowCornerRadius(8),
+                               yRadius: windowCornerRadius(8))
+        palette.muted.withAlphaComponent(0.4).setStroke()
+        box.lineWidth = 1
+        box.stroke()
+
+        // rows inset inside the frame so nothing touches its line, matching the
+        // slider rows above
+        let innerL = insetL + 10
+        let innerR = insetL + contentW - 10
         let colW: CGFloat = 64
-        let centres = [insetL + contentW - colW * 2.5,
-                       insetL + contentW - colW * 1.5,
-                       insetL + contentW - colW * 0.5]
+        let centres = [innerR - colW * 2.5,
+                       innerR - colW * 1.5,
+                       innerR - colW * 0.5]
         for (i, title) in ["BAR", "PILL", "SURFACE"].enumerated() {
             drawMidCenter(title, nerdFont("Regular", 9), palette.muted,
-                          centerX: centres[i], midTop: contrastTop + 26, height: h)
+                          centerX: centres[i], midTop: contrastTop + 34, height: h)
         }
         for (i, row) in contrast.enumerated() {
-            let mid = contrastTop + 38 + CGFloat(i) * 26 + 13
-            drawMidLeft(row.name, nerdFont("Bold", 12), palette.label,
-                        x: insetL, midTop: mid, height: h)
-            let dot = NSRect(x: insetL + 62, y: h - mid - 5, width: 10, height: 10)
+            let mid = contrastTop + 59 + CGFloat(i) * 26
+            // the same label font as the Adjustments sliders
+            drawMidLeft(row.name, nerdFont("Regular", 11), palette.label,
+                        x: innerL, midTop: mid, height: h)
+            let dot = NSRect(x: innerL + 62, y: h - mid - 5, width: 10, height: 10)
             let dotPath = NSBezierPath(roundedRect: dot, xRadius: windowCornerRadius(3), yRadius: windowCornerRadius(3))
             nsColor(fromHex: row.hex).setFill()
             dotPath.fill()
@@ -10221,10 +10268,10 @@ final class PaletteCanvasDoc: NSView {
 
     func contentHeight() -> CGFloat {
         var h: CGFloat = 12
-        h += 26                                             // "Palette 16 colors · …"
+        h += 24                                             // "Palette 16 colors · …"
         h += PaletteCardsView.height(for: 16)
         h += 36                                             // spaced hint line
-        h += 26                                             // "Semantic Colors"
+        h += 24                                             // "Semantic Colors"
         h += SemanticSectionView.height()
         if templateHeight > 0 { h += 24 + templateHeight }
         h += 12
@@ -10239,13 +10286,13 @@ final class PaletteCanvasDoc: NSView {
         super.layout()
         var top: CGFloat = 12
         paletteTop = top
-        top += 26
+        top += 24
         colorCards.frame = rect(top: top, h: PaletteCardsView.height(for: 16), x: insetL, w: contentW)
         top += PaletteCardsView.height(for: 16)
         hintTop = top + 12
         top += 36
         semanticTop = top
-        top += 26
+        top += 24
         semantic.frame = rect(top: top, h: SemanticSectionView.height(), x: insetL, w: contentW)
         top += SemanticSectionView.height()
         if templateHeight > 0 {
@@ -10373,8 +10420,11 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
 
     private let headerH: CGFloat = 56
     private let footerH: CGFloat = 54
-    private let leftW: CGFloat = 340    // wallpaper editor (step 1)
-    private let rightW: CGFloat = 320   // palette builder (step 2)
+    // One shared width for both editing columns: the wallpaper editor (step 1)
+    // on the left and the palette builder (step 2) on the right read as a
+    // symmetrical pair. 340 keeps the picture column's fixed transform row
+    // comfortable; the palette builder gains 20 pt over its old 320.
+    private let columnW: CGFloat = 340
     private let closeSize: CGFloat = 24
 
     override init(frame frameRect: NSRect) {
@@ -10505,11 +10555,12 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
     override func layout() {
         super.layout()
         let h = max(0, bounds.height - headerH - footerH)
-        // Step 1 (picture) on the left, step 2 (colours) on the right.
-        wallpaperEditor.frame = NSRect(x: 0, y: footerH, width: leftW, height: h)
-        paletteCanvas.frame = NSRect(x: leftW, y: footerH,
-                                     width: max(0, bounds.width - leftW - rightW), height: h)
-        paletteBuilder.frame = NSRect(x: bounds.width - rightW, y: footerH, width: rightW, height: h)
+        // Step 1 (picture) on the left, step 2 (colours) on the right, both
+        // the same width so the pair is symmetrical.
+        wallpaperEditor.frame = NSRect(x: 0, y: footerH, width: columnW, height: h)
+        paletteCanvas.frame = NSRect(x: columnW, y: footerH,
+                                     width: max(0, bounds.width - columnW * 2), height: h)
+        paletteBuilder.frame = NSRect(x: bounds.width - columnW, y: footerH, width: columnW, height: h)
         footer.frame = NSRect(x: 0, y: 0, width: bounds.width, height: footerH)
         // the name field is the whole title — no static prefix (the editor
         // is obvious from its contents)
@@ -10536,8 +10587,8 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
         palette.muted.withAlphaComponent(0.25).setFill()
         NSRect(x: 0, y: bounds.height - headerH, width: bounds.width, height: 1).fill()
         let columnH = max(0, bounds.height - headerH - footerH)
-        NSRect(x: leftW, y: footerH, width: 1, height: columnH).fill()
-        NSRect(x: bounds.width - rightW, y: footerH, width: 1, height: columnH).fill()
+        NSRect(x: columnW, y: footerH, width: 1, height: columnH).fill()
+        NSRect(x: bounds.width - columnW, y: footerH, width: 1, height: columnH).fill()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -12149,10 +12200,10 @@ final class APIKeysTabView: NSView, NSTextFieldDelegate {
 
     override func draw(_ dirtyRect: NSRect) {
         drawTopLeft("Wallhaven.cc API Key", nerdFont("Bold", 13), palette.accent,
-                    x: 0, top: 0, height: bounds.height)
+                    x: 0, top: 11, height: bounds.height)
         drawTopLeft(truncate("Optional: Create an account and go to https://wallhaven.cc/settings/account to get your API Key. Needed for NSFW content.",
                              nerdFont("Regular", 11), bounds.width),
-                    nerdFont("Regular", 11), palette.muted, x: 0, top: 22, height: bounds.height)
+                    nerdFont("Regular", 11), palette.muted, x: 0, top: 33, height: bounds.height)
         let box = NSRect(x: field.frame.minX - 0.5,
                          y: field.frame.minY - (boxH - fieldH) / 2 - 0.5,
                          width: field.frame.width + 1, height: boxH + 1)

@@ -34,6 +34,21 @@ changes only that Omacosy surface, never the `colors.toml` the terminal
 follows; click a card to open the colour inspector, and the pin dot plus the
 header Reset or "Reset N pinned" return them to auto.
 
+## Layout and styling
+
+The editor is two columns of the same width around the centre preview: the
+**Wallpaper Editor** (step 1) on the left and the **Palette Builder** (step 2)
+on the right. Both use the same padding and the same vertical rhythm, so a
+matching element — the tone curve, a slider row — comes out the same width and
+the same distance from its heading on either side. The palette groups its data
+under **Curves**, an **Adjustments** block of sliders and a framed
+**Accessibility** table; each tone curve carries a scoped **Reset Curve**.
+
+The whole system — the spacing scale, the type sizes, the frames and the
+colour roles — is written down in [design-style.md](design-style.md). The code
+in `helper/dashboard.swift` is the source of truth; that page explains it, and
+a new control should follow it rather than copy a number from somewhere else.
+
 ## Saved editions
 
 Every picture in the wallpaper folder (set in the **Storage** tab) is already a
