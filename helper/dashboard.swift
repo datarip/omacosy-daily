@@ -3773,13 +3773,16 @@ final class HistogramView: NSView {
 // A text field that DRAWS its own value, because AppKit's shared field editor
 // honours neither the cell's `alignment` nor a paragraph style we give it, so
 // the editing text jumps to the left. This field hides the editor's own text
-// and caret (both made clear) and draws the value — and a caret — itself, in
-// `horizontal` alignment, focused or not. Self-contained: it draws its own box
-// too (set boxAlpha to 0 for none).
+// and caret (both made clear) and draws the value — and a blinking caret at the
+// real insertion point — itself, in `horizontal` alignment, focused or not.
+// Self-contained: it draws its own box too (boxAlpha 0 for none).
 final class DrawnTextField: NSTextField {
     var centeredPlaceholder = "" { didSet { needsDisplay = true } }
     var boxAlpha: CGFloat = 0.35 { didSet { needsDisplay = true } }
     var horizontal: NSTextAlignment = .center { didSet { needsDisplay = true } }
+
+    private var blinkTimer: Timer?
+    private var caretVisible = true
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -3789,14 +3792,13 @@ final class DrawnTextField: NSTextField {
         alignment = horizontal
         focusRingType = .none
         font = nerdFont("Regular", 11)
-        NotificationCenter.default.addObserver(self, selector: #selector(redraw),
+        NotificationCenter.default.addObserver(self, selector: #selector(textChanged),
             name: NSControl.textDidChangeNotification, object: self)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
-    deinit { NotificationCenter.default.removeObserver(self) }
+    deinit { NotificationCenter.default.removeObserver(self); blinkTimer?.invalidate() }
 
-    @objc private func redraw() { needsDisplay = true }
-
+    @objc private func textChanged() { needsDisplay = true }
     // programmatic value changes (syncFromState, setTransform) must repaint too
     override var stringValue: String { didSet { needsDisplay = true } }
 
@@ -3806,6 +3808,7 @@ final class DrawnTextField: NSTextField {
             e.textColor = .clear
             e.insertionPointColor = .clear
         }
+        startBlink()
         needsDisplay = true
         return ok
     }
@@ -3815,8 +3818,27 @@ final class DrawnTextField: NSTextField {
             e.textColor = palette.label
             e.insertionPointColor = palette.label
         }
+        stopBlink()
         needsDisplay = true
         return ok
+    }
+
+    private func startBlink() {
+        blinkTimer?.invalidate()
+        caretVisible = true
+        blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.caretVisible.toggle()
+            self?.needsDisplay = true
+        }
+    }
+    private func stopBlink() { blinkTimer?.invalidate(); blinkTimer = nil; caretVisible = true }
+
+    private func textOriginX(_ textWidth: CGFloat) -> CGFloat {
+        switch horizontal {
+        case .right: return bounds.maxX - textWidth
+        case .left:  return bounds.minX
+        default:     return bounds.midX - textWidth / 2
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -3827,6 +3849,7 @@ final class DrawnTextField: NSTextField {
         }
         let f = font ?? nerdFont("Regular", 11)
         let s = stringValue
+        drawCaret(f, s)
         let shown = s.isEmpty ? centeredPlaceholder : s
         guard !shown.isEmpty else { return }
         let ink = s.isEmpty ? palette.muted.withAlphaComponent(0.7) : palette.label
@@ -3841,19 +3864,14 @@ final class DrawnTextField: NSTextField {
         let lineH = ceil(f.ascender - f.descender)
         let textRect = NSRect(x: 0, y: bounds.midY - lineH / 2, width: bounds.width, height: lineH)
         NSAttributedString(string: shown, attributes: attrs).draw(in: textRect)
+    }
 
-        if currentEditor() != nil {
-            let width = advance(shown, f)
-            let textX: CGFloat
-            switch horizontal {
-            case .right: textX = bounds.maxX - width
-            case .left:  textX = bounds.minX
-            default:     textX = bounds.midX - width / 2
-            }
-            palette.accent.setFill()
-            NSRect(x: textX + width + 2, y: bounds.midY - f.capHeight / 2,
-                   width: 1.5, height: f.capHeight).fill()
-        }
+    private func drawCaret(_ f: NSFont, _ s: String) {
+        guard currentEditor() != nil, caretVisible else { return }
+        let loc = (currentEditor() as? NSTextView).map { min($0.selectedRange().location, s.count) } ?? s.count
+        let x = textOriginX(advance(s, f)) + advance(String(s.prefix(loc)), f)
+        palette.accent.setFill()
+        NSRect(x: x, y: bounds.midY - f.capHeight / 2, width: 1.5, height: f.capHeight).fill()
     }
 }
 
@@ -8388,11 +8406,11 @@ final class PaletteBuilderDoc: NSView {
     var sliders: [AdjustmentSliderView] = []
     // palette sources
     let presetsButton = PopupButtonView()
-    let fromColorField = NSTextField()
+    let fromColorField = DrawnTextField()
     let fromColorWell = ColorWellView()
     let fromColorBuild = ButtonView()
-    let gradientStart = NSTextField()
-    let gradientEnd = NSTextField()
+    let gradientStart = DrawnTextField()
+    let gradientEnd = DrawnTextField()
     let gradientStartWell = ColorWellView()
     let gradientEndWell = ColorWellView()
     let gradientBuild = ButtonView()
@@ -8431,14 +8449,11 @@ final class PaletteBuilderDoc: NSView {
         presetsButton.title = "Presets"
         addSubview(presetsButton)
         for f in [fromColorField, gradientStart, gradientEnd] {
-            f.isBezeled = false
-            f.drawsBackground = true
-            f.backgroundColor = palette.itemBG.withAlphaComponent(0.35)
-            f.textColor = palette.label
+            // DrawnTextField draws its own box + left-aligned value
+            f.horizontal = .left
+            f.boxAlpha = 0.35
             f.font = nerdFont("Regular", 12)
-            f.focusRingType = .none
             f.usesSingleLineMode = true
-            f.lineBreakMode = .byTruncatingTail
             addSubview(f)
         }
         fromColorBuild.title = "Build"
