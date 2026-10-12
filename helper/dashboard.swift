@@ -485,13 +485,13 @@ final class SegmentedView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         layoutSegments()
-        let track = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        let track = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         palette.itemBG.withAlphaComponent(0.55).setFill()
         track.fill()
         let f = nerdFont("Regular", 12)
         let bf = nerdFont("Bold", 12)
         for (i, r) in segFrames.enumerated() {
-            let path = NSBezierPath(roundedRect: r, xRadius: 5, yRadius: 5)
+            let path = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(5), yRadius: windowCornerRadius(5))
             if i == index {
                 palette.accent.withAlphaComponent(0.9).setFill()
                 path.fill()
@@ -530,7 +530,7 @@ final class CheckView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let box = NSRect(x: 0, y: (bounds.height - 18) / 2, width: 18, height: 18)
-        let r = NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4)
+        let r = NSBezierPath(roundedRect: box, xRadius: windowCornerRadius(4), yRadius: windowCornerRadius(4))
         if isOn {
             palette.accent.setFill(); r.fill()
             whDrawGlyphCentered("\u{f00c}", in: box, color: palette.barBG, size: 12)
@@ -560,7 +560,7 @@ final class ToggleView: NSView {
     func sizeThatFits() -> NSSize { NSSize(width: 46, height: 24) }
 
     override func draw(_ dirtyRect: NSRect) {
-        let track = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5)
+        let track = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(5), yRadius: windowCornerRadius(5))
         if isOn {
             palette.accent.setFill(); track.fill()
         } else {
@@ -570,7 +570,7 @@ final class ToggleView: NSView {
         let ks = bounds.height - 8
         let kx = isOn ? bounds.width - ks - 4 : 4
         let knob = NSBezierPath(roundedRect: NSRect(x: kx, y: 4, width: ks, height: ks),
-                                xRadius: 4, yRadius: 4)
+                                xRadius: windowCornerRadius(4), yRadius: windowCornerRadius(4))
         (isOn ? palette.barBG : palette.muted).setFill(); knob.fill()
     }
 
@@ -603,7 +603,7 @@ final class ButtonView: NSView {
     var onClick: (() -> Void)?
 
     override func draw(_ dirtyRect: NSRect) {
-        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         if secondary && !busy {
             palette.itemBG.withAlphaComponent(0.35).setFill()
             r.fill()
@@ -1303,7 +1303,7 @@ final class PickerRoot: NSView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override func draw(_ dirtyRect: NSRect) {
-        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10)
+        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(10), yRadius: windowCornerRadius(10))
         palette.barBG.setFill()
         r.fill()
         palette.accent.setStroke()
@@ -1675,9 +1675,9 @@ final class NamePromptView: NSView {
         // the drawn box, because AppKit lays a taller field's text near its top
         let box = NSRect(x: 24, y: bounds.height - 116, width: bounds.width - 48, height: 24)
         palette.itemBG.withAlphaComponent(0.35).setFill()
-        NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6).fill()
+        NSBezierPath(roundedRect: box, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6)).fill()
         palette.muted.withAlphaComponent(0.35).setStroke()
-        let border = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
+        let border = NSBezierPath(roundedRect: box, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         border.lineWidth = 1; border.stroke()
         if !errorText.isEmpty {
             drawTopLeft(truncate(errorText, nerdFont("Regular", 11), bounds.width - 48),
@@ -1782,14 +1782,14 @@ final class ContextMenuView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 7, yRadius: 7)
+        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(7), yRadius: windowCornerRadius(7))
         palette.barBG.setFill(); card.fill()
         palette.muted.withAlphaComponent(0.22).setStroke(); card.lineWidth = 1; card.stroke()
         for (i, item) in items.enumerated() {
             let r = rowRect(i)
             if i == hovered {
                 palette.accent.setFill()
-                NSBezierPath(roundedRect: r.insetBy(dx: 4, dy: 1), xRadius: 5, yRadius: 5).fill()
+                NSBezierPath(roundedRect: r.insetBy(dx: 4, dy: 1), xRadius: windowCornerRadius(5), yRadius: windowCornerRadius(5)).fill()
             }
             let ink = i == hovered
                 ? (relativeLuminance(palette.accent) > 0.179 ? palette.barBG : palette.label)
@@ -2060,7 +2060,7 @@ final class ChipStrip: NSView {
     override func draw(_ dirtyRect: NSRect) {
         layoutChips()
         for (f, id) in chipFrames {
-            let chip = NSBezierPath(roundedRect: f, xRadius: 5, yRadius: 5)
+            let chip = NSBezierPath(roundedRect: f, xRadius: windowCornerRadius(5), yRadius: windowCornerRadius(5))
             palette.itemBG.withAlphaComponent(0.6).setFill()
             chip.fill()
             if let ic = iconForBundle(id) {
@@ -2072,7 +2072,7 @@ final class ChipStrip: NSView {
                         x: f.maxX - 14, midTop: bounds.height / 2, height: bounds.height)
         }
         // a trailing "＋ Add" so an app can be added from the expanded strip
-        let add = NSBezierPath(roundedRect: addFrame, xRadius: 5, yRadius: 5)
+        let add = NSBezierPath(roundedRect: addFrame, xRadius: windowCornerRadius(5), yRadius: windowCornerRadius(5))
         palette.accent.withAlphaComponent(0.30).setStroke()
         add.lineWidth = 1
         add.stroke()
@@ -2200,7 +2200,7 @@ final class WorkspaceRowView: NSView {
 
         for (frame, id) in chipFrames {
             let name = chipLabel(id)
-            let chip = NSBezierPath(roundedRect: frame, xRadius: 5, yRadius: 5)
+            let chip = NSBezierPath(roundedRect: frame, xRadius: windowCornerRadius(5), yRadius: windowCornerRadius(5))
             palette.itemBG.withAlphaComponent(0.6).setFill()
             chip.fill()
             if let ic = iconForBundle(id) {
@@ -3187,7 +3187,7 @@ final class ThemeGridView: NSView {
             } else if i == hoveredIndex {
                 let label = pillLabel(cells[i])
                 let pill = editPillRect(f, label: label)
-                let shape = NSBezierPath(roundedRect: pill, xRadius: 6, yRadius: 6)
+                let shape = NSBezierPath(roundedRect: pill, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
                 palette.accent.setFill()
                 shape.fill()
                 let ink = relativeLuminance(palette.accent) > 0.179 ? palette.barBG : palette.label
@@ -3199,7 +3199,7 @@ final class ThemeGridView: NSView {
 
     // The selection checkbox sits at the thumbnail's top-right corner.
     private func drawCheckbox(_ on: Bool, in cr: NSRect) {
-        let box = NSBezierPath(roundedRect: cr, xRadius: 6, yRadius: 6)
+        let box = NSBezierPath(roundedRect: cr, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         if on {
             palette.accent.setFill(); box.fill()
             let ink = relativeLuminance(palette.accent) > 0.179 ? palette.barBG : palette.label
@@ -3775,7 +3775,7 @@ final class HistogramView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
-                               xRadius: 6, yRadius: 6)
+                               xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         palette.itemBG.withAlphaComponent(0.35).setFill()
         box.fill()
         palette.muted.withAlphaComponent(0.3).setStroke()
@@ -3828,7 +3828,7 @@ final class PresetRowView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         palette.itemBG.withAlphaComponent(0.35).setFill()
         box.fill()
         palette.muted.withAlphaComponent(0.3).setStroke()
@@ -3926,7 +3926,7 @@ final class DrawnTextField: NSTextField {
 
     override func draw(_ dirtyRect: NSRect) {
         if boxAlpha > 0 {
-            let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
+            let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(4), yRadius: windowCornerRadius(4))
             palette.itemBG.withAlphaComponent(boxAlpha).setFill()
             box.fill()
         }
@@ -4506,7 +4506,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
     private func drawGroupFrame(top: CGFloat, bottom: CGFloat) {
         let r = NSRect(x: insetL, y: bounds.height - bottom - 6,
                        width: contentW, height: (bottom - top) + 12)
-        let path = NSBezierPath(roundedRect: r, xRadius: 8, yRadius: 8)
+        let path = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(8), yRadius: windowCornerRadius(8))
         palette.muted.withAlphaComponent(0.4).setStroke()
         path.lineWidth = 1
         path.stroke()
@@ -6882,6 +6882,21 @@ final class ColorWellView: NSColorWell {
         if hexString(from: color) != want {
             color = nsColor(fromHex: hex)
         }
+        needsDisplay = true
+    }
+
+    // Draw our own swatch so the well follows the window-corner setting — a
+    // round bubble when the machine is rounded, a square when it is square.
+    // NSColorWell's own chrome has a fixed system radius we cannot set.
+    override func draw(_ dirtyRect: NSRect) {
+        let inset = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let radius = min(windowCornerRadius(bounds.height / 2), min(inset.width, inset.height) / 2)
+        let path = NSBezierPath(roundedRect: inset, xRadius: radius, yRadius: radius)
+        (color.usingColorSpace(.sRGB) ?? color).setFill()
+        path.fill()
+        palette.muted.withAlphaComponent(0.5).setStroke()
+        path.lineWidth = 1
+        path.stroke()
     }
 
     override func activate(_ exclusive: Bool) {
@@ -6902,7 +6917,7 @@ final class PopupButtonView: NSView {
     var onClick: (() -> Void)?
 
     override func draw(_ dirtyRect: NSRect) {
-        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         palette.itemBG.withAlphaComponent(0.35).setFill()
         r.fill()
         palette.muted.withAlphaComponent(0.35).setStroke()
@@ -7072,7 +7087,7 @@ final class MethodPickerRoot: NSView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override func draw(_ dirtyRect: NSRect) {
-        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10)
+        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(10), yRadius: windowCornerRadius(10))
         palette.barBG.setFill()
         r.fill()
         palette.accent.setStroke()
@@ -7348,7 +7363,7 @@ final class AdjustmentSliderView: NSView, NSTextFieldDelegate {
         let cx = x0 + CGFloat(t) * (x1 - x0)
         let atDefault = abs(value - spec.def) < 1e-9
         let thumb = NSBezierPath(roundedRect: NSRect(x: cx - 4.5, y: mid - 4.5, width: 9, height: 9),
-                                 xRadius: 2, yRadius: 2)
+                                 xRadius: windowCornerRadius(2), yRadius: windowCornerRadius(2))
         (atDefault ? palette.muted : palette.accent).setFill()
         thumb.fill()
     }
@@ -7399,7 +7414,7 @@ final class CurveEditorView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         palette.itemBG.withAlphaComponent(0.35).setFill()
         box.fill()
         palette.muted.withAlphaComponent(0.35).setStroke()
@@ -7547,7 +7562,7 @@ final class PaletteCardsView: NSView {
             let all = rects()
             guard all.indices.contains(i) else { break }
             let r = all[i]
-            let path = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+            let path = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
             nsColor(fromHex: card.hex).setFill()
             path.fill()
 
@@ -7701,7 +7716,7 @@ final class SemanticSectionView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         for (group, box, rects) in boxes() {
-            let boxPath = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+            let boxPath = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
             palette.itemBG.withAlphaComponent(0.22).setFill()
             boxPath.fill()
             palette.muted.withAlphaComponent(0.15).setStroke()
@@ -7711,7 +7726,7 @@ final class SemanticSectionView: NSView {
                         x: box.minX + 10, top: bounds.height - box.maxY + 8, height: bounds.height)
             for (j, card) in group.cards.enumerated() {
                 let r = rects[j]
-                let path = NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4)
+                let path = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(4), yRadius: windowCornerRadius(4))
                 nsColor(fromHex: card.hex).setFill()
                 path.fill()
                 let light = relativeLuminance(nsColor(fromHex: card.hex)) > 0.5
@@ -7785,12 +7800,12 @@ final class OpacitySliderView: NSView {
         let trackH: CGFloat = 4
         let track = NSRect(x: 0, y: bounds.midY - trackH / 2, width: bounds.width, height: trackH)
         palette.itemBG.withAlphaComponent(0.55).setFill()
-        NSBezierPath(roundedRect: track, xRadius: trackH / 2, yRadius: trackH / 2).fill()
+        NSBezierPath(roundedRect: track, xRadius: windowCornerRadius(trackH / 2), yRadius: windowCornerRadius(trackH / 2)).fill()
         guard let value else { return }
         let v = CGFloat(max(0, min(100, value))) / 100
         let fill = NSRect(x: 0, y: track.minY, width: bounds.width * v, height: trackH)
         palette.accent.withAlphaComponent(0.9).setFill()
-        NSBezierPath(roundedRect: fill, xRadius: trackH / 2, yRadius: trackH / 2).fill()
+        NSBezierPath(roundedRect: fill, xRadius: windowCornerRadius(trackH / 2), yRadius: windowCornerRadius(trackH / 2)).fill()
         let hx = max(6, min(bounds.width - 6, bounds.width * v))
         palette.accent.setFill()
         NSBezierPath(ovalIn: NSRect(x: hx - 6, y: bounds.midY - 6, width: 12, height: 12)).fill()
@@ -7911,7 +7926,7 @@ final class TemplateOverrideSectionView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         // framed card, like the semantic groups
         let card = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let cardPath = NSBezierPath(roundedRect: card, xRadius: 6, yRadius: 6)
+        let cardPath = NSBezierPath(roundedRect: card, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         palette.itemBG.withAlphaComponent(0.12).setFill()
         cardPath.fill()
         palette.muted.withAlphaComponent(0.15).setStroke()
@@ -7938,7 +7953,7 @@ final class TemplateOverrideSectionView: NSView {
         drawMidLeft("\(effective)%", sfont, palette.label,
                     x: opacitySlider.frame.maxX + 8, midTop: editRowTop + 14, height: bounds.height)
         let ir = inheritRect
-        let ipath = NSBezierPath(roundedRect: ir, xRadius: 5, yRadius: 5)
+        let ipath = NSBezierPath(roundedRect: ir, xRadius: windowCornerRadius(5), yRadius: windowCornerRadius(5))
         if toolOpacity == nil {
             palette.accent.withAlphaComponent(0.9).setFill()
             ipath.fill()
@@ -7953,7 +7968,7 @@ final class TemplateOverrideSectionView: NSView {
                       toolOpacity == nil ? palette.barBG : palette.label,
                       centerX: ir.midX, midTop: bounds.height - ir.midY, height: bounds.height)
         for (i, rect) in appRects().enumerated() {
-            let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+            let path = NSBezierPath(roundedRect: rect, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
             if i == selectedApp {
                 palette.accent.withAlphaComponent(0.9).setFill()
                 path.fill()
@@ -7974,7 +7989,7 @@ final class TemplateOverrideSectionView: NSView {
         let rects = cardRects()
         for (i, role) in roles.enumerated() where rects.indices.contains(i) {
             let r = rects[i]
-            let path = NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4)
+            let path = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(4), yRadius: windowCornerRadius(4))
             nsColor(fromHex: role.hex).setFill()
             path.fill()
             let light = relativeLuminance(nsColor(fromHex: role.hex)) > 0.5
@@ -8147,7 +8162,7 @@ final class ChannelSliderView: NSView, NSTextFieldDelegate {
         let mid = bounds.height / 2
         drawMidLeft(label, nerdFont("Regular", 10), palette.muted,
                     x: 0, midTop: mid, height: bounds.height)
-        let track = NSBezierPath(roundedRect: trackRect, xRadius: 2, yRadius: 2)
+        let track = NSBezierPath(roundedRect: trackRect, xRadius: windowCornerRadius(2), yRadius: windowCornerRadius(2))
         if let colors = gradient, colors.count >= 2 {
             NSGradient(colors: colors)?.draw(in: track, angle: 0)
         } else {
@@ -8160,7 +8175,7 @@ final class ChannelSliderView: NSView, NSTextFieldDelegate {
         let t = (value - minValue) / max(1e-9, maxValue - minValue)
         let cx = trackRect.minX + CGFloat(t) * trackRect.width
         let handle = NSBezierPath(roundedRect: NSRect(x: cx - 2, y: mid - 7, width: 4, height: 14),
-                                  xRadius: 1.5, yRadius: 1.5)
+                                  xRadius: windowCornerRadius(1.5), yRadius: windowCornerRadius(1.5))
         NSColor.white.setFill()
         handle.fill()
         NSColor.black.withAlphaComponent(0.6).setStroke()
@@ -8391,7 +8406,7 @@ final class ColorInspectorView: NSView, NSTextFieldDelegate {
         }
         // header: preview + name + hex field
         let preview = NSRect(x: 0, y: bounds.height - headerTop - 22, width: 22, height: 22)
-        let path = NSBezierPath(roundedRect: preview.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5)
+        let path = NSBezierPath(roundedRect: preview.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(5), yRadius: windowCornerRadius(5))
         nsColor(fromHex: hex).setFill()
         path.fill()
         palette.muted.withAlphaComponent(0.35).setStroke()
@@ -8424,17 +8439,17 @@ final class ColorInspectorView: NSView, NSTextFieldDelegate {
         for (i, h) in harmony.enumerated() {
             let r = harmonyRects()[i]
             nsColor(fromHex: h.hex).setFill()
-            NSBezierPath(roundedRect: r, xRadius: 3, yRadius: 3).fill()
+            NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(3), yRadius: windowCornerRadius(3)).fill()
             drawMidCenter(h.label, nerdFont("Regular", 9), palette.muted,
                           centerX: r.midX, midTop: bounds.height - r.minY + 8, height: bounds.height)
         }
         for (i, t) in tones.enumerated() {
             let r = toneRects()[i]
             nsColor(fromHex: t).setFill()
-            NSBezierPath(roundedRect: r, xRadius: 2, yRadius: 2).fill()
+            NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(2), yRadius: windowCornerRadius(2)).fill()
             if i == currentTone {
                 NSColor.white.setStroke()
-                let ring = NSBezierPath(roundedRect: r.insetBy(dx: 1, dy: 1), xRadius: 2, yRadius: 2)
+                let ring = NSBezierPath(roundedRect: r.insetBy(dx: 1, dy: 1), xRadius: windowCornerRadius(2), yRadius: windowCornerRadius(2))
                 ring.lineWidth = 2
                 ring.stroke()
             }
@@ -8442,7 +8457,7 @@ final class ColorInspectorView: NSView, NSTextFieldDelegate {
         for (i, c) in recents.enumerated() {
             let r = recentRects()[i]
             nsColor(fromHex: c).setFill()
-            NSBezierPath(roundedRect: r, xRadius: 3, yRadius: 3).fill()
+            NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(3), yRadius: windowCornerRadius(3)).fill()
         }
     }
 
@@ -8899,7 +8914,7 @@ final class PaletteBuilderDoc: NSView {
         // column's left and right edges with the controls above it
         let frame = NSRect(x: insetL, y: bounds.height - adjSliderBottom - 6,
                            width: contentW, height: (adjSliderBottom - adjSliderTop) + 12)
-        let path = NSBezierPath(roundedRect: frame, xRadius: 8, yRadius: 8)
+        let path = NSBezierPath(roundedRect: frame, xRadius: windowCornerRadius(8), yRadius: windowCornerRadius(8))
         palette.muted.withAlphaComponent(0.4).setStroke()
         path.lineWidth = 1
         path.stroke()
@@ -8933,7 +8948,7 @@ final class PaletteBuilderDoc: NSView {
             drawMidLeft(row.name, nerdFont("Bold", 12), palette.label,
                         x: insetL, midTop: mid, height: h)
             let dot = NSRect(x: insetL + 62, y: h - mid - 5, width: 10, height: 10)
-            let dotPath = NSBezierPath(roundedRect: dot, xRadius: 3, yRadius: 3)
+            let dotPath = NSBezierPath(roundedRect: dot, xRadius: windowCornerRadius(3), yRadius: windowCornerRadius(3))
             nsColor(fromHex: row.hex).setFill()
             dotPath.fill()
             palette.muted.withAlphaComponent(0.4).setStroke()
@@ -8980,7 +8995,7 @@ final class PreviewIconButton: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.black.withAlphaComponent(0.4).setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6).fill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6)).fill()
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let font = nerdFont("Regular", 12)
         let line = textLine(glyph, font, on ? palette.accent : palette.muted)
@@ -11990,7 +12005,7 @@ final class APIKeysTabView: NSView, NSTextFieldDelegate {
         let box = NSRect(x: field.frame.minX - 0.5,
                          y: field.frame.minY - (boxH - fieldH) / 2 - 0.5,
                          width: field.frame.width + 1, height: boxH + 1)
-        let border = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
+        let border = NSBezierPath(roundedRect: box, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         palette.muted.withAlphaComponent(0.35).setStroke()
         border.lineWidth = 1
         border.stroke()
@@ -13008,7 +13023,7 @@ final class WHDropdown: NSView {
     var onPick: ((Int) -> Void)?
 
     override func draw(_ dirtyRect: NSRect) {
-        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         palette.itemBG.withAlphaComponent(0.35).setFill(); r.fill()
         palette.muted.withAlphaComponent(0.35).setStroke(); r.lineWidth = 1; r.stroke()
         let f = nerdFont("Regular", 11)
@@ -13169,7 +13184,7 @@ final class WHGridView: NSView {
     }
 
     private func iconButton(_ glyph: String, in r: NSRect, tint: NSColor, fillAlpha: CGFloat) {
-        let box = NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6)
+        let box = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         NSColor(srgbRed: 0.05, green: 0.05, blue: 0.07, alpha: fillAlpha).setFill()
         box.fill()
         NSColor.white.withAlphaComponent(0.14).setStroke(); box.lineWidth = 1; box.stroke()
@@ -13231,7 +13246,7 @@ final class WHGridView: NSView {
             let bf = nerdFont("Bold", 10)
             let pillW = advance(label, bf) + 30
             let pill = NSRect(x: t.minX + iconPad, y: t.minY + iconPad, width: pillW, height: 22)
-            let p = NSBezierPath(roundedRect: pill, xRadius: 6, yRadius: 6)
+            let p = NSBezierPath(roundedRect: pill, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
             NSColor.systemGreen.withAlphaComponent(0.9).setFill(); p.fill()
             whDrawGlyphCentered("\u{f00c}" + label, in: NSRect(x: pill.minX + 4, y: pill.minY,
                                                                width: pillW - 8, height: pill.height),
@@ -13927,7 +13942,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     }
 
     private func chip(_ r: NSRect, _ label: String, on: Bool, tint: NSColor, enabled: Bool = true) {
-        let path = NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6)
+        let path = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         if on && enabled {
             tint.withAlphaComponent(0.16).setFill(); path.fill()
             tint.setStroke(); path.lineWidth = 1; path.stroke()
@@ -14002,7 +14017,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         let sortW: CGFloat = 118, orderW: CGFloat = 34, searchW: CGFloat = 76
         let queryW = max(160, W - sortW - orderW - searchW - g * 3)
         let box = frameFor(top: row1Top, x: 0, w: queryW, h: row1H)
-        let path = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        let path = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         palette.itemBG.withAlphaComponent(0.35).setFill(); path.fill()
         palette.muted.withAlphaComponent(0.35).setStroke(); path.lineWidth = 1; path.stroke()
         drawMidCenter("\u{f002}", nerdFont("Regular", 12), palette.muted,
@@ -14035,7 +14050,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
                         x: 0, midTop: row4Top + row4H / 2, height: bounds.height)
             for (i, r) in colorSwatchRects().enumerated() {
                 let p = whColorPresets[i]
-                let sq = NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4)
+                let sq = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(4), yRadius: windowCornerRadius(4))
                 (hexColor(p.hex) ?? palette.muted).setFill(); sq.fill()
                 let selected = config.colors == p.hex
                 (selected ? palette.accent : palette.muted.withAlphaComponent(0.5)).setStroke()
