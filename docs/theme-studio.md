@@ -36,7 +36,8 @@ header Reset or "Reset N pinned" return them to auto.
 
 ## Saved editions
 
-Every picture in the wallpaper folder is already a theme of its own: the Themes
+Every picture in the wallpaper folder (set in the **Storage** tab) is already a
+theme of its own: the Themes
 tab shows each as a `Wallpaper #N` cell whose colours come from that picture
 (the same Magic extraction the raw cells use).
 **Customize** on a raw cell opens the editor on a new, unsaved theme; **Save**
