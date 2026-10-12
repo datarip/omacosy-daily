@@ -2618,6 +2618,31 @@ func canonicalPath(_ path: String) -> String {
     URL(fileURLWithPath: path).resolvingSymlinksInPath().path
 }
 
+// What is applied to the live desktop right now, for the Themes grid's
+// Active pill: a stock theme name, a saved edition id, or a raw wallpaper
+// path. Read from the same `current/theme` symlink everything else uses, so
+// the pill can never disagree with the desktop.
+enum ActiveTheme {
+    case stock(String)
+    case edition(String)
+    case raw(String)
+}
+
+func activeThemeSpec() -> ActiveTheme? {
+    let (code, out) = shell("\(HOME)/.local/bin/omacosy-custom-theme current 2>/dev/null")
+    guard code == 0 else { return nil }
+    let cur = out.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cur.isEmpty else { return nil }
+    if cur.hasPrefix("theme:") { return .edition(String(cur.dropFirst("theme:".count))) }
+    if cur == "custom" {
+        guard let raw = try? String(contentsOfFile: HOME + "/.local/state/omacosy/custom-index",
+                                    encoding: .utf8) else { return nil }
+        let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return path.isEmpty ? nil : .raw(path)
+    }
+    return .stock(cur)
+}
+
 // --- theme editions ---------------------------------------------------------
 
 struct ThemeEdition {
@@ -2984,6 +3009,8 @@ func applyTheme(_ c: ThemeCell, done: @escaping () -> Void) {
 
 final class ThemeGridView: NSView {
     var cells: [ThemeCell] = []
+    // the theme currently applied, drawn with an "Active" pill
+    var active: ActiveTheme? { didSet { needsDisplay = true } }
     var customDir: String?
     var thumbs: [Int: NSImage] = [:]
     var palettes: [Int: [NSColor]] = [:]
@@ -3206,6 +3233,41 @@ final class ThemeGridView: NSView {
                               centerX: pill.midX, midTop: bounds.height - pill.midY, height: bounds.height)
             }
         }
+
+        // the applied theme carries an "Active" pill, top-left, so the grid
+        // says at a glance which one is live
+        if isActiveCell(i) {
+            let label = "\u{f00c}  Active"
+            let pill = activePillRect(f, label: label)
+            let shape = NSBezierPath(roundedRect: pill, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
+            NSColor.systemGreen.setFill()
+            shape.fill()
+            drawMidCenter(label, nerdFont("Bold", 10), .white,
+                          centerX: pill.midX, midTop: bounds.height - pill.midY, height: bounds.height)
+        }
+    }
+
+    // True when this cell is the theme applied to the desktop.
+    private func isActiveCell(_ i: Int) -> Bool {
+        guard let a = active, cells.indices.contains(i) else { return false }
+        let c = cells[i]
+        switch a {
+        case .edition(let id): return c.editionID == id
+        case .stock(let name): return !c.isCustom && c.logical == name
+        case .raw(let path):
+            return c.isCustom && c.editionID == nil
+                && canonicalPath(c.wallpaper) == canonicalPath(path)
+        }
+    }
+
+    // The Active pill sits over the thumbnail's top-left corner, clear of the
+    // hover Edit pill (bottom-right) and the selection checkbox (top-right).
+    private func activePillRect(_ f: NSRect, label: String) -> NSRect {
+        let thumbRect = NSRect(x: f.minX, y: f.minY + cellPaletteH + cellLabelH + cellThumbGap,
+                               width: f.width, height: f.height - cellPaletteH - cellLabelH - cellThumbGap)
+        let w = advance(label, nerdFont("Bold", 10)) + 20
+        return NSRect(x: thumbRect.minX + pillInset, y: thumbRect.maxY - pillInset - pillH,
+                      width: w, height: pillH)
     }
 
     // The selection checkbox sits at the thumbnail's top-right corner.
@@ -3415,6 +3477,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
         grid.onApplied = { [weak self] title in
             self?.status = "Applied \(title)"
             self?.needsDisplay = true
+            self?.reload()
             self?.onApplied?()
         }
         grid.onEdit = { [weak self] cell in
@@ -3422,6 +3485,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
             ThemeEditor.present(cell: cell, from: w) { [weak self] message in
                 self?.status = message
                 self?.needsDisplay = true
+                self?.reload()
                 self?.onApplied?()
             }
         }
@@ -3604,6 +3668,8 @@ final class ThemesTabView: NSView, ScrollStepTab {
     func reload() {
         let cells = stockVariants() + customVariants()
         let dir = wallpapersDir()
+        // the live theme can change without the cell set changing
+        grid.active = activeThemeSpec()
 
         // Re-entering the tab re-reads the shelves. When nothing changed,
         // leave the decoded thumbnails and palettes exactly as they are:
