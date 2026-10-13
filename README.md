@@ -89,6 +89,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#89](https://github.com/paulsp94/omacosy/pull/89) | OPEN | fix(update): ignore the omacosy-ffm app bundle |
 | [#80](https://github.com/paulsp94/omacosy/pull/80) | OPEN | fix(gestures): hand the native four-finger swipe back on toggle off / uninstall |
 | [#79](https://github.com/paulsp94/omacosy/pull/79) | MERGED | fix(omniwm): find the IPC socket after OmniWM 0.7.5 moved it |
 | [#78](https://github.com/paulsp94/omacosy/pull/78) | MERGED | fix(install): restore the OmniWM chords right after the Karabiner reset |
