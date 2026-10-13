@@ -547,7 +547,8 @@ let seedCacheLock = NSLock()
 
 // Takes the frame and the display id rather than the NSScreen, so the
 // caller reads those on the main queue and this can run anywhere.
-func seedStrip(from url: URL, frame: NSRect, display: CGDirectDisplayID) -> [NSColor] {
+func seedStrip(from url: URL, frame: NSRect, display: CGDirectDisplayID,
+               barHeight: CGFloat = barHeightFallback) -> [NSColor] {
     let key = "\(url.resolvingSymlinksInPath().path)|\(display)|\(frame.width)x\(frame.height)"
     seedCacheLock.lock()
     let hit = seedCache[key]
@@ -615,7 +616,7 @@ func seedStrip(from url: URL, frame: NSRect, display: CGDirectDisplayID) -> [NSC
 func seedStripFromWallpaper(_ surface: BarSurface) -> [NSColor] {
     guard let url = wallpaperURL(for: surface.screen) else { return [] }
     return seedStrip(from: url, frame: surface.screen.frame,
-                     display: screenID(surface.screen))
+                     display: screenID(surface.screen), barHeight: surface.barHeight)
 }
 
 // The display, with THIS bar's windows taken out of it. Rebuilt when the
@@ -637,7 +638,7 @@ var cachedFilterIDs: Set<CGWindowID> = []
 // safeAreaInsets.top is 0 without a notch. Only menuBarHeight says 30.
 func nativeMenuBarHeight() -> CGFloat {
     if NSApplication.shared.mainMenu == nil { NSApplication.shared.mainMenu = NSMenu() }
-    return NSApplication.shared.mainMenu?.menuBarHeight ?? barHeight
+    return NSApplication.shared.mainMenu?.menuBarHeight ?? barHeightFallback
 }
 
 func captureBehindOwnBar(_ rect: CGRect) async -> CGImage? {
@@ -3034,35 +3035,71 @@ func appIcon(_ name: String) -> NSImage? {
 
 // The bar owns the menu-bar strip, so it is as tall as the strip macOS
 // draws rather than a number tuned to one release — Tahoe changed the
-// height and it can change again. NSMenu.menuBarHeight keeps reporting
-// it while the native bar is auto-hidden, which is the state
-// macos-defaults.sh puts it in and where visibleFrame and
-// safeAreaInsets both read 0. It needs a main menu to read from, and an
-// .accessory app never displays one. Top-level code runs in order, so
-// the menu is set here rather than with the app setup further down.
+// height and it can change again. The strip is NOT one height for every
+// display: NSMenu.menuBarHeight reports only the MAIN display's, so on a
+// machine with a notched built-in and a flat external, both bars drew the
+// notch's height while the external's dropdown menus unfold at its own
+// shorter strip — the bar's lower edge stayed outside every menu.
+//
+// The Window Server keeps one Menubar window PER display, at that
+// display's real strip height, and keeps it in the window list even while
+// the native bar is auto-hidden, which is the state macos-defaults.sh
+// puts it in and where visibleFrame and safeAreaInsets both read 0.
+// Auto-hidden, the window sits slid just ABOVE the display's top edge;
+// shown, just below it; the strip always touches that edge, which is the
+// test — next to x and width — so a read during the slide still lands.
+//
+// The Window Server's own row is the one to ask, but MenuBarAgent's row
+// for the same display carries the same height, so accepting either makes
+// the read survive a release that moves the window's owner. The window
+// NAME is not used at all: kCGWindowName is only delivered to processes
+// holding Screen Recording, and the bar has no reason to ask for it.
+// The heights are points already, and a scaled panel's strip measures
+// more than the legacy 24 (a DELL on a scaled mode reports 30 here), so
+// beyond a per-display read there is no constant worth falling back to
+// except the main display's own value.
+//
+// The fallback read needs a main menu, and an .accessory app never
+// displays one. Top-level code runs in order, so the menu is set here
+// rather than with the app setup further down.
 NSApplication.shared.mainMenu = NSMenu()
-let barHeight: CGFloat = NSApplication.shared.mainMenu?.menuBarHeight ?? 34
+let barHeightFallback: CGFloat = NSApplication.shared.mainMenu?.menuBarHeight ?? 34
 
-// Heights inside the bar follow it instead of being tuned to it, so a
-// release that moves the strip does not leave them adrift. The offsets
-// are the ones the fixed values had at a 34 point bar, so a machine
-// reporting 34 draws exactly what it draws today. Widths are unrelated
-// to the strip and stay fixed.
+// Height of the menu-bar strip THIS display draws, in points.
+func menuBarHeight(for screen: NSScreen) -> CGFloat {
+    let primaryH = NSScreen.screens.first?.frame.height ?? 0
+    let topY = primaryH - screen.frame.maxY // the display's top edge, CG space
+    let menuLevel = Int(CGWindowLevelForKey(.mainMenuWindow))
+    guard let list = CGWindowListCopyWindowInfo([], kCGNullWindowID)
+        as? [[String: Any]] else { return barHeightFallback }
+    var agentHeight: CGFloat = 0 // MenuBarAgent's answer, used if the server's is absent
+    for w in list {
+        guard (w[kCGWindowLayer as String] as? Int) == menuLevel,
+              let owner = w[kCGWindowOwnerName as String] as? String,
+              owner == "Window Server" || owner == "MenuBarAgent",
+              let b = w[kCGWindowBounds as String] as? [String: CGFloat],
+              let x = b["X"], let y = b["Y"], let width = b["Width"],
+              let height = b["Height"], height > 0,
+              height < screen.frame.height / 4 // a strip, not a stray window
+        else { continue }
+        // Slid out of view while auto-hidden (its bottom edge on the
+        // display top), slid back in when shown (its top edge there), and
+        // between the two mid-animation, so require the strip to touch
+        // that edge rather than sit at either end of it.
+        if abs(x - screen.frame.minX) < 2, abs(width - screen.frame.width) < 2,
+           y <= topY + 2, y + height >= topY - 2 {
+            if owner == "Window Server" { return height }
+            if agentHeight == 0 { agentHeight = height }
+        }
+    }
+    return agentHeight > 0 ? agentHeight : barHeightFallback
+}
+
+// Widths are unrelated to the strip and stay fixed; the heights inside
+// the bar follow ITS display's strip instead, and live on BarView.
 let padLeft: CGFloat = 10
 let chipBox: CGFloat = 20
 let chipPad: CGFloat = 2
-let pillHeight: CGFloat = barHeight - 8
-// The workspace chip is a SQUARE, which is what a 20x20 chipBox and a
-// 20 chipPillHeight meant at the shipped bar height. Deriving the height
-// from barHeight alone turned it into a rectangle on any shorter bar and
-// shrank the icon with it. Track chipBox instead, and only give way when
-// the bracket is too short to hold it.
-let chipPillHeight: CGFloat = min(chipBox, pillHeight - 2)
-let chipIcon: CGFloat = chipPillHeight - 2
-// A 4 point radius on a 20 point square reads as a rounded rectangle.
-// Roughly a quarter of the side is what makes it read as a rounded
-// square, which is the shape an app icon already is.
-let chipRadius: CGFloat = chipPillHeight * 0.28
 let radius: CGFloat = 4
 let gap: CGFloat = 14
 
@@ -3087,6 +3124,24 @@ final class BarView: NSView {
     var itemRects: [(String, NSRect)] = []
     var mediaRects: [(String, NSRect)] = []
     var appleRect: NSRect = .zero
+
+    // Heights inside this display's bar follow ITS strip, so a release
+    // — or a second display — that moves one does not leave them adrift.
+    // The offsets are the ones the fixed values had at a 34 point bar, so
+    // a machine reporting 34 draws exactly what it drew before.
+    private var barHeight: CGFloat { surface?.barHeight ?? barHeightFallback }
+    private var pillHeight: CGFloat { barHeight - 8 }
+    // The workspace chip is a SQUARE, which is what a 20x20 chipBox and a
+    // 20 chipPillHeight meant at the shipped bar height. Deriving the
+    // height from barHeight alone turned it into a rectangle on any
+    // shorter bar and shrank the icon with it. Track chipBox instead, and
+    // only give way when the bracket is too short to hold it.
+    private var chipPillHeight: CGFloat { min(chipBox, pillHeight - 2) }
+    private var chipIcon: CGFloat { chipPillHeight - 2 }
+    // A 4 point radius on a 20 point square reads as a rounded rectangle.
+    // Roughly a quarter of the side is what makes it read as a rounded
+    // square, which is the shape an app icon already is.
+    private var chipRadius: CGFloat { chipPillHeight * 0.28 }
 
     override var isFlipped: Bool { false }
 
@@ -3440,8 +3495,9 @@ final class BarWindow: NSWindow {
 
 // The bar owns the top strip. OMACOSY_BAR_STACK=1 drops it one bar-height
 // so it can run alongside another bar for comparison, which is how this
-// was built.
-let stackOffset: CGFloat = ProcessInfo.processInfo.environment["OMACOSY_BAR_STACK"] == nil ? 0 : barHeight
+// was built. The drop is one STRIP of the display it is on, so the stacked
+// bars of two displays of different strips stay out of each other's menus.
+let barStacked = ProcessInfo.processInfo.environment["OMACOSY_BAR_STACK"] != nil
 
 // Bar behaviour from ~/.config/omacosy/bar.conf, same shape as
 // borders.conf. Three keys: two about who owns the menu-bar strip, one
@@ -3530,6 +3586,11 @@ final class BarSurface {
     var fadeStart: Date?
     var fadeTimer: Timer?
 
+    // This display's own menu-bar strip, re-read every place() so a
+    // resolution change moves the bar with it. The Window Server's
+    // Menubar window is per-display; menuBarHeight is not.
+    private(set) var barHeight: CGFloat
+
     // A notched display has no usable centre, so the media capsule joins
     // the left cluster there — the same rule the shell bar applies, but
     // read from the screen itself instead of asked of a helper.
@@ -3569,16 +3630,20 @@ final class BarSurface {
     // display. BarWindow.constrainFrameRect returns the rect untouched, so
     // AppKit does not drag it back on.
     var restFrame: NSRect {
-        NSRect(x: screen.frame.minX, y: screen.frame.maxY - barHeight - stackOffset,
+        NSRect(x: screen.frame.minX, y: screen.frame.maxY - barHeight * (barStacked ? 2 : 1),
                width: screen.frame.width, height: barHeight)
     }
-    var hiddenFrame: NSRect { restFrame.offsetBy(dx: 0, dy: barHeight + stackOffset) }
+    var hiddenFrame: NSRect {
+        restFrame.offsetBy(dx: 0, dy: barHeight * (barStacked ? 2 : 1))
+    }
 
     init(screen: NSScreen, monitorID: String) {
         self.screen = screen
         self.monitorID = monitorID
-        let frame = NSRect(x: screen.frame.minX, y: screen.frame.maxY - barHeight - stackOffset,
-                           width: screen.frame.width, height: barHeight)
+        let h = menuBarHeight(for: screen)
+        self.barHeight = h
+        let frame = NSRect(x: screen.frame.minX, y: screen.frame.maxY - h * (barStacked ? 2 : 1),
+                           width: screen.frame.width, height: h)
         window = BarWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         // On the WINDOW, not just on the backdrop below. An
         // NSVisualEffectView derives its own appearance and picks the
@@ -3705,6 +3770,9 @@ final class BarSurface {
     }
 
     func place() {
+        // Re-read the strip: a resolution change rescales it, and this
+        // runs from the screen-parameters handler after one.
+        barHeight = menuBarHeight(for: screen)
         let frame = restFrame
         // A parked surface is off the display and must stay there; putting
         // it back in the strip would show the bar on a screen change.
@@ -3982,8 +4050,9 @@ let barRevealLevel = NSWindow.Level(rawValue: 1002)
 let barRestLevel = NSWindow.Level(rawValue: 20)
 let revealEdge: CGFloat = 2 // how close to the top edge counts as asking
 // How far below the top edge the pointer must go before a revealed bar
-// goes away again.
-let revealRelease: CGFloat = barHeight + 12
+// goes away again: that display's own strip plus this. Per surface, read
+// where it is compared, because each display's strip is its own.
+let revealReleasePad: CGFloat = 12
 
 // A native fullscreen space on this display. There macOS draws its own black
 // menu bar on a top-edge hover, as on any Mac, and this bar stays out of it:
@@ -4104,7 +4173,7 @@ func pointerAtScreenTop() {
             // comes back, and that is what a top-edge hover should do here.
             setRevealed(true, on: surface)
         }
-    } else if fromTop > revealRelease {
+    } else if fromTop > surface.barHeight + revealReleasePad {
         surface.atTopEdge = false
         // a popup keeps it up: its anchor must not vanish under the pointer
         if surface.revealed, openPopup == nil { setRevealed(false, on: surface) }
@@ -4557,15 +4626,15 @@ func resyncIfGained() {
 // surface is built. A resync that lands after that leaves the strip on
 // the old picture's colour, so seed it again from the picture shown now.
 func reseedStrips() {
-    let jobs = surfaces.compactMap { s -> (BarSurface, URL, NSRect, CGDirectDisplayID)? in
+    let jobs = surfaces.compactMap { s -> (BarSurface, URL, NSRect, CGDirectDisplayID, CGFloat)? in
         guard s.autohide, let url = wallpaperURL(for: s.screen) else { return nil }
-        return (s, url, s.screen.frame, screenID(s.screen))
+        return (s, url, s.screen.frame, screenID(s.screen), s.barHeight)
     }
     // off the main queue: an uncached seed decodes a whole image
     DispatchQueue.global(qos: .userInitiated).async {
         let seeded = jobs.map { job in
             (job.0, job.1.resolvingSymlinksInPath().path,
-             seedStrip(from: job.1, frame: job.2, display: job.3))
+             seedStrip(from: job.1, frame: job.2, display: job.3, barHeight: job.4))
         }
         DispatchQueue.main.async {
             for (surface, key, seed) in seeded {
@@ -4771,7 +4840,7 @@ watch(stateDir, create: false) {
     let t0 = DispatchTime.now().uptimeNanoseconds
     // Everything the seed needs, read HERE, on the main queue. Only an
     // auto-hiding bar draws a strip, so only it is seeded.
-    let jobs = surfaces.filter { $0.autohide }.map { ($0, $0.screen.frame, screenID($0.screen)) }
+    let jobs = surfaces.filter { $0.autohide }.map { ($0, $0.screen.frame, screenID($0.screen), $0.barHeight) }
     guard !jobs.isEmpty else { return }
     let url = URL(fileURLWithPath: now)
     // OFF the main queue, the same rule the rebuild path follows. An
@@ -4779,7 +4848,7 @@ watch(stateDir, create: false) {
     // the bar can be mid-slide while it happens. Left on main it was a
     // stall of that length between the key and the new colour.
     DispatchQueue.global(qos: .userInitiated).async {
-        let seeded = jobs.map { ($0.0, seedStrip(from: url, frame: $0.1, display: $0.2)) }
+        let seeded = jobs.map { ($0.0, seedStrip(from: url, frame: $0.1, display: $0.2, barHeight: $0.3)) }
         DispatchQueue.main.async {
             for (surface, seed) in seeded {
                 // Re-seed rather than clear, and keep the old strip if the
