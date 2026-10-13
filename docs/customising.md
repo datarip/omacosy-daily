@@ -184,6 +184,21 @@ omacosy-window-corners --width 3   # large, the default
 The menu bar, its dropdown popups and the workspace overview keep their own
 borders.
 
+### The Ghostty window shadow
+
+Ghostty draws its own macOS window shadow (`macos-window-shadow`, on by
+default). Under a tiling window manager, and with a translucent Ghostty
+theme, that shadow reads as a black rim around the window — most visible at
+a `small` border width, because a 1 px ring sits flush and does not cover it.
+`GHOSTTY_WINDOW_SHADOW` in `settings.conf` is `on` (Ghostty's default) or
+`off`; `omacosy-ghostty-shadow on|off` changes it at once and records the line
+in `settings.conf` for you, and `omacosy-ghostty-shadow` with no argument
+shows the current state. `omacosy-settings` writes it into
+`~/.config/omacosy/ghostty-settings.conf`, which the managed Ghostty config
+includes. It applies the next time Ghostty launches. `""` leaves Ghostty's
+default. The trade-off of `off` is the loss of the shadow that separates a
+floating (un-tiled) Ghostty window from what is behind it.
+
 ### Whether the bar hides at rest
 
 `AUTOHIDE` in `settings.conf` is `off` (the bar stays visible, the default),

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# omacosy-ghostty-shadow [on|off|status] — Ghostty's own macOS window shadow
+# (Ghostty's `macos-window-shadow`, on by default). No args = status.
+#
+# Under a tiling window manager, and with a translucent Ghostty theme, that
+# shadow reads as a black rim around the window; with the border width at
+# `small` the focus ring sits flush and does not cover it. `off` removes it.
+#
+# The choice is recorded in ~/.config/omacosy/settings.conf as
+# GHOSTTY_WINDOW_SHADOW, so it survives an install and travels to another
+# machine, and reaches Ghostty through ~/.config/omacosy/ghostty-settings.conf
+# — a fragment the managed Ghostty config includes (config/ghostty/config).
+#
+# Ghostty reads its configuration only at launch, so a change applies the next
+# time Ghostty starts. Nothing here restarts it: that would close your windows.
+set -uo pipefail
+
+SC="$HOME/.config/omacosy/settings.conf"
+FRAG="$HOME/.config/omacosy/ghostty-settings.conf"
+
+# What settings.conf records. Absent or unknown means Ghostty's default, on.
+setting() {
+  local v=""
+  [ -f "$SC" ] && v=$(sed -n -E 's|^GHOSTTY_WINDOW_SHADOW="?([a-z]+)"?.*|\1|p' "$SC" | tail -1)
+  case "$v" in on|off) echo "$v" ;; *) echo on ;; esac
+}
+
+write_frag() {   # write_frag <true|false>
+  mkdir -p "$(dirname "$FRAG")"
+  printf '# Written by omacosy-ghostty-shadow / omacosy-settings from settings.conf.\n# Edit that file, not this one.\nmacos-window-shadow = %s\n' "$1" >"$FRAG"
+}
+
+apply() {
+  local want="$1" val
+  [ "$want" = on ] && val=true || val=false
+  write_frag "$val"
+  # Recorded in settings.conf too: install.sh applies it at every run, so the
+  # choice survives a reinstall and a copy of the file restores it elsewhere.
+  if [ -f "$SC" ]; then
+    if grep -qE '^GHOSTTY_WINDOW_SHADOW=' "$SC"; then
+      sed -i '' -E "s|^GHOSTTY_WINDOW_SHADOW=.*|GHOSTTY_WINDOW_SHADOW=\"$want\"|" "$SC"
+    else
+      printf '\n# Ghostty macOS window shadow (see config/settings.template.conf).\nGHOSTTY_WINDOW_SHADOW="%s"\n' "$want" >>"$SC"
+    fi
+  fi
+  printf 'omacosy: ghostty window shadow=%s (macos-window-shadow = %s) — restart Ghostty to apply\n' "$want" "$val"
+}
+
+# the value Ghostty itself resolves, if its binary can be found
+ghostty_bin() {
+  local p
+  for p in "/Applications/Ghostty.app/Contents/MacOS/ghostty" \
+           "$HOME/Applications/Ghostty.app/Contents/MacOS/ghostty"; do
+    [ -x "$p" ] && { echo "$p"; return; }
+  done
+  command -v ghostty 2>/dev/null || true
+}
+
+case "${1:-status}" in
+  on|off) apply "$1" ;;
+  status)
+    s=$(setting)
+    printf 'ghostty window shadow=%s (macos-window-shadow = %s)\n' "$s" \
+      "$([ "$s" = on ] && echo true || echo false)"
+    if [ -f "$FRAG" ]; then
+      printf '  fragment: %s\n' "$(sed -n -E 's|^macos-window-shadow *= *||p' "$FRAG" | tail -1)"
+    else
+      printf '  fragment: absent (Ghostty default)\n'
+    fi
+    bin=$(ghostty_bin)
+    if [ -n "$bin" ]; then
+      printf '  ghostty resolves: %s\n' \
+        "$("$bin" +show-config --default=false 2>/dev/null | sed -n -E 's|^macos-window-shadow *= *||p' | tail -1)"
+    fi
+    ;;
+  *) echo "usage: omacosy-ghostty-shadow [on|off|status]" >&2; exit 1 ;;
+esac

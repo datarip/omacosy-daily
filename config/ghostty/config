@@ -13,6 +13,12 @@
 # colour you set by hand still wins.
 config-file = ?~/.config/omacosy/ghostty-theme.conf
 
+# Settings omacosy-settings applies from ~/.config/omacosy/settings.conf
+# (GHOSTTY_WINDOW_SHADOW). Optional, like the theme file above: absent on a
+# machine that never set one. Read here, before your own config, so a value
+# you set by hand still wins.
+config-file = ?~/.config/omacosy/ghostty-settings.conf
+
 macos-titlebar-style = hidden
 
 # Pin the initial size of NEW windows (in cells). Ghostty otherwise

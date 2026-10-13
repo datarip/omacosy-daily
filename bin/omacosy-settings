@@ -59,7 +59,7 @@ fi
 # A key the file leaves out keeps its default. Empty means "leave it alone".
 TERMINAL="" BROWSER="" EMAIL="" MUSIC="" MESSENGER=""
 APP_WORKSPACE_RULES="" APP_FLOAT_RULES=""
-RING_RADIUS="" WINDOW_CORNER="" BORDER_WIDTH="" SERIALIZE_APP_SPAWNS="0" AUTOHIDE=""
+RING_RADIUS="" WINDOW_CORNER="" BORDER_WIDTH="" GHOSTTY_WINDOW_SHADOW="" SERIALIZE_APP_SPAWNS="0" AUTOHIDE=""
 # shellcheck source=/dev/null
 . "$SETTINGS"
 
@@ -188,6 +188,26 @@ if [ -f "$AERO" ] && ! grep -q '^cmd-ctrl-alt-comma = ' "$AERO" \
   ' "$AERO" > "$AERO.new" && mv -f "$AERO.new" "$AERO" || rm -f "$AERO.new"
   CHANGED=1
   say "added the settings dashboard chord (Super+,)"
+fi
+
+# ── 1b. ghostty window shadow ─────────────────────────────────────
+# Ghostty's own macOS window shadow (macos-window-shadow, default on) reads
+# as a black rim around the window under a tiling WM with a translucent
+# theme. The choice lives in settings.conf, so a copy of that file restores
+# the look on another machine; omacosy-settings writes it into a fragment
+# the managed Ghostty config includes (config/ghostty/config).
+if [ -n "$GHOSTTY_WINDOW_SHADOW" ]; then
+  case "$GHOSTTY_WINDOW_SHADOW" in
+    on|off)
+      SHADOW=true
+      [ "$GHOSTTY_WINDOW_SHADOW" = off ] && SHADOW=false
+      mkdir -p "$HOME/.config/omacosy"
+      printf '# Written by omacosy-settings from settings.conf (GHOSTTY_WINDOW_SHADOW).\n# Edit that file, not this one.\nmacos-window-shadow = %s\n' \
+        "$SHADOW" > "$HOME/.config/omacosy/ghostty-settings.conf"
+      say "ghostty window shadow = $SHADOW (restart Ghostty to apply)"
+      ;;
+    *) warn "GHOSTTY_WINDOW_SHADOW '$GHOSTTY_WINDOW_SHADOW' is not on or off; left alone" ;;
+  esac
 fi
 
 # ── 2. window corners and the focus ring ──────────────────────────

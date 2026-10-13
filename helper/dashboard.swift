@@ -401,6 +401,7 @@ struct DashboardState {
     var wm: WindowManager = .aerospace
     var corners: CornerMode = .rounded
     var borders: BordersMode = .large
+    var ghosttyShadow: Bool = true
     var bar: BarMode = .visible
     var fullscreen: Bool = false
     var termTheme: TerminalThemeMode = .own
@@ -435,6 +436,8 @@ func readState() -> DashboardState {
     }
 
     s.borders = bordersMode(forWidth: borderWidth())
+    // Ghostty's own macOS window shadow: absent means its default, on.
+    s.ghosttyShadow = (readConfKey(SETTINGS, "GHOSTTY_WINDOW_SHADOW") ?? "on") != "off"
 
     var bv = readConfKey(SETTINGS, "AUTOHIDE") ?? ""
     if bv.isEmpty { bv = readConfKey(BARCONF, "autohide") ?? "off" }
@@ -846,14 +849,26 @@ final class OptionsDocView: NSView {
     private let topPad: CGFloat = 11
 
     func contentHeight() -> CGFloat {
-        topPad + CGFloat(rows.count) * (catH + rowH + sectionGap) + 10
+        var h = topPad
+        for (i, _) in rows.enumerated() {
+            if headsCategory(i) { h += catH }
+            h += rowH + sectionGap
+        }
+        return h + 10
+    }
+
+    // A category heading is drawn once per run of rows: two rows that share a
+    // category (Window & UI Corners, Borders, Ghostty Window Shadow) sit under
+    // one heading instead of repeating it.
+    private func headsCategory(_ i: Int) -> Bool {
+        i == 0 || rows[i].category != rows[i - 1].category
     }
 
     override func layout() {
         super.layout()
         var top = topPad
-        for row in rows {
-            top += catH
+        for (i, row) in rows.enumerated() {
+            if headsCategory(i) { top += catH }
             if let seg = row.seg {
                 let sz = seg.sizeThatFits()
                 let segTop = top + (rowH - sz.height) / 2
@@ -886,10 +901,12 @@ final class OptionsDocView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         var top = topPad
-        for row in rows {
-            drawTopLeft(row.category, nerdFont("Bold", 13), palette.accent,
-                        x: 0, top: top, height: bounds.height)
-            top += catH
+        for (i, row) in rows.enumerated() {
+            if headsCategory(i) {
+                drawTopLeft(row.category, nerdFont("Bold", 13), palette.accent,
+                            x: 0, top: top, height: bounds.height)
+                top += catH
+            }
             let rowMid = top + 20
             drawMidLeft(row.title, nerdFont("Bold", 13), palette.label,
                         x: 0, midTop: rowMid, height: bounds.height)
@@ -975,6 +992,8 @@ final class OptionsTabView: NSView, ScrollStepTab {
         let wmSeg = makeSeg(["AeroSpace", "OmniWM"], original.wm.rawValue)
         let cornerSeg = makeSeg(["Rounded", "Square"], original.corners.rawValue)
         let bordersSeg = makeSeg(["S", "M", "L"], original.borders.rawValue)
+        let shadowToggle = ToggleView()
+        shadowToggle.isOn = original.ghosttyShadow
         let barSeg = makeSeg(["Visible", "Hidden", "Auto"], original.bar.rawValue)
         let fsToggle = ToggleView()
         fsToggle.isOn = original.fullscreen
@@ -997,6 +1016,9 @@ final class OptionsTabView: NSView, ScrollStepTab {
                       desc: "MacOS window corners and Omacosy UI components outside the menu bar and the Workspaces overview.", seg: cornerSeg),
             OptionRow(category: "Windows", title: "Borders",
                       desc: "How thick the focused-window ring and Omacosy's cards are. S = 1 px, M = 2 px, L = 3 px. The menu bar and the Workspaces overview keep their own.", seg: bordersSeg),
+            OptionRow(category: "Windows", title: "Ghostty Window Shadow",
+                      desc: "Ghostty's own macOS window shadow. Off removes the black rim a shadow makes around a dark, translucent Ghostty window under a tiling window manager. Applies when Ghostty restarts.",
+                      toggle: shadowToggle),
             OptionRow(category: "Bar", title: "Menu Bar Mode",
                       desc: "Keep the bar visible, let it hide at rest, or follow the display.", seg: barSeg),
             OptionRow(category: "Fullscreen", title: "Full Screen Mode",
@@ -1055,12 +1077,18 @@ final class OptionsTabView: NSView, ScrollStepTab {
     }
 
     private func save() {
-        let wm = WindowManager(rawValue: rows[0].seg!.index) ?? original.wm
-        let corners = CornerMode(rawValue: rows[1].seg!.index) ?? original.corners
-        let borders = BordersMode(rawValue: rows[2].seg!.index) ?? original.borders
-        let bar = BarMode(rawValue: rows[3].seg!.index) ?? original.bar
-        let fullscreen = rows[4].toggle?.isOn ?? original.fullscreen
-        let termTheme = TerminalThemeMode(rawValue: rows[5].seg!.index) ?? original.termTheme
+        // look rows up by title, not by position: the list grows, and a fixed
+        // index silently points at the wrong row the moment a row is inserted
+        func segIndex(_ title: String) -> Int? { rows.first { $0.title == title }?.seg?.index }
+        func toggleValue(_ title: String) -> Bool? { rows.first { $0.title == title }?.toggle?.isOn }
+
+        let wm = WindowManager(rawValue: segIndex("Window Manager") ?? original.wm.rawValue) ?? original.wm
+        let corners = CornerMode(rawValue: segIndex("Window & UI Corners") ?? original.corners.rawValue) ?? original.corners
+        let borders = BordersMode(rawValue: segIndex("Borders") ?? original.borders.rawValue) ?? original.borders
+        let bar = BarMode(rawValue: segIndex("Menu Bar Mode") ?? original.bar.rawValue) ?? original.bar
+        let fullscreen = toggleValue("Full Screen Mode") ?? original.fullscreen
+        let termTheme = TerminalThemeMode(rawValue: segIndex("Terminal Auto-Theme") ?? original.termTheme.rawValue) ?? original.termTheme
+        let ghosttyShadow = toggleValue("Ghostty Window Shadow") ?? original.ghosttyShadow
 
         // the machine-wide terminal opacity
         var opacityChanged = false
@@ -1088,6 +1116,10 @@ final class OptionsTabView: NSView, ScrollStepTab {
         if borders != original.borders {
             setConfKey(SETTINGS, "BORDER_WIDTH", ["small", "medium", "large"][borders.rawValue])
             steps.append("\(HOME)/.local/bin/omacosy-window-corners --width \(Int(bordersWidth(borders)))")
+        }
+        if ghosttyShadow != original.ghosttyShadow {
+            // the command records the choice in settings.conf itself
+            steps.append("\(HOME)/.local/bin/omacosy-ghostty-shadow \(ghosttyShadow ? "on" : "off")")
         }
         if bar != original.bar {
             let v = ["off", "on", "auto"][bar.rawValue]

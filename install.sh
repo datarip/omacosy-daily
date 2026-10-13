@@ -908,6 +908,7 @@ link "$REPO_DIR/bin/omacosy-bar-autohide" "$HOME/.local/bin/omacosy-bar-autohide
 link "$REPO_DIR/bin/omacosy-settings" "$HOME/.local/bin/omacosy-settings"
 link "$REPO_DIR/bin/omacosy-ws-prune" "$HOME/.local/bin/omacosy-ws-prune"
 link "$REPO_DIR/bin/omacosy-window-corners" "$HOME/.local/bin/omacosy-window-corners"
+link "$REPO_DIR/bin/omacosy-ghostty-shadow" "$HOME/.local/bin/omacosy-ghostty-shadow"
 link "$REPO_DIR/bin/omacosy-spawn-cmd" "$HOME/.local/bin/omacosy-spawn-cmd"
 link "$REPO_DIR/bin/omacosy-harvest-zshrc" "$HOME/.local/bin/omacosy-harvest-zshrc"
 link "$REPO_DIR/bin/omacosy-dashboard" "$HOME/.local/bin/omacosy-dashboard"
