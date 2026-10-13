@@ -21,6 +21,13 @@
 #   omacosy-window-corners 8               any radius, 0 to 64, in points
 #   omacosy-window-corners square --panels panels as well as windows
 #   omacosy-window-corners square --no-ring leave the ring alone
+#   omacosy-window-corners --width 2       ring/modal width: 1 small, 2 medium, 3 large
+#
+# --width writes borders.conf's `width`, which is the ONE number the focus
+# ring and every Omacosy-drawn modal share (the Super+K cheatsheet, the
+# settings dashboard and the Theme Studio editor). It also re-syncs the ring
+# radius, because the concentric rule below reads width. The bar — its pills
+# and its dropdown popups — and the workspace overview keep their borders.
 #
 # `square` and a number touch standard windows only, because panels are
 # small and square ones read as unfinished rather than deliberate. `round`
@@ -82,6 +89,7 @@ show() {
   done
   if [ -f "$BORDERS" ]; then
     printf '  %s  %-24s %s\n' "ring   " "borders.conf radius" "$(conf_num radius '?')"
+    printf '  %s  %-24s %s\n' "ring   " "borders.conf width" "$(conf_num width '?')"
   else
     printf '  %s  %-24s %s\n' "ring   " "borders.conf" "missing"
   fi
@@ -116,18 +124,42 @@ usage() {
 MODE=""
 PANELS=0
 RING=1
-for arg in "$@"; do
-  case "$arg" in
-    --panels|-p)  PANELS=1 ;;
-    --no-ring|-R) RING=0 ;;
+WIDTH=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --panels|-p)  PANELS=1; shift ;;
+    --no-ring|-R) RING=0; shift ;;
+    --width|-w)
+      [ $# -ge 2 ] || { echo "omacosy-window-corners: --width needs a value" >&2; usage 1; }
+      WIDTH="$2"; shift 2 ;;
     -h|--help)    usage 0 ;;
-    -*)           echo "omacosy-window-corners: unknown option $arg" >&2; usage 1 ;;
+    -*)           echo "omacosy-window-corners: unknown option $1" >&2; usage 1 ;;
     *)            [ -n "$MODE" ] && { echo "omacosy-window-corners: one mode at a time" >&2; usage 1; }
-                  MODE="$arg" ;;
+                  MODE="$1"; shift ;;
   esac
 done
 
+# The shared border width (borders.conf `width`): 1 small, 2 medium, 3 large.
+# Written before the radius is synced below, so the concentric rule uses it.
+if [ -n "$WIDTH" ]; then
+  case "$WIDTH" in
+    1|2|3) ;;
+    *) echo "omacosy-window-corners: a width is 1, 2 or 3, got $WIDTH" >&2; exit 1 ;;
+  esac
+  if [ ! -f "$BORDERS" ]; then
+    echo "omacosy-window-corners: no $BORDERS, width left alone" >&2
+    exit 1
+  fi
+  sed -i '' -E "s|^width=.*|width=$WIDTH|" "$BORDERS"
+fi
+
 if [ -z "$MODE" ]; then
+  if [ -n "$WIDTH" ]; then
+    # a width change moves the ring radius too (concentric rule), so re-sync
+    # it against the window radius currently in force
+    [ "$RING" = 1 ] && sync_ring "$(read_key "$KEY1")"
+    exit 0
+  fi
   echo "omacosy-window-corners: current state"
   show
   exit 0

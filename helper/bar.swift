@@ -1776,6 +1776,23 @@ func windowCornerRadius(_ fallback: CGFloat) -> CGFloat {
     return CGFloat(n.doubleValue)
 }
 
+// The border width the focused-window ring and every Omacosy-drawn modal
+// share, from ~/.config/omacosy/borders.conf (the Borders row in the
+// Options tab writes it). Absent means the shipped 3 (large).
+func borderWidth() -> CGFloat {
+    let path = NSHomeDirectory() + "/.config/omacosy/borders.conf"
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return 3 }
+    for raw in text.split(separator: "\n") {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        guard !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { continue }
+        if line[..<eq].trimmingCharacters(in: .whitespaces) == "width",
+           let v = Double(line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)) {
+            return CGFloat(v)
+        }
+    }
+    return 3
+}
+
 final class PopupView: NSView {
     var rows: [PopupRow] = []
     private var rowRects: [(Int, NSRect)] = []
@@ -2835,12 +2852,13 @@ final class CheatsheetView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let corner = min(windowCornerRadius(popupRadius), min(bounds.width, bounds.height) / 2)
-        let body = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+        let w = borderWidth()
+        let body = NSBezierPath(roundedRect: bounds.insetBy(dx: w / 2, dy: w / 2),
                                 xRadius: corner, yRadius: corner)
         palette.barBG.setFill()
         body.fill()
         palette.accent.setStroke()
-        body.lineWidth = 1
+        body.lineWidth = w
         body.stroke()
 
         let title = filter.isEmpty

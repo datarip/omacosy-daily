@@ -322,6 +322,7 @@ Your values live in one file outside the clone,
 | `APP_WORKSPACE_RULES` | the workspace an app's windows open on |
 | `APP_FLOAT_RULES` | the windows that float instead of tile, under OmniWM |
 | `RING_RADIUS`, `WINDOW_CORNER` | the focus ring radius, and the radius macOS draws window corners with. The whole Settings dashboard follows the same corner — buttons, toggles, dropdowns, chips, the palette swatches and the colour wells, plus the card and its theme thumbnails — and so do the `Super+K` cheatsheet and the popup panel under a bar pill. The bar's own pills and the workspace overview stay rounded by choice |
+| `BORDER_WIDTH` | how thick the borders are: `small`, `medium` or `large` (1, 2 or 3 px). One value is shared by the focused-window ring, the `Super+K` cheatsheet, the Settings dashboard and the Theme Studio editor, which is what the Options tab's **Borders** row (S/M/L) writes. The menu bar, its dropdown popups and the workspace overview keep their own borders |
 | `AUTOHIDE` | whether the bar hides at rest: `off`, `on` or `auto`. `omacosy-bar-autohide` keeps it current, so your choice survives a reinstall |
 | `SERIALIZE_APP_SPAWNS` | one window at a time from a burst of presses on the music and messenger chords |
 
@@ -393,7 +394,7 @@ The commands you run:
 | `omacosy-toggle [on\|off]` | parks the whole setup without uninstalling it. No argument flips |
 | `omacosy-bar-autohide on\|off\|auto\|status` | sets whether the bar hides at rest, and the top gap that goes with it |
 | `omacosy-solo-fullscreen on\|off\|status` | a workspace with one tiled window fills the display. Off by default |
-| `omacosy-window-corners [square\|round\|<radius>]` | sets the radius macOS draws window corners with; the whole Settings dashboard (buttons, toggles, swatches, the colour wells, the card and its theme thumbnails), the `Super+K` cheatsheet and the popup panel under a bar pill follow it, while the bar's pills and the overview stay rounded. No argument shows it |
+| `omacosy-window-corners [square\|round\|<radius>] [--width <1\|2\|3>]` | sets the radius macOS draws window corners with; the whole Settings dashboard (buttons, toggles, swatches, the colour wells, the card and its theme thumbnails), the `Super+K` cheatsheet and the popup panel under a bar pill follow it, while the bar's pills and the overview stay rounded. `--width` (1 small, 2 medium, 3 large) sets the border width shared by the focused-window ring, the `Super+K` cheatsheet, the Settings dashboard and the Theme Studio editor, and re-syncs the ring radius; the menu bar, its dropdown popups and the overview keep their borders. No argument shows it |
 | `omacosy-harvest-zshrc` | moves the lines installers appended to `~/.zshrc` into `~/.zshrc.local` |
 | `omacosy-term-auto-theme on\|off\|status` | whether the terminal and its tools follow the wallpaper theme. Off by default; the desktop, the bar, the ring and the cheat sheet always follow |
 | `theme-set <name>` | switches the whole theme |

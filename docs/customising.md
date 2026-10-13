@@ -166,6 +166,24 @@ own preference never reaches them. They read the same value and follow it
 too, and they pick it up with no relaunch. The bar's own pills and the
 workspace overview are left rounded by choice.
 
+### How thick the borders are
+
+`BORDER_WIDTH` in `settings.conf` is `small`, `medium` or `large` (1, 2 or
+3 px). One value is shared by the focused-window ring, the `Super+K`
+cheatsheet, the `Super+,` Settings dashboard and the Theme Studio editor,
+so they always match — it is what the Options tab's **Borders** row (S/M/L)
+writes. To change it from a terminal:
+
+```sh
+omacosy-window-corners --width 1   # small
+omacosy-window-corners --width 2   # medium
+omacosy-window-corners --width 3   # large, the default
+```
+
+`--width` also re-syncs the ring radius to the new number (the rule above).
+The menu bar, its dropdown popups and the workspace overview keep their own
+borders.
+
 ### Whether the bar hides at rest
 
 `AUTOHIDE` in `settings.conf` is `off` (the bar stays visible, the default),
@@ -210,7 +228,7 @@ run it once soon after the install. It backs up both files to
 | `~/.zshrc.local` | kept | — |
 | `aerospace.toml` | regenerated | writes your values back |
 | OmniWM `settings.toml` | regenerated | writes your rules back, under OmniWM |
-| `~/.config/omacosy/borders.conf` | re-copied | writes the ring radius back |
+| `~/.config/omacosy/borders.conf` | re-copied | writes the ring radius and border width back |
 | `config/apps.local.conf` in the clone | read | rewritten from `settings.conf` |
 | the window corner preference | kept | set from `WINDOW_CORNER` |
 

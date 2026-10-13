@@ -392,6 +392,7 @@ func logoImage() -> NSImage? {
 
 enum WindowManager: Int { case aerospace = 0, omniwm = 1 }
 enum CornerMode: Int { case rounded = 0, square = 1 }
+enum BordersMode: Int { case small = 0, medium = 1, large = 2 }
 enum BarMode: Int { case visible = 0, hidden = 1, auto = 2 }
 enum TerminalThemeMode: Int { case own = 0, follow = 1 }
 enum WeatherUnit: Int { case celsius = 0, fahrenheit = 1 }
@@ -399,10 +400,22 @@ enum WeatherUnit: Int { case celsius = 0, fahrenheit = 1 }
 struct DashboardState {
     var wm: WindowManager = .aerospace
     var corners: CornerMode = .rounded
+    var borders: BordersMode = .large
     var bar: BarMode = .visible
     var fullscreen: Bool = false
     var termTheme: TerminalThemeMode = .own
     var weatherUnit: WeatherUnit = .celsius
+}
+
+// The three widths behind the S/M/L segmented control, and the width a live
+// borders.conf maps back to. Anything above the top step still reads large.
+func bordersWidth(_ m: BordersMode) -> CGFloat {
+    switch m { case .small: return 1; case .medium: return 2; case .large: return 3 }
+}
+func bordersMode(forWidth w: CGFloat) -> BordersMode {
+    if w <= 1.5 { return .small }
+    if w <= 2.5 { return .medium }
+    return .large
 }
 
 let SETTINGS = HOME + "/.config/omacosy/settings.conf"
@@ -420,6 +433,8 @@ func readState() -> DashboardState {
     if cc == 0, let d = Double(cout.trimmingCharacters(in: .whitespacesAndNewlines)), d < 5 {
         s.corners = .square
     }
+
+    s.borders = bordersMode(forWidth: borderWidth())
 
     var bv = readConfKey(SETTINGS, "AUTOHIDE") ?? ""
     if bv.isEmpty { bv = readConfKey(BARCONF, "autohide") ?? "off" }
@@ -487,6 +502,24 @@ func windowCornerRadius(_ fallback: CGFloat) -> CGFloat {
     guard let n = UserDefaults.standard.object(forKey: "NSConvolutionOverride1") as? NSNumber
     else { return fallback }
     return CGFloat(n.doubleValue)
+}
+
+// The border width the focused-window ring and every Omacosy-drawn modal
+// share, from ~/.config/omacosy/borders.conf. The ring daemon reads the same
+// number, so one line drives windows and modals together. Absent means the
+// shipped 3 (large). The Borders row in the Options tab writes it back.
+func borderWidth() -> CGFloat {
+    let path = HOME + "/.config/omacosy/borders.conf"
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return 3 }
+    for raw in text.split(separator: "\n") {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        guard !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { continue }
+        if line[..<eq].trimmingCharacters(in: .whitespaces) == "width",
+           let v = Double(line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)) {
+            return CGFloat(v)
+        }
+    }
+    return 3
 }
 
 // --- controls --------------------------------------------------------------
@@ -941,6 +974,7 @@ final class OptionsTabView: NSView, ScrollStepTab {
 
         let wmSeg = makeSeg(["AeroSpace", "OmniWM"], original.wm.rawValue)
         let cornerSeg = makeSeg(["Rounded", "Square"], original.corners.rawValue)
+        let bordersSeg = makeSeg(["S", "M", "L"], original.borders.rawValue)
         let barSeg = makeSeg(["Visible", "Hidden", "Auto"], original.bar.rawValue)
         let fsToggle = ToggleView()
         fsToggle.isOn = original.fullscreen
@@ -961,6 +995,8 @@ final class OptionsTabView: NSView, ScrollStepTab {
                       seg: wmSeg),
             OptionRow(category: "Windows", title: "Window & UI Corners",
                       desc: "MacOS window corners and Omacosy UI components outside the menu bar and the Workspaces overview.", seg: cornerSeg),
+            OptionRow(category: "Windows", title: "Borders",
+                      desc: "How thick the focused-window ring and Omacosy's cards are. S = 1 px, M = 2 px, L = 3 px. The menu bar and the Workspaces overview keep their own.", seg: bordersSeg),
             OptionRow(category: "Bar", title: "Menu Bar Mode",
                       desc: "Keep the bar visible, let it hide at rest, or follow the display.", seg: barSeg),
             OptionRow(category: "Fullscreen", title: "Full Screen Mode",
@@ -1021,9 +1057,10 @@ final class OptionsTabView: NSView, ScrollStepTab {
     private func save() {
         let wm = WindowManager(rawValue: rows[0].seg!.index) ?? original.wm
         let corners = CornerMode(rawValue: rows[1].seg!.index) ?? original.corners
-        let bar = BarMode(rawValue: rows[2].seg!.index) ?? original.bar
-        let fullscreen = rows[3].toggle?.isOn ?? original.fullscreen
-        let termTheme = TerminalThemeMode(rawValue: rows[4].seg!.index) ?? original.termTheme
+        let borders = BordersMode(rawValue: rows[2].seg!.index) ?? original.borders
+        let bar = BarMode(rawValue: rows[3].seg!.index) ?? original.bar
+        let fullscreen = rows[4].toggle?.isOn ?? original.fullscreen
+        let termTheme = TerminalThemeMode(rawValue: rows[5].seg!.index) ?? original.termTheme
 
         // the machine-wide terminal opacity
         var opacityChanged = false
@@ -1047,6 +1084,10 @@ final class OptionsTabView: NSView, ScrollStepTab {
         if corners != original.corners {
             setConfKey(SETTINGS, "WINDOW_CORNER", corners == .square ? "0.1" : "")
             steps.append("\(HOME)/.local/bin/omacosy-window-corners \(corners == .square ? "square" : "round")")
+        }
+        if borders != original.borders {
+            setConfKey(SETTINGS, "BORDER_WIDTH", ["small", "medium", "large"][borders.rawValue])
+            steps.append("\(HOME)/.local/bin/omacosy-window-corners --width \(Int(bordersWidth(borders)))")
         }
         if bar != original.bar {
             let v = ["off", "on", "auto"][bar.rawValue]
@@ -10621,12 +10662,13 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
     override func draw(_ dirtyRect: NSRect) {
         // the same card chrome as the dashboard: bar background, accent rim
         let corner = min(windowCornerRadius(10), min(bounds.width, bounds.height) / 2)
-        let body = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+        let w = borderWidth()
+        let body = NSBezierPath(roundedRect: bounds.insetBy(dx: w / 2, dy: w / 2),
                                 xRadius: corner, yRadius: corner)
         (palette.barBG).setFill()
         body.fill()
         palette.accent.setStroke()
-        body.lineWidth = 1
+        body.lineWidth = w
         body.stroke()
 
         drawMidCenter("✕", nerdFont("Regular", 12), palette.muted,
@@ -14426,7 +14468,12 @@ final class RootView: NSView {
         logoView.imageScaling = .scaleProportionallyUpOrDown
         addSubview(logoView)
         addSubview(options)
-        options.onApplied = { [weak self] in self?.needsDisplay = true }
+        options.onApplied = { [weak self] in
+            self?.needsDisplay = true
+            // an open Theme Studio editor draws the same border width, so it
+            // must pick up a saved Borders change without waiting for a tab
+            ThemeEditor.refreshColors()
+        }
         themes.onApplied = { [weak self] in self?.paletteChanged() }
         reloadLogo()
     }
@@ -14511,11 +14558,12 @@ final class RootView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let corner = min(windowCornerRadius(10), min(bounds.width, bounds.height) / 2)
-        let body = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: corner, yRadius: corner)
+        let w = borderWidth()
+        let body = NSBezierPath(roundedRect: bounds.insetBy(dx: w / 2, dy: w / 2), xRadius: corner, yRadius: corner)
         palette.barBG.setFill()
         body.fill()
         palette.accent.setStroke()
-        body.lineWidth = 1
+        body.lineWidth = w
         body.stroke()
 
         // tab strip

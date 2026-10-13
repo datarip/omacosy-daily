@@ -59,7 +59,7 @@ fi
 # A key the file leaves out keeps its default. Empty means "leave it alone".
 TERMINAL="" BROWSER="" EMAIL="" MUSIC="" MESSENGER=""
 APP_WORKSPACE_RULES="" APP_FLOAT_RULES=""
-RING_RADIUS="" WINDOW_CORNER="" SERIALIZE_APP_SPAWNS="0" AUTOHIDE=""
+RING_RADIUS="" WINDOW_CORNER="" BORDER_WIDTH="" SERIALIZE_APP_SPAWNS="0" AUTOHIDE=""
 # shellcheck source=/dev/null
 . "$SETTINGS"
 
@@ -191,11 +191,33 @@ if [ -f "$AERO" ] && ! grep -q '^cmd-ctrl-alt-comma = ' "$AERO" \
 fi
 
 # ── 2. window corners and the focus ring ──────────────────────────
-# install.sh re-copies borders.conf, so the ring radius goes back to the
-# default. The window corner radius is a global preference that no
-# installer writes. omacosy-window-corners sets it and keeps the ring
-# concentric with it, so a set WINDOW_CORNER decides the ring radius.
+# install.sh re-copies borders.conf, so the ring radius and the border
+# width go back to the default. The window corner radius is a global
+# preference that no installer writes. omacosy-window-corners sets it and
+# keeps the ring concentric with it, so a set WINDOW_CORNER decides the
+# ring radius.
 RING_BEFORE="$(cksum < "$BORDERS" 2>/dev/null)"
+
+# The shared border width (borders.conf `width`): the focus ring and every
+# Omacosy-drawn modal draw from it. small/medium/large = 1/2/3 px. Writing
+# it moves the ring radius too (concentric rule); the steps below resync.
+BORDERS_WIDTH=""
+case "$BORDER_WIDTH" in
+  small)  BORDERS_WIDTH=1 ;;
+  medium) BORDERS_WIDTH=2 ;;
+  large)  BORDERS_WIDTH=3 ;;
+  "") ;;
+  *) warn "BORDER_WIDTH '$BORDER_WIDTH' is not small, medium or large; width left alone" ;;
+esac
+if [ -n "$BORDERS_WIDTH" ]; then
+  if [ -f "$BORDERS" ]; then
+    sed -i '' -E "s|^width=.*|width=$BORDERS_WIDTH|" "$BORDERS"
+  else
+    warn "no $BORDERS; border width left alone"
+    BORDERS_WIDTH=""
+  fi
+fi
+
 if [ -n "$WINDOW_CORNER" ]; then
   if ! is_number "$WINDOW_CORNER"; then
     warn "WINDOW_CORNER '$WINDOW_CORNER' is not a number; corners left alone"
@@ -213,6 +235,9 @@ elif [ -n "$RING_RADIUS" ] && [ -f "$BORDERS" ]; then
   else
     warn "RING_RADIUS '$RING_RADIUS' is not a number; ring left alone"
   fi
+elif [ -n "$BORDERS_WIDTH" ] && [ -x "$BIN/omacosy-window-corners" ]; then
+  # no explicit radius: keep the ring concentric with the new width
+  "$BIN/omacosy-window-corners" --width "$BORDERS_WIDTH" >/dev/null 2>&1
 fi
 if [ -f "$BORDERS" ] && [ "$(cksum < "$BORDERS")" != "$RING_BEFORE" ]; then
   # restarted, not left to notice: sed replaces the file it watches
