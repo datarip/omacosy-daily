@@ -115,6 +115,24 @@ finishes, then returns it to normal: Save → "Saving…", Apply & Save →
 "Applying…", Export → "Exporting…", Clear Cache → "Flushing…", Install
 Update → "Updating…".
 
+## Dropdowns
+
+A dropdown is never a native menu (the glass `NSMenu`): the Theme Editor's
+Method and Presets pickers, and the Wallpapers tab's **Sort Order** and
+**Aspect Ratio** pickers, all use one component.
+
+- **The trigger** (`PopupButtonView`, `WHDropdown`) is a `windowCornerRadius(6)`
+  box: `palette.itemBG` at 0.35, a 1 px `palette.muted` border at 0.35, the
+  current choice in Regular 12 `palette.label` at the left, and a `\u{f078}`
+  chevron Regular 9 `palette.muted` at `bounds.width - 15`. A click commits any
+  open field first.
+- **The card** (`MethodPicker` / `MethodPickerRoot`) is a borderless child
+  window: `palette.barBG` at `windowCornerRadius(10)`, a 1 px `palette.accent`
+  border, and a Bold 12 `palette.accent` header naming the choice. Rows are 30 pt
+  with Regular 12 `palette.label`; the selected row is `palette.accent` at 0.85
+  filled, in `palette.barBG`, with a `\u{f00c}` tick. The card is sized to its
+  list (`min(430, rows + 52)`), so a short list is a short menu.
+
 ## The dashboard tabs
 
 Every tab draws its first content title on one shared line: its centre 16 pt

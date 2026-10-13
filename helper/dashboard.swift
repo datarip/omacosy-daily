@@ -7272,13 +7272,17 @@ final class MethodPicker: NSObject {
     private var completion: ((String) -> Void)?
     private var monitors: [Any] = []
     private let W: CGFloat = 340
-    private let H: CGFloat = 430
+    // sized to the list at init, so a short dropdown is a short card; the long
+    // Method/Presets lists still cap at the original 430
+    private let H: CGFloat
 
     private init(rows: [Row], strips: [String: [String]], currentMethod: String,
                  title: String, completion: @escaping (String) -> Void) {
         self.rows = rows
         self.completion = completion
-        window = PickerWindow(contentRect: NSRect(x: 0, y: 0, width: W, height: H),
+        let h = min(430, max(80, MethodPickerList.height(for: rows) + 20 + 32))
+        self.H = h
+        window = PickerWindow(contentRect: NSRect(x: 0, y: 0, width: W, height: h),
                               styleMask: .borderless, backing: .buffered, defer: false)
         super.init()
         window.isOpaque = false
@@ -13413,9 +13417,9 @@ func whDrawGlyphCentered(_ glyph: String, in r: NSRect, color: NSColor, size: CG
     CTLineDraw(line, ctx)
 }
 
-// A small dropdown in the house style: a rounded box that shows the current
-// choice and pops a native menu. The menu runs its own tracking loop, so
-// the dashboard's Esc/outside-click monitors never see its events.
+// A dropdown in the house style, matching the Theme Editor's: a rounded box
+// that shows the current choice and opens the same dark MethodPicker card,
+// rather than a native (glass) menu.
 final class WHDropdown: NSView {
     var title = "" { didSet { needsDisplay = true } }
     var items: [String] = []
@@ -13426,32 +13430,27 @@ final class WHDropdown: NSView {
         let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
         palette.itemBG.withAlphaComponent(0.35).setFill(); r.fill()
         palette.muted.withAlphaComponent(0.35).setStroke(); r.lineWidth = 1; r.stroke()
-        let f = nerdFont("Regular", 11)
-        drawMidLeft(truncate(title, f, bounds.width - 26), f, palette.label,
-                    x: 9, midTop: bounds.height / 2, height: bounds.height)
-        drawMidCenter("\u{f078}", nerdFont("Regular", 8), palette.muted,
-                      centerX: bounds.width - 12, midTop: bounds.height / 2, height: bounds.height)
+        let f = nerdFont("Regular", 12)
+        drawMidLeft(truncate(title, f, bounds.width - 40), f, palette.label,
+                    x: 10, midTop: bounds.height / 2, height: bounds.height)
+        drawMidCenter("\u{f078}", nerdFont("Regular", 9), palette.muted,
+                      centerX: bounds.width - 15, midTop: bounds.height / 2, height: bounds.height)
     }
 
     override func mouseDown(with event: NSEvent) {
+        // a click commits whatever field is being edited first, like every
+        // other button in the dashboard
         window?.makeFirstResponder(nil)
         guard !items.isEmpty else { return }
-        let menu = NSMenu()
-        menu.appearance = NSAppearance(named: .darkAqua)
-        for (i, it) in items.enumerated() {
-            let mi = NSMenuItem(title: it, action: #selector(pickItem(_:)), keyEquivalent: "")
-            mi.target = self
-            mi.tag = i
-            mi.state = i == selectedIndex ? .on : .off
-            menu.addItem(mi)
+        let rows = items.map { MethodPicker.Row(header: nil, value: $0, label: $0) }
+        let current = items.indices.contains(selectedIndex) ? items[selectedIndex] : ""
+        MethodPicker.present(from: self, rows: rows, strips: [:],
+                             currentMethod: current, title: toolTip ?? "Select") { [weak self] value in
+            guard let self, let i = self.items.firstIndex(of: value),
+                  i != self.selectedIndex else { return }
+            self.selectedIndex = i
+            self.onPick?(i)
         }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: bounds.height + 2), in: self)
-    }
-
-    @objc private func pickItem(_ sender: NSMenuItem) {
-        guard sender.tag != selectedIndex else { return }
-        selectedIndex = sender.tag
-        onPick?(sender.tag)
     }
     override var acceptsFirstResponder: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
