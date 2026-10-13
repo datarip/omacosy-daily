@@ -394,6 +394,7 @@ enum WindowManager: Int { case aerospace = 0, omniwm = 1 }
 enum CornerMode: Int { case rounded = 0, square = 1 }
 enum BarMode: Int { case visible = 0, hidden = 1, auto = 2 }
 enum TerminalThemeMode: Int { case own = 0, follow = 1 }
+enum WeatherUnit: Int { case celsius = 0, fahrenheit = 1 }
 
 struct DashboardState {
     var wm: WindowManager = .aerospace
@@ -401,6 +402,7 @@ struct DashboardState {
     var bar: BarMode = .visible
     var fullscreen: Bool = false
     var termTheme: TerminalThemeMode = .own
+    var weatherUnit: WeatherUnit = .celsius
 }
 
 let SETTINGS = HOME + "/.config/omacosy/settings.conf"
@@ -436,7 +438,44 @@ func readState() -> DashboardState {
     } else {
         s.termTheme = (readConfKey(OLD_AUTOCONF, "auto-theme") ?? "off") == "on" ? .follow : .own
     }
+
+    s.weatherUnit = readWeatherUnit()
     return s
+}
+
+// The weather scale lives in ~/.config/omacosy/weather.json, written by
+// omacosy-weather. Absent, unreadable or unknown all mean the bar's own
+// default, celsius, so the row is truthful on a machine that never set it.
+func weatherUnit(fromJSON data: Data?) -> WeatherUnit {
+    guard let data,
+          let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+          let unit = obj["unit"] as? String
+    else { return .celsius }
+    return unit.lowercased() == "fahrenheit" ? .fahrenheit : .celsius
+}
+
+func readWeatherUnit() -> WeatherUnit {
+    weatherUnit(fromJSON: FileManager.default.contents(atPath: HOME + "/.config/omacosy/weather.json"))
+}
+
+func weatherUnitSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)"); if !ok { failures += 1 }
+    }
+    check("absent -> celsius", weatherUnit(fromJSON: nil) == .celsius)
+    check("fahrenheit parsed", weatherUnit(fromJSON: Data(#"{"unit":"fahrenheit"}"#.utf8)) == .fahrenheit)
+    check("celsius parsed", weatherUnit(fromJSON: Data(#"{"unit":"celsius"}"#.utf8)) == .celsius)
+    check("case-insensitive", weatherUnit(fromJSON: Data(#"{"unit":"Fahrenheit"}"#.utf8)) == .fahrenheit)
+    check("unknown unit -> celsius", weatherUnit(fromJSON: Data(#"{"unit":"kelvin"}"#.utf8)) == .celsius)
+    check("location only -> celsius", weatherUnit(fromJSON: Data(#"{"location":"Lyon"}"#.utf8)) == .celsius)
+    check("garbage -> celsius", weatherUnit(fromJSON: Data("not json".utf8)) == .celsius)
+    print(failures == 0 ? "weather-unit selftest: all checks passed"
+                        : "weather-unit selftest: \(failures) failed")
+    return failures
+}
+if CommandLine.arguments.contains("--weather-unit-selftest") {
+    exit(weatherUnitSelfTest() == 0 ? 0 : 1)
 }
 
 // The radius macOS draws window corners with, when the user has set one.
@@ -914,6 +953,8 @@ final class OptionsTabView: NSView, ScrollStepTab {
         let nsfwToggle = ToggleView()
         nsfwToggle.isOn = WHConfig.load().hideNSFW
 
+        let weatherSeg = makeSeg(["Celsius", "Fahrenheit"], original.weatherUnit.rawValue)
+
         rows = [
             OptionRow(category: "Window Manager", title: "Window Manager",
                       desc: "Which tiling manager Omacosy switches to. Switching reloads Omacosy for a moment.",
@@ -929,6 +970,9 @@ final class OptionsTabView: NSView, ScrollStepTab {
             OptionRow(category: "Appearance", title: "Terminal Opacity",
                       desc: "How see-through the terminal and its tools are. Every theme that inherits it follows.",
                       slider: opacitySlider),
+            OptionRow(category: "Weather", title: "Weather Units",
+                      desc: "The scale the weather pill and its popup show.",
+                      seg: weatherSeg),
             OptionRow(category: "Content", title: "Hide NSFW Content",
                       desc: "Hide adult wallhaven results and anything downloaded from them, everywhere. Nothing is deleted.",
                       toggle: nsfwToggle),
@@ -1013,6 +1057,12 @@ final class OptionsTabView: NSView, ScrollStepTab {
         }
         if termTheme != original.termTheme {
             steps.append("\(HOME)/.local/bin/omacosy-term-auto-theme \(termTheme == .follow ? "on" : "off")")
+        }
+        if let seg = rows.first(where: { $0.category == "Weather" })?.seg {
+            let unit = WeatherUnit(rawValue: seg.index) ?? original.weatherUnit
+            if unit != original.weatherUnit {
+                steps.append("\(HOME)/.local/bin/omacosy-weather unit \(unit == .fahrenheit ? "fahrenheit" : "celsius")")
+            }
         }
 
         guard !steps.isEmpty || opacityChanged || nsfwChanged else {
