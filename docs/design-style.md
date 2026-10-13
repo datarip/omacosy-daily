@@ -86,6 +86,35 @@ column 88 pt (left-aligned), a flexible track, then a value column 34 pt
 uses the same frame (`x: insetL + 10, w: contentW - 20`), so the labels, the
 tracks and the values line up down the column and across the two columns.
 
+## Segmented controls
+
+`SegmentedView` is one control with two shapes, both chosen from the
+window-corner setting (`windowCornerRadius`) so it always agrees with the
+window it sits in:
+
+- **Rounded** — one `palette.itemBG` track at 0.55, corner radius
+  `windowCornerRadius(8)`, with a single 1 px `palette.accent` outline at 0.30
+  around the group, and only the active segment filled: a
+  `windowCornerRadius(6)` pill in `palette.accent` at 0.9. The unselected
+  cells are plain text — the cells are never boxed individually.
+- **Square** — no track and no group outline. Each cell is its own button: a
+  full-height box with its own fill and border. The active cell is
+  `palette.accent` at 0.9 for both fill and border, so it reads as one solid
+  button; the others are `palette.itemBG` at 0.55 with a 1 px `palette.muted`
+  border at 0.35. The group never reads as a container.
+
+Height 28, 12 pt text: the active segment Bold in `palette.barBG`, the rest
+Regular in `palette.label`.
+
+## Buttons
+
+`ButtonView` dims (a black 0.22 overlay) for 0.12 s on every press, so an
+instant action still shows a response. Work that is not instant keeps the
+button in its muted `busy` state with a `busyTitle` until the background work
+finishes, then returns it to normal: Save → "Saving…", Apply & Save →
+"Applying…", Export → "Exporting…", Clear Cache → "Flushing…", Install
+Update → "Updating…".
+
 ## The dashboard tabs
 
 Every tab draws its first content title on one shared line: its centre 16 pt

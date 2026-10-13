@@ -560,22 +560,42 @@ final class SegmentedView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         layoutSegments()
-        let track = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
-        palette.itemBG.withAlphaComponent(0.55).setFill()
-        track.fill()
+        // Rounded: the macOS shape — one outline on the track, only the chosen
+        // segment filled. Square: no container at all; each cell is its own
+        // button with its own fill and border, so the group never reads as a
+        // box the cells sit inside.
+        let rounded = windowCornerRadius(6) > 2
         let f = nerdFont("Regular", 12)
         let bf = nerdFont("Bold", 12)
+        if rounded {
+            let track = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(8), yRadius: windowCornerRadius(8))
+            palette.itemBG.withAlphaComponent(0.55).setFill()
+            track.fill()
+            palette.accent.withAlphaComponent(0.30).setStroke()
+            track.lineWidth = 1
+            track.stroke()
+        }
         for (i, r) in segFrames.enumerated() {
-            let path = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(5), yRadius: windowCornerRadius(5))
-            if i == index {
-                palette.accent.withAlphaComponent(0.9).setFill()
-                path.fill()
+            if rounded {
+                if i == index {
+                    let pill = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
+                    palette.accent.withAlphaComponent(0.9).setFill()
+                    pill.fill()
+                }
             } else {
-                // a faint accent outline so an unselected choice is legible
-                // on a dark card instead of blending into it
-                palette.accent.withAlphaComponent(0.30).setStroke()
-                path.lineWidth = 1
-                path.stroke()
+                // its own border, and the selected cell's border is the same
+                // accent as its fill, so it reads as one solid button
+                let box = NSBezierPath(rect: r)
+                if i == index {
+                    palette.accent.withAlphaComponent(0.9).setFill()
+                    palette.accent.withAlphaComponent(0.9).setStroke()
+                } else {
+                    palette.itemBG.withAlphaComponent(0.55).setFill()
+                    palette.muted.withAlphaComponent(0.35).setStroke()
+                }
+                box.lineWidth = 1
+                box.fill()
+                box.stroke()
             }
             drawMidCenter(items[i], i == index ? bf : f,
                           i == index ? palette.barBG : palette.label,
@@ -942,9 +962,36 @@ final class OptionsTabView: NSView, ScrollStepTab {
         needsDisplay = true
         doc.needsDisplay = true
         for r in rows { r.seg?.needsDisplay = true }
+        for r in rows { r.slider?.needsDisplay = true }
         for r in rows { r.check?.needsDisplay = true }
         for r in rows { r.toggle?.needsDisplay = true }
+        // the Save button rounds its corners too, so a saved Window & UI
+        // Corners or Borders change must repaint it with the rest
+        saveButton.needsDisplay = true
         scroller.refresh()
+    }
+    // test door: the corner-drawing pieces a repaint must cover
+    func debugDirtyFlags() -> [String: Bool] {
+        var out: [String: Bool] = ["doc": doc.needsDisplay, "saveButton": saveButton.needsDisplay]
+        for (i, r) in rows.enumerated() {
+            if let s = r.seg { out["seg\(i)"] = s.needsDisplay }
+            if let s = r.slider { out["slider\(i)"] = s.needsDisplay }
+            if let s = r.check { out["check\(i)"] = s.needsDisplay }
+            if let s = r.toggle { out["toggle\(i)"] = s.needsDisplay }
+        }
+        return out
+    }
+    // test door: clear every flag so refreshColors() can be shown to set them
+    func debugClearDirty() {
+        needsDisplay = false
+        doc.needsDisplay = false
+        for r in rows {
+            r.seg?.needsDisplay = false
+            r.slider?.needsDisplay = false
+            r.check?.needsDisplay = false
+            r.toggle?.needsDisplay = false
+        }
+        saveButton.needsDisplay = false
     }
     private var original = DashboardState()
     private var status = ""
@@ -1015,9 +1062,9 @@ final class OptionsTabView: NSView, ScrollStepTab {
             OptionRow(category: "Windows", title: "Window & UI Corners",
                       desc: "MacOS window corners and Omacosy UI components outside the menu bar and the Workspaces overview.", seg: cornerSeg),
             OptionRow(category: "Windows", title: "Borders",
-                      desc: "How thick the focused-window ring and Omacosy's cards are. S = 1 px, M = 2 px, L = 3 px. The menu bar and the Workspaces overview keep their own.", seg: bordersSeg),
+                      desc: "Focused window ring border thickness. Small = 1 px, Medium = 2 px, Large = 3 px (default).", seg: bordersSeg),
             OptionRow(category: "Windows", title: "Ghostty Window Shadow",
-                      desc: "Ghostty's own macOS window shadow. Off removes the black rim a shadow makes around a dark, translucent Ghostty window under a tiling window manager. Applies when Ghostty restarts.",
+                      desc: "Ghostty's window shadow. Off = no black rim. Looks better with 1 px focused window ring",
                       toggle: shadowToggle),
             OptionRow(category: "Bar", title: "Menu Bar Mode",
                       desc: "Keep the bar visible, let it hide at rest, or follow the display.", seg: barSeg),
@@ -10481,6 +10528,7 @@ final class EditorFooterView: NSView {
         saveAsButton.secondary = true
         saveButton.title = "Save"
         applyButton.title = "Apply & Save"
+        applyButton.busyTitle = "Applying…"
         importButton.title = "Import"
         importButton.secondary = true
         importButton.busyTitle = "Importing…"
@@ -11299,6 +11347,10 @@ final class ThemeEditor {
         let usesSource = editSourceIsSource
         root.footer.saveButton.busy = true
         root.footer.saveAsButton.busy = true
+        // whichever action was pressed shows its own busy state through the
+        // render-and-write, not only once the write's second half starts
+        if case .apply = action { root.footer.applyButton.busy = true }
+        if case .export = action { root.footer.exportButton.busy = true }
         root.footer.message = nil
         DispatchQueue.global().async { [weak self] in
             guard let self else { return }
@@ -11325,6 +11377,8 @@ final class ThemeEditor {
             DispatchQueue.main.async {
                 self.root.footer.saveButton.busy = false
                 self.root.footer.saveAsButton.busy = false
+                if case .apply = action { self.root.footer.applyButton.busy = false }
+                if case .export = action { self.root.footer.exportButton.busy = false }
                 if let error {
                     if let onFailure { onFailure(error) } else { self.showMessage(error, red: true) }
                 } else if let fresh {
@@ -12157,16 +12211,30 @@ final class StorageTabView: NSView {
     }
 
     private func clearCache() {
-        let fm = FileManager.default
-        var count = 0
-        for d in StorageTabView.cacheDirs() {
-            for e in (try? fm.contentsOfDirectory(atPath: d)) ?? [] {
-                if (try? fm.removeItem(atPath: d + "/" + e)) != nil { count += 1 }
+        // Deleting every cached file can take a moment, so the work runs off
+        // the main thread: the button dims to its busy state and the status
+        // line says what is happening until it is done.
+        cacheButton.busy = true
+        cacheButton.busyTitle = "Flushing…"
+        status = "Flushing cache…"
+        needsDisplay = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let fm = FileManager.default
+            var count = 0
+            for d in StorageTabView.cacheDirs() {
+                for e in (try? fm.contentsOfDirectory(atPath: d)) ?? [] {
+                    if (try? fm.removeItem(atPath: d + "/" + e)) != nil { count += 1 }
+                }
+            }
+            let text = StorageTabView.computeCacheSummary()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.cacheButton.busy = false
+                self.status = count == 0 ? "Cache already empty" : "Cleared \(count) cached thumbnails"
+                self.cacheSummaryText = text
+                self.needsDisplay = true
             }
         }
-        status = count == 0 ? "Cache already empty" : "Cleared \(count) cached thumbnails"
-        needsDisplay = true
-        refreshCacheSummary()
     }
 
     // Images picked from anywhere — a USB key, a NAS, another folder — are
@@ -12449,15 +12517,21 @@ final class UpdateTabView: NSView {
         busy = true
         hasUpdate = false
         upToDate = false
-        installButton.isHidden = true
+        // keep the button on screen in its busy state, so the press and the
+        // wait are both visible instead of the button vanishing at once
+        installButton.busy = true
+        installButton.busyTitle = "Updating…"
+        installButton.isHidden = false
         stateText = "Updating…"
         detail = "Omacosy will reload in a moment; the window may flicker."
+        needsLayout = true
         needsDisplay = true
         DispatchQueue.global().async { [weak self] in
             let (code, out) = shell("\(HOME)/.local/bin/omacosy-update 2>&1")
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.busy = false
+                self.installButton.busy = false
                 if code != 0 {
                     self.stateText = "Update failed"
                     self.detail = self.infoLine(out)
@@ -14500,12 +14574,7 @@ final class RootView: NSView {
         logoView.imageScaling = .scaleProportionallyUpOrDown
         addSubview(logoView)
         addSubview(options)
-        options.onApplied = { [weak self] in
-            self?.needsDisplay = true
-            // an open Theme Studio editor draws the same border width, so it
-            // must pick up a saved Borders change without waiting for a tab
-            ThemeEditor.refreshColors()
-        }
+        options.onApplied = { [weak self] in self?.optionsApplied() }
         themes.onApplied = { [weak self] in self?.paletteChanged() }
         reloadLogo()
     }
@@ -14521,6 +14590,23 @@ final class RootView: NSView {
         ThemeEditor.refreshColors()
         needsDisplay = true
     }
+    // A saved Options change can move the window-corner radius or the border
+    // width, and every surface draws its own copy: the card (this view), the
+    // Options tab's own controls and its Save button, and an open Theme Studio
+    // editor. Repaint them together, once, instead of waiting for a tab switch.
+    private func optionsApplied() {
+        needsDisplay = true
+        options.refreshColors()
+        ThemeEditor.refreshColors()
+    }
+
+    // test door: exercise the post-save repaint without running the commands
+    func debugOptionsApplied() { optionsApplied() }
+
+    // test door: which corner-drawing pieces the Options save repaints
+    func debugOptionDirtyFlags() -> [String: Bool] { options.debugDirtyFlags() }
+    func debugClearOptionDirty() { options.debugClearDirty() }
+
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func reloadLogo() {
@@ -15064,6 +15150,53 @@ func themesScrollSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--themes-scroll-selftest") {
     exit(themesScrollSelfTest() == 0 ? 0 : 1)
+}
+
+// A saved Window & UI Corners (or Borders) change moves the radius every
+// Omacosy-drawn surface uses, including the Options tab's own controls and its
+// Save button. They used to keep the old radius until the tab was switched
+// away and back; the save must repaint them at once. Drives a RootView
+// off-screen and asserts the post-save repaint covers every corner-drawing
+// piece, so the missing-refresh bug cannot come back.
+func windowCornerSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    palette = loadPalette()
+    // tall enough that every Options row is inside the scroll clip: a view
+    // scrolled out of sight is not marked dirty, which would hide the very
+    // controls this test is about
+    let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 1200),
+                       styleMask: .borderless, backing: .buffered, defer: false)
+    let root = RootView(frame: NSRect(x: 0, y: 0, width: 860, height: 1200))
+    win.contentView = root
+    root.layoutSubtreeIfNeeded()
+    // needsDisplay is only honoured for a view in a window; flush the first
+    // layout, then clear so the post-save repaint is what sets the flags
+    root.displayIfNeeded()
+    root.debugClearOptionDirty()
+    root.debugOptionsApplied()
+    let flags = root.debugOptionDirtyFlags()
+    check("the tab body repaints", flags["doc"] == true)
+    check("the Save button repaints", flags["saveButton"] == true)
+    check("every segmented control repaints",
+          !flags.isEmpty && flags.filter { $0.key.hasPrefix("seg") }.values.allSatisfy { $0 })
+    check("every toggle repaints",
+          flags.filter { $0.key.hasPrefix("toggle") }.values.allSatisfy { $0 })
+    check("every slider repaints",
+          flags.filter { $0.key.hasPrefix("slider") }.values.allSatisfy { $0 })
+    let covered = flags.values.filter { $0 }.count
+    check("no corner-drawing piece is left behind (\(covered)/\(flags.count))",
+          !flags.isEmpty && covered == flags.count)
+    print(failures == 0 ? "window-corner selftest: all checks passed"
+                        : "window-corner selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--window-corner-selftest") {
+    exit(windowCornerSelfTest() == 0 ? 0 : 1)
 }
 
 // The wallpaper editor's preview door (Phase 8b): render the in-process
