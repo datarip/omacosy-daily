@@ -2,8 +2,10 @@
 *.bak.*
 /omacosy-bar.app/
 /omacosy-gesture.app/
+/omacosy-ffm.app/
 config/apps.local.conf
 config/aerospace/aerospace.toml
 config/omniwm/settings.toml
 config/omniwm/settings.toml.pre-v4
 config/omniwm/settings.toml.corrupt
+/theme-media/
