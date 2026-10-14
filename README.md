@@ -89,6 +89,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#91](https://github.com/paulsp94/omacosy/pull/91) | OPEN | fix(borders): one focus ring serves both window managers |
 | [#90](https://github.com/paulsp94/omacosy/pull/90) | OPEN | fix(update): an untracked file no longer blocks the update |
 | [#89](https://github.com/paulsp94/omacosy/pull/89) | OPEN | fix(update): ignore the omacosy-ffm app bundle |
 | [#80](https://github.com/paulsp94/omacosy/pull/80) | OPEN | fix(gestures): hand the native four-finger swipe back on toggle off / uninstall |
