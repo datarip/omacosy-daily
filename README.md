@@ -89,6 +89,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#93](https://github.com/paulsp94/omacosy/pull/93) | OPEN | fix(bar): the bar hides in a native fullscreen space |
 | [#92](https://github.com/paulsp94/omacosy/pull/92) | OPEN | fix(borders): hide the ring when a window in front covers it |
 | [#91](https://github.com/paulsp94/omacosy/pull/91) | OPEN | fix(borders): one focus ring serves both window managers |
 | [#90](https://github.com/paulsp94/omacosy/pull/90) | OPEN | fix(update): an untracked file no longer blocks the update |
