@@ -123,17 +123,17 @@ func isOwnedWallpaper(_ url: URL, _ roots: [String]) -> Bool {
 //
 // WHY IT IS A FALLBACK, NOT A SECOND REQUEST. `wallpaper <path>` asks
 // NSWorkspace first (the API macOS persists, and the one
-// `NSWorkspace.desktopImageURL` reports). It asks this only if the API's
-// URL never flipped. Asking BOTH for every change queued two wallpaper
+// `NSWorkspace.desktopImageURL` reports). It asks this only if NO screen's
+// URL flipped. Asking BOTH for every change queued two wallpaper
 // transitions: measured on macOS 27.2, either mechanism alone paints in
 // ~4.4 s, but both together paint in ~8.4 s while desktopImageURL still
-// flipped after the first ~4.4 s. The theme switch's overlay hides when
-// that URL flips, so it hid ~4 s before the picture was really on screen —
-// the flash between the overlay and the system wallpaper. It exists
-// because on macOS 27.2 build 26B5101f the wallpaper image extension can
-// reject the API's request (WallpaperURLError 2): then the URL does not
-// flip and this keeps the live picture moving, while the lock screen and
-// first boot picture still wait on Apple to fix the persisted store.
+// flipped after the first ~4.4 s. The theme switch's overlay hides on that
+// report, which lands before the picture is on screen — the flash between
+// the overlay and the system wallpaper. It exists because on macOS 27.2
+// build 26B5101f the wallpaper image extension can reject the API's request
+// (WallpaperURLError 2): then no URL flips and this keeps the live picture
+// moving, while the lock screen and first boot picture still wait on Apple
+// to fix the persisted store.
 //
 // The path is passed as an ARGUMENT and never spliced into the script
 // text. A theme is third-party content, and a filename such as
@@ -423,24 +423,34 @@ case "wallpaper":
         do { try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [:]) }
         catch { failures += 1 }
     }
-    // Wait for the API to actually land. `desktopImageURL` flips when the
-    // picture is applied (~4.4 s), and the theme switch's overlay hides on
-    // that same signal, so waiting here keeps the two in step. System Events
-    // is asked ONLY if it never flipped — the broken-build fallback above.
-    // Asking it unconditionally used to queue a second transition and hide
-    // the overlay ~4 s early (the flash).
+    // Decide whether the public API worked AT ALL, not whether every screen
+    // has caught up. The two are not the same. macOS flips `desktopImageURL`
+    // per display, in sequence: measured on the author's MacBook Air + LG
+    // UltraFine the two displays' URLs flip ~5 s apart (~5 s, then ~10 s),
+    // while both panels paint at the second one. Requiring ALL screens made
+    // the old 6 s deadline unreachable, so System Events was asked on EVERY
+    // change — queueing the second wallpaper transition (and the flash) this
+    // is meant to avoid. One screen reporting is proof the API works; the
+    // overlay's own handoff still waits for them all. System Events is asked
+    // only when NOTHING moved, which is the 27.2 build whose image extension
+    // rejects the API silently (WallpaperURLError 2).
     let want = url.resolvingSymlinksInPath().path
-    func apiApplied() -> Bool {
-        NSScreen.screens.allSatisfy { screen in
-            NSWorkspace.shared.desktopImageURL(for: screen)?
-                .resolvingSymlinksInPath().path == want
-        }
+    func thisScreenApplied(_ screen: NSScreen) -> Bool {
+        NSWorkspace.shared.desktopImageURL(for: screen)?
+            .resolvingSymlinksInPath().path == want
     }
-    let deadline = Date().addingTimeInterval(6)
-    while Date() < deadline, !apiApplied() {
+    func anyScreenApplied() -> Bool {
+        NSScreen.screens.contains(where: thisScreenApplied)
+    }
+    // Comfortably past the observed first flip (~5 s), so a slow-but-healthy
+    // display is not mistaken for a broken build. The healthy case leaves as
+    // soon as the first screen reports, so this ceiling is only ever paid on
+    // the broken build, where the overlay covers the desktop meanwhile.
+    let deadline = Date().addingTimeInterval(15)
+    while Date() < deadline, !anyScreenApplied() {
         Thread.sleep(forTimeInterval: 0.05)
     }
-    if !apiApplied() { setPictureViaSystemEvents(args[2]) }
+    if !anyScreenApplied() { setPictureViaSystemEvents(args[2]) }
     exit(failures == 0 ? 0 : 1)
 
 case "nightshift":

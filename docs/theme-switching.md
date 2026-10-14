@@ -110,29 +110,37 @@ OmniWM, `aerospace.toml` under AeroSpace). On each press it:
   taken as the choice — one one-shot deadline, the only timer in the feature;
 - the coordinator then asks macOS for the real wallpaper and writes the path
   to `~/.local/state/omacosy/overlay-target`;
-- the helper watches `~/Library/Application Support/com.apple.wallpaper/Store`
-  with a **kqueue** source, and when the applied picture matches the target it
-  hides the overlay. That event lands *after* macOS has painted, so no grace
-  timer is needed either.
+- the helper re-checks on every write to the state directory and to
+  `~/Library/Application Support/com.apple.wallpaper/Store` (both **kqueue**
+  sources), and hides the overlay once **every** screen's `desktopImageURL`
+  reports the target. That report is the *choice*, not the paint, so the hide
+  is deferred by a short **guard band** (0.5 s): measured on the author's
+  MacBook Air + LG UltraFine, both panels painted up to ~250 ms after every
+  screen had reported, and which display lagged was random each run, so
+  hiding on the reports alone unveiled the old picture on the lagging display.
+  A preview arriving during the band cancels it, so a newer wallpaper is never
+  taken down by an older apply.
 
 **The real wallpaper is asked for through one mechanism, with the other as a
 fallback.** `omacosy-helper wallpaper <path>` sets it through
 `NSWorkspace.setDesktopImageURL` (the public API, and the one whose choice
-macOS stores) and then waits for `desktopImageURL` to report it — the same
-signal the overlay's handoff watches, which flips when the picture is
-applied (~4.4 s). Only if that never happens does it fall back to System
+macOS stores) and waits only until **some** screen reports it — proof the API
+is working. It does not wait for all screens: macOS flips `desktopImageURL`
+per display, in sequence, and with two displays the two flips are ~5 s apart
+(measured ~5 s, then ~10 s) while both panels paint at the second one, so an
+"all screens" deadline is always missed and the fallback fired on every
+change. Only if **no** screen ever reports it does it fall back to System
 Events' `set picture`, the legacy AppleScript that `theme-set` and
-`theme-bg-next` already use when the helper is not installed. There is no
-retry, no poll and no new timer.
+`theme-bg-next` already use when the helper is not installed.
 
 Asking **both** for every change is what the first cut did, and it is what
 produced the flash. Measured on macOS 27.2: either mechanism alone paints in
 ~4.4 s, but both together paint in **~8.4 s**, because macOS queues the two
-requests as two wallpaper transitions; `desktopImageURL` still flips after
-the first ~4.4 s. The overlay hid when that URL flipped — ~4 s before the
-second transition had put the picture on screen — so the old wallpaper
-showed through in between: the flash. One mechanism at a time keeps the URL
-and the visible picture in step, so the handoff is invisible again.
+requests as two wallpaper transitions. The overlay hid when the picture was
+reported — before the second transition had put it on screen — so the old
+wallpaper showed through in between: the flash. One mechanism at a time keeps
+one transition, and the guard band covers the gap between the report and the
+paint.
 
 System Events remains because macOS **27.2 build 26B5101f** (the Beta 3
 patch, seen 2026-10-06) could reject the public API's request

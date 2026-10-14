@@ -117,6 +117,8 @@ final class ScreenWindow {
 var windows: [ScreenWindow] = []
 var currentPath = ""            // path currently shown, "" = off
 var shown = false
+// A handoff waiting out its guard band (see checkHandoff).
+var handoffItem: DispatchWorkItem?
 let loadQueue = DispatchQueue(label: "omacosy.overlay.load", qos: .userInitiated)
 // Only the CURRENT image is kept. A cache across wallpapers grew to 750 MB
 // of RSS after a few dozen distinct pictures (measured), for no benefit: at
@@ -246,6 +248,10 @@ func apply(_ raw: String) {
         }
         return
     }
+    // A newer preview abandons a handoff still inside its guard band, so the
+    // old target cannot take the new picture down.
+    handoffItem?.cancel()
+    handoffItem = nil
     latestPath = target
     if !loading { loading = true; loadNext() }
 }
@@ -255,6 +261,14 @@ func apply(_ raw: String) {
 // the handoff is event-driven — no timer, no poll. It hides only when the
 // image the overlay is showing IS the target, so a newer preview is never
 // hidden by an older apply.
+//
+// WAITING OUT A GUARD BAND. `desktopImageURL` reports the CHOICE; it is not
+// the same instant the panel paints. Measured on the author's MacBook Air +
+// LG UltraFine, both panels painted up to ~250 ms after every screen had
+// reported, and which display lagged was random. Hiding the instant the
+// reports agreed therefore unveiled the old picture on the lagging display
+// for a frame or two. So the hide is deferred by a short guard band once
+// every screen reports; a preview arriving meanwhile cancels it (apply).
 func checkHandoff() {
     let target = (try? String(contentsOfFile: targetFile, encoding: .utf8))?
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -265,6 +279,18 @@ func checkHandoff() {
             .resolvingSymlinksInPath().path == want
     }
     guard applied else { return }
+    guard handoffItem == nil else { return }
+    let item = DispatchWorkItem { commitHandoff(target) }
+    handoffItem = item
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+}
+
+// The guard band elapsed: take the overlay down, unless the world moved on.
+func commitHandoff(_ target: String) {
+    handoffItem = nil
+    let now = (try? String(contentsOfFile: targetFile, encoding: .utf8))?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard now == target, target == currentPath else { return }
     for w in windows { w.hide() }
     currentPath = "off"
     shown = false
