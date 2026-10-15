@@ -92,8 +92,8 @@ The fixes this build offers upstream, and their state today.
 | [#93](https://github.com/paulsp94/omacosy/pull/93) | OPEN | fix(bar): the bar hides in a native fullscreen space |
 | [#92](https://github.com/paulsp94/omacosy/pull/92) | OPEN | fix(borders): hide the ring when a window in front covers it |
 | [#91](https://github.com/paulsp94/omacosy/pull/91) | OPEN | fix(borders): one focus ring serves both window managers |
-| [#90](https://github.com/paulsp94/omacosy/pull/90) | OPEN | fix(update): an untracked file no longer blocks the update |
-| [#89](https://github.com/paulsp94/omacosy/pull/89) | OPEN | fix(update): ignore the omacosy-ffm app bundle |
+| [#90](https://github.com/paulsp94/omacosy/pull/90) | MERGED | fix(update): an untracked file no longer blocks the update |
+| [#89](https://github.com/paulsp94/omacosy/pull/89) | MERGED | fix(update): ignore the omacosy-ffm app bundle |
 | [#80](https://github.com/paulsp94/omacosy/pull/80) | OPEN | fix(gestures): hand the native four-finger swipe back on toggle off / uninstall |
 | [#79](https://github.com/paulsp94/omacosy/pull/79) | MERGED | fix(omniwm): find the IPC socket after OmniWM 0.7.5 moved it |
 | [#78](https://github.com/paulsp94/omacosy/pull/78) | MERGED | fix(install): restore the OmniWM chords right after the Karabiner reset |
