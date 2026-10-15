@@ -27,8 +27,8 @@
 //   omacosy-themecore theme import <file> [--id ID] [--name NAME] [--format json|colors-toml|base16]
 //                                        [--replace|--rename]
 //   omacosy-themecore theme export <id> [--out PATH | --bundle DIR] [--templates DIR]
-//   omacosy-themecore theme materialize <id|file.json> [--wallpaper IMAGE] [--json]
-//   omacosy-themecore theme wallpaper <id|file.json> [--source] [--json]
+//   omacosy-themecore theme materialize <id|theme file> [--wallpaper IMAGE] [--json]
+//   omacosy-themecore theme wallpaper <id|theme file> [--source] [--json]
 //   omacosy-themecore wallpaper list [--dir DIR] [--json]
 //   omacosy-themecore wallpaper info <path> [--json]
 //   omacosy-themecore wallpaper rename <old> <new> [--json]
@@ -61,7 +61,8 @@
 // process and reads its answer. Phases 1-3: colour maths, adjustments,
 // presets, modes, theme records, the library, extraction and materialising.
 //
-// The library lives in ~/.config/omacosy/themes/<id>.json; the test harness
+// The library lives in ~/.config/omacosy/themes/<id>.toml (schema 1 wrote
+// <id>.json; both are read and a save migrates); the test harness
 // redirects it and the Omacosy state files with OMACOSY_CONFIG_DIR,
 // OMACOSY_STATE_DIR, OMACOSY_DATA_DIR and OMACOSY_THEMES_DIR.
 //
@@ -4635,11 +4636,13 @@ func channelHistograms(url: URL, maxWidth: Int = 512) throws -> (r: [Int], g: [I
 
 // MARK: - Theme records (schema v1)
 
-// One JSON file per theme under ~/.config/omacosy/themes/. The typed fields
-// are the v1 schema of the plan; `raw` keeps the document as parsed, so keys
-// this build does not know survive a load -> save round-trip untouched.
-// Writing is canonical: sorted keys, two-space indent, one trailing newline.
-// `id` is immutable -- a rename edits `name` only.
+// One TOML file per theme under ~/.config/omacosy/themes/ (schema 1's JSON
+// spelling is still read, and a save or `theme migrate` converts it). The
+// typed fields are the v1 schema of the plan; `raw` keeps the document as
+// parsed, so keys this build does not know survive a load -> save
+// round-trip untouched. Writing is canonical: sorted keys, one
+// deterministic spelling per value, one trailing newline. `id` is
+// immutable -- a rename edits `name` only.
 
 struct ThemeError: Error { let message: String }
 
@@ -4733,26 +4736,25 @@ func isoNow() -> String {
 
 // MARK: - Importing a foreign palette (Phase 9)
 
-// Which reader theme import uses: `--format` first, then the file extension,
-// then the content (our JSON, a base16 scheme, or a flat omarchy colors.toml).
+// Which reader theme import uses: `--format` first, then the content (our
+// record in either spelling, a base16 scheme, a flat omarchy colors.toml),
+// then the file extension.
 func importFormat(_ flag: String?, path: String?, data: Data) throws -> String {
     if let flag {
-        guard ["json", "colors-toml", "base16"].contains(flag) else {
-            throw ThemeError(message: "--format must be json, colors-toml or base16")
+        guard ["json", "toml", "colors-toml", "base16"].contains(flag) else {
+            throw ThemeError(message: "--format must be json, toml, colors-toml or base16")
         }
         return flag
     }
-    if let path {
-        switch (path as NSString).pathExtension.lowercased() {
-        case "toml": return "colors-toml"
-        case "yaml", "yml": return "base16"
-        default: break
-        }
+    let ext = path.map { ($0 as NSString).pathExtension.lowercased() }
+    if let text = String(data: data, encoding: .utf8) {
+        if text.contains("\"schema\"") { return "json" }
+        if text.range(of: "(?m)^\\s*schema\\s*=", options: .regularExpression) != nil { return "toml" }
+        if text.range(of: "(?m)^\\s*base0[0-9a-fA-F]\\s*:", options: .regularExpression) != nil { return "base16" }
+        if text.range(of: "(?m)^\\s*(background|color0)\\s*=", options: .regularExpression) != nil { return "colors-toml" }
     }
-    guard let text = String(data: data, encoding: .utf8) else { return "json" }
-    if text.contains("\"schema\"") { return "json" }
-    if text.range(of: "(?m)^\\s*base0[0-9a-fA-F]\\s*:", options: .regularExpression) != nil { return "base16" }
-    if text.range(of: "(?m)^\\s*(background|color0)\\s*=", options: .regularExpression) != nil { return "colors-toml" }
+    if ext == "toml" { return "colors-toml" }
+    if ext == "yaml" || ext == "yml" { return "base16" }
     return "json"
 }
 
@@ -4882,8 +4884,11 @@ func jsonTopLevel(_ data: Data, label: String) throws -> [String: Any] {
 }
 
 extension Theme {
+    // Both spellings read through the same door: the top level is a JSON
+    // object or a TOML document, and every typed field on top of it is the
+    // same.
     static func parse(_ data: Data, label: String) throws -> Theme {
-        try parse(try jsonTopLevel(data, label: label), label: label)
+        try parse(try themeTopLevel(data, label: label), label: label)
     }
 
     static func parse(_ top: [String: Any], label: String) throws -> Theme {
@@ -5126,12 +5131,18 @@ private func jsonOrNull(_ value: String?) -> Any {
     value.map { $0 as Any } ?? NSNull()
 }
 
-// The canonical theme writer is hand-rolled for one reason: JSONSerialization
-// prints a parsed 0.18 back as 0.17999999999999999, and these records are read
-// by people in Zed. Swift's Double description is the shortest round-trip
-// form, so the file stays clean and still lossless. Keys sort, indent is two
-// spaces, and only `"` and `\` plus control characters are escaped.
-private func jsonQuoted(_ value: String) -> String {
+// MARK: - TOML
+
+// The canonical theme writer is hand-rolled, like the JSON writer before
+// it, because JSONSerialization prints a parsed 0.18 back as
+// 0.17999999999999999 and these records are read by people. Swift's Double
+// description is the shortest round-trip form, so the file stays clean and
+// still lossless. Output is canonical: sorted keys, a table's own values
+// before any subtable header, one deterministic spelling per value, one
+// trailing newline, so re-saving an unchanged record does not move a byte.
+// TOML has no null: a null value is omitted, and a null inside an array is
+// an error rather than a silently shorter array.
+private func tomlQuoted(_ value: String) -> String {
     var out = "\""
     for scalar in value.unicodeScalars {
         switch scalar {
@@ -5151,34 +5162,441 @@ private func jsonQuoted(_ value: String) -> String {
     return out + "\""
 }
 
-private func jsonRendered(_ value: Any, depth: Int) -> String {
+// Bare when TOML allows it, quoted otherwise, so an app id or an unknown
+// key with a dot or a space still round-trips.
+private func tomlKey(_ key: String) -> String {
+    let bare = key.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil
+    return bare ? key : tomlQuoted(key)
+}
+
+// TOML forbids leading zeros in an exponent, so `5e-05` prints as `5e-5`.
+private func tomlDouble(_ value: Double) -> String {
+    if value.isNaN { return "nan" }
+    if value.isInfinite { return value < 0 ? "-inf" : "inf" }
+    let text = "\(value)"
+    guard let e = text.firstIndex(where: { $0 == "e" || $0 == "E" }) else { return text }
+    var exponent = String(text[text.index(after: e)...])
+    var sign = ""
+    if exponent.hasPrefix("+") || exponent.hasPrefix("-") {
+        sign = String(exponent.removeFirst())
+    }
+    while exponent.count > 1 && exponent.hasPrefix("0") { exponent.removeFirst() }
+    return String(text[..<e]) + "e" + sign + exponent
+}
+
+private func tomlNumber(_ number: NSNumber) -> String {
+    let type = String(cString: number.objCType)
+    if type == "c" || type == "B" { return number.boolValue ? "true" : "false" }
+    if type == "d" || type == "f" { return tomlDouble(number.doubleValue) }
+    return number.stringValue
+}
+
+private func tomlValue(_ value: Any) throws -> String? {
     switch value {
     case let number as NSNumber:
-        let type = String(cString: number.objCType)
-        if type == "c" || type == "B" { return number.boolValue ? "true" : "false" }
-        if type == "d" || type == "f" { return "\(number.doubleValue)" }
-        return number.stringValue
-    case let bool as Bool:
-        return bool ? "true" : "false"
+        return tomlNumber(number)
     case let string as String:
-        return jsonQuoted(string)
+        return tomlQuoted(string)
     case is NSNull:
-        return "null"
+        return nil
     case let array as [Any]:
-        if array.isEmpty { return "[]" }
-        let inner = String(repeating: "  ", count: depth + 1)
-        let body = array.map { inner + jsonRendered($0, depth: depth + 1) }
-        return "[\n" + body.joined(separator: ",\n") + "\n" + String(repeating: "  ", count: depth) + "]"
-    case let object as [String: Any]:
-        if object.isEmpty { return "{}" }
-        let inner = String(repeating: "  ", count: depth + 1)
-        let body = object.keys.sorted().map {
-            inner + jsonQuoted($0) + " : " + jsonRendered(object[$0]!, depth: depth + 1)
+        var parts: [String] = []
+        for item in array {
+            guard let rendered = try tomlValue(item) else {
+                throw ThemeError(message: "the record holds a null inside an array, which TOML cannot express")
+            }
+            parts.append(rendered)
         }
-        return "{\n" + body.joined(separator: ",\n") + "\n" + String(repeating: "  ", count: depth) + "}"
+        return "[" + parts.joined(separator: ", ") + "]"
+    case let object as [String: Any]:
+        var parts: [String] = []
+        for key in object.keys.sorted() {
+            guard let rendered = try tomlValue(object[key]!) else { continue }
+            parts.append(tomlKey(key) + " = " + rendered)
+        }
+        return "{" + (parts.isEmpty ? "" : " " + parts.joined(separator: ", ") + " ") + "}"
     default:
-        return jsonQuoted(String(describing: value))
+        throw ThemeError(message: "cannot encode a \(type(of: value)) as TOML")
     }
+}
+
+// A table's own values come before its subtables, and both sort; that is
+// what makes the output canonical.
+private func tomlBody(_ object: [String: Any], path: [String]) throws -> String {
+    var own: [String] = []
+    var children: [String] = []
+    for key in object.keys.sorted() {
+        let value = object[key]!
+        if let dict = value as? [String: Any], !dict.isEmpty {
+            let childPath = path + [key]
+            let body = try tomlBody(dict, path: childPath)
+            let header = "[" + childPath.map(tomlKey).joined(separator: ".") + "]"
+            children.append(body.isEmpty ? header : header + "\n" + body)
+        } else {
+            guard let rendered = try tomlValue(value) else { continue }
+            own.append(tomlKey(key) + " = " + rendered)
+        }
+    }
+    var text = own.joined(separator: "\n")
+    for child in children {
+        if !text.isEmpty { text += "\n" }
+        text += "\n" + child
+    }
+    return text
+}
+
+private func tomlRendered(_ object: [String: Any]) throws -> String {
+    try tomlBody(object, path: [])
+}
+
+// The reader understands the shapes the writer emits plus the ordinary
+// hand-editing freedoms: comments, dotted keys, literal strings, arrays
+// over several lines, inline tables, arrays of tables. Dates and
+// multi-line strings are refused with a clear message rather than guessed.
+private struct TomlReader {
+    private let chars: [Character]
+    private var index = 0
+
+    init(text: String) { chars = Array(text) }
+
+    func error(_ message: String) -> ThemeError {
+        var line = 1
+        for c in chars[..<min(index, chars.count)] where c == "\n" { line += 1 }
+        return ThemeError(message: "line \(line): \(message)")
+    }
+
+    var atEnd: Bool { index >= chars.count }
+
+    func peek(_ offset: Int = 0) -> Character? {
+        let i = index + offset
+        return i < chars.count ? chars[i] : nil
+    }
+
+    mutating func advance() { index += 1 }
+
+    mutating func skipInlineWhitespace() {
+        while let c = peek(), c == " " || c == "\t" { advance() }
+    }
+
+    mutating func skipToEndOfLine() {
+        while let c = peek(), c != "\n" { advance() }
+    }
+
+    mutating func skipWhitespaceAndComments() {
+        while let c = peek() {
+            if c == " " || c == "\t" || c == "\n" || c == "\r" { advance() }
+            else if c == "#" { skipToEndOfLine() }
+            else { break }
+        }
+    }
+
+    mutating func expect(_ c: Character) throws {
+        guard peek() == c else { throw error("expected \"\(c)\"") }
+        advance()
+    }
+
+    mutating func endOfLine() throws {
+        skipInlineWhitespace()
+        if peek() == "#" { skipToEndOfLine() }
+        guard atEnd || peek() == "\n" || peek() == "\r" else {
+            throw error("unexpected characters after a value")
+        }
+    }
+
+    mutating func readBareKey() throws -> String {
+        var out = ""
+        while let c = peek(),
+              c.isASCII && (c.isLetter || c.isNumber || c == "_" || c == "-") {
+            out.append(c)
+            advance()
+        }
+        guard !out.isEmpty else { throw error("expected a key") }
+        return out
+    }
+
+    mutating func readBasicString() throws -> String {
+        try expect("\"")
+        if peek() == "\"" && peek(1) == "\"" {
+            throw error("multi-line strings are not understood")
+        }
+        var out = ""
+        while let c = peek() {
+            if c == "\"" { advance(); return out }
+            if c == "\\" {
+                advance()
+                guard let e = peek() else { throw error("unfinished escape") }
+                advance()
+                switch e {
+                case "b": out.append("\u{08}")
+                case "t": out.append("\t")
+                case "n": out.append("\n")
+                case "f": out.append("\u{0C}")
+                case "r": out.append("\r")
+                case "\"": out.append("\"")
+                case "\\": out.append("\\")
+                case "u", "U":
+                    let width = e == "u" ? 4 : 8
+                    var hex = ""
+                    for _ in 0..<width {
+                        guard let h = peek(), h.isHexDigit else { throw error("bad \\\(e) escape") }
+                        hex.append(h)
+                        advance()
+                    }
+                    guard let value = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(value) else {
+                        throw error("bad \\\(e) escape")
+                    }
+                    out.unicodeScalars.append(scalar)
+                default: throw error("unknown escape \\\(e)")
+                }
+                continue
+            }
+            if c == "\n" { throw error("unfinished string") }
+            out.append(c)
+            advance()
+        }
+        throw error("unfinished string")
+    }
+
+    mutating func readLiteralString() throws -> String {
+        try expect("'")
+        if peek() == "'" && peek(1) == "'" {
+            throw error("multi-line strings are not understood")
+        }
+        var out = ""
+        while let c = peek() {
+            if c == "'" { advance(); return out }
+            if c == "\n" { throw error("unfinished string") }
+            out.append(c)
+            advance()
+        }
+        throw error("unfinished string")
+    }
+
+    mutating func readKey() throws -> String {
+        if peek() == "\"" { return try readBasicString() }
+        if peek() == "'" { return try readLiteralString() }
+        return try readBareKey()
+    }
+
+    mutating func readKeyPath() throws -> [String] {
+        var path = [try readKey()]
+        while true {
+            skipInlineWhitespace()
+            guard peek() == "." else { break }
+            advance()
+            skipInlineWhitespace()
+            path.append(try readKey())
+        }
+        return path
+    }
+
+    mutating func readValue() throws -> Any {
+        guard let c = peek() else { throw error("expected a value") }
+        if c == "\"" { return try readBasicString() }
+        if c == "'" { return try readLiteralString() }
+        if c == "[" { return try readArray() }
+        if c == "{" { return try readInlineTable() }
+        var token = ""
+        while let t = peek(), ![" ", "\t", "\n", "\r", ",", "]", "}", "#"].contains(t) {
+            token.append(t)
+            advance()
+        }
+        guard !token.isEmpty else { throw error("expected a value") }
+        if token == "true" { return true }
+        if token == "false" { return false }
+        guard let number = tomlBareNumber(token) else {
+            throw error("unsupported value \"\(token)\" (strings, numbers, booleans, arrays and inline tables are understood)")
+        }
+        return number
+    }
+
+    mutating func readArray() throws -> [Any] {
+        try expect("[")
+        var out: [Any] = []
+        while true {
+            skipWhitespaceAndComments()
+            if peek() == "]" { advance(); return out }
+            out.append(try readValue())
+            skipWhitespaceAndComments()
+            if peek() == "," { advance(); continue }
+            try expect("]")
+            return out
+        }
+    }
+
+    mutating func readInlineTable() throws -> [String: Any] {
+        try expect("{")
+        var out: [String: Any] = [:]
+        while true {
+            skipWhitespaceAndComments()
+            if peek() == "}" { advance(); return out }
+            let path = try readKeyPath()
+            skipInlineWhitespace()
+            try expect("=")
+            skipInlineWhitespace()
+            let value = try readValue()
+            try assign(path, value, into: &out)
+            skipWhitespaceAndComments()
+            if peek() == "," { advance(); continue }
+            try expect("}")
+            return out
+        }
+    }
+
+    // A dotted key path lands inside the current table; an array of tables
+    // ([[x]]) takes the value in its most recent element, matching TOML.
+    mutating func assign(_ path: [String], _ value: Any, into table: inout [String: Any]) throws {
+        guard let first = path.first else { throw error("empty key") }
+        if path.count == 1 {
+            guard table[first] == nil else { throw error("duplicate key \"\(first)\"") }
+            table[first] = value
+            return
+        }
+        let rest = Array(path.dropFirst())
+        if var child = table[first] as? [String: Any] {
+            try assign(rest, value, into: &child)
+            table[first] = child
+        } else if var rows = table[first] as? [Any], var last = rows.last as? [String: Any] {
+            try assign(rest, value, into: &last)
+            rows[rows.count - 1] = last
+            table[first] = rows
+        } else if table[first] == nil {
+            var child: [String: Any] = [:]
+            try assign(rest, value, into: &child)
+            table[first] = child
+        } else {
+            throw error("cannot redefine \"\(first)\"")
+        }
+    }
+
+    mutating func ensureTable(_ path: [String], in table: inout [String: Any]) throws {
+        guard let first = path.first else { return }
+        if path.count == 1 {
+            if let existing = table[first], !(existing is [String: Any]) {
+                throw error("cannot redefine \"\(first)\" as a table")
+            }
+            if table[first] == nil { table[first] = [String: Any]() }
+            return
+        }
+        let rest = Array(path.dropFirst())
+        if var child = table[first] as? [String: Any] {
+            try ensureTable(rest, in: &child)
+            table[first] = child
+        } else if var rows = table[first] as? [Any], var last = rows.last as? [String: Any] {
+            try ensureTable(rest, in: &last)
+            rows[rows.count - 1] = last
+            table[first] = rows
+        } else if table[first] == nil {
+            var child: [String: Any] = [:]
+            try ensureTable(rest, in: &child)
+            table[first] = child
+        } else {
+            throw error("cannot redefine \"\(first)\" as a table")
+        }
+    }
+
+    mutating func appendArrayOfTables(_ path: [String], in table: inout [String: Any]) throws {
+        guard let first = path.first else { return }
+        if path.count == 1 {
+            if table[first] == nil { table[first] = [Any]() }
+            guard var rows = table[first] as? [Any] else {
+                throw error("cannot redefine \"\(first)\" as an array of tables")
+            }
+            rows.append([String: Any]())
+            table[first] = rows
+            return
+        }
+        let rest = Array(path.dropFirst())
+        if var child = table[first] as? [String: Any] {
+            try appendArrayOfTables(rest, in: &child)
+            table[first] = child
+        } else if table[first] == nil {
+            var child: [String: Any] = [:]
+            try appendArrayOfTables(rest, in: &child)
+            table[first] = child
+        } else {
+            throw error("cannot redefine \"\(first)\"")
+        }
+    }
+
+    mutating func read() throws -> [String: Any] {
+        var root: [String: Any] = [:]
+        var tablePath: [String] = []
+        while true {
+            skipWhitespaceAndComments()
+            if atEnd { return root }
+            if peek() == "[" {
+                advance()
+                if peek() == "[" {
+                    advance()
+                    let path = try readKeyPath()
+                    try expect("]")
+                    try expect("]")
+                    try appendArrayOfTables(path, in: &root)
+                    tablePath = path
+                } else {
+                    let path = try readKeyPath()
+                    try expect("]")
+                    try ensureTable(path, in: &root)
+                    tablePath = path
+                }
+                try endOfLine()
+            } else {
+                let path = try readKeyPath()
+                skipInlineWhitespace()
+                try expect("=")
+                skipInlineWhitespace()
+                let value = try readValue()
+                try assign(tablePath + path, value, into: &root)
+                try endOfLine()
+            }
+        }
+    }
+}
+
+// A bare TOML scalar: booleans are handled before this is reached, a
+// number is an integer unless it has a fraction or an exponent.
+private func tomlBareNumber(_ token: String) -> Any? {
+    let clean = token.replacingOccurrences(of: "_", with: "")
+    switch clean {
+    case "inf", "+inf": return Double.infinity
+    case "-inf": return -Double.infinity
+    case "nan", "+nan", "-nan": return Double.nan
+    default: break
+    }
+    if clean.contains(".") || clean.lowercased().contains("e") {
+        return Double(clean)
+    }
+    return Int(clean)
+}
+
+func tomlTopLevel(_ data: Data, label: String) throws -> [String: Any] {
+    guard let text = String(data: data, encoding: .utf8) else {
+        throw ThemeError(message: "\(label): not valid UTF-8")
+    }
+    var reader = TomlReader(text: text)
+    do { return try reader.read() }
+    catch let e as ThemeError { throw ThemeError(message: "\(label): not valid TOML (\(e.message))") }
+}
+
+// A theme record's bytes, whatever their spelling: JSON (what schema 1
+// shipped as) or TOML (what this build writes). The file's extension and
+// first byte, in that order, decide the reader, so a legacy file with no
+// extension hint still reads.
+func themeTopLevel(_ data: Data, label: String) throws -> [String: Any] {
+    if (label as NSString).pathExtension.lowercased() == "toml" {
+        return try tomlTopLevel(data, label: label)
+    }
+    if let first = data.first(where: { $0 != 0x20 && $0 != 0x09 && $0 != 0x0a && $0 != 0x0d }),
+       first == 0x7b {   // "{"
+        return try jsonTopLevel(data, label: label)
+    }
+    if let text = String(data: data, encoding: .utf8),
+       (text.range(of: "(?m)^\\s*([A-Za-z0-9_.-]+|\"[^\"]*\"|'[^']*')\\s*=", options: .regularExpression) != nil
+        || text.range(of: "(?m)^\\s*\\[", options: .regularExpression) != nil) {
+        return try tomlTopLevel(data, label: label)
+    }
+    return try jsonTopLevel(data, label: label)
 }
 
 extension Theme {
@@ -5245,11 +5663,11 @@ extension Theme {
     // exactly what is on disk, and re-saving an unchanged record does not
     // move a byte.
     func canonicalData() throws -> Data {
-        let object = canonicalObject()
-        guard JSONSerialization.isValidJSONObject(object) else {
-            throw ThemeError(message: "theme \"\(id)\" does not encode as JSON")
+        do {
+            return Data((try tomlRendered(canonicalObject()) + "\n").utf8)
+        } catch let e as ThemeError {
+            throw ThemeError(message: "theme \"\(id)\": \(e.message)")
         }
-        return Data((jsonRendered(object, depth: 0) + "\n").utf8)
     }
 }
 
@@ -5271,11 +5689,22 @@ struct ThemeLibrary {
         materialisedDir = URL(fileURLWithPath: "\(state)/studio/materialised")
     }
 
-    func fileURL(id: String) -> URL { dir.appendingPathComponent("\(id).json") }
+    // The canonical record is `<id>.toml`. `<id>.json` is schema 1's
+    // spelling: still read, converted on the first write, never written
+    // again.
+    func fileURL(id: String) -> URL { dir.appendingPathComponent("\(id).toml") }
 
-    func exists(id: String) -> Bool {
-        FileManager.default.fileExists(atPath: fileURL(id: id).path)
+    func legacyFileURL(id: String) -> URL { dir.appendingPathComponent("\(id).json") }
+
+    func existingFileURL(id: String) -> URL? {
+        let toml = fileURL(id: id)
+        if FileManager.default.fileExists(atPath: toml.path) { return toml }
+        let json = legacyFileURL(id: id)
+        if FileManager.default.fileExists(atPath: json.path) { return json }
+        return nil
     }
+
+    func exists(id: String) -> Bool { existingFileURL(id: id) != nil }
 
     // A name is an edition's display identity; two editions sharing one is
     // confusing (the grid shows two identical cards), so the library refuses a
@@ -5290,17 +5719,29 @@ struct ThemeLibrary {
         }
     }
 
+    // Both spellings list; when a record has both, the TOML file is the
+    // live one and the JSON copy is a leftover waiting to be migrated or
+    // trashed.
     func recordFiles() -> [URL] {
         guard let items = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: nil) else { return [] }
-        return items
-            .filter { $0.pathExtension == "json" && $0.lastPathComponent != "library.json" }
+        let records = items.filter {
+            ["toml", "json"].contains($0.pathExtension.lowercased()) && $0.lastPathComponent != "library.json"
+        }
+        var canonical = Set<String>()
+        for url in records where url.pathExtension.lowercased() == "toml" {
+            canonical.insert(url.deletingPathExtension().lastPathComponent)
+        }
+        return records
+            .filter {
+                !($0.pathExtension.lowercased() == "json"
+                  && canonical.contains($0.deletingPathExtension().lastPathComponent))
+            }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     func load(id: String) throws -> Theme {
-        let url = fileURL(id: id)
-        guard FileManager.default.fileExists(atPath: url.path) else {
+        guard let url = existingFileURL(id: id) else {
             throw ThemeError(message: "no theme \"\(id)\" in \(dir.path)")
         }
         return try load(url: url)
@@ -5334,7 +5775,36 @@ struct ThemeLibrary {
         catch { throw ThemeError(message: "cannot create \(dir.path): \(error.localizedDescription)") }
         let url = fileURL(id: theme.id)
         try ThemeLibrary.writeAtomically(try theme.canonicalData(), to: url)
+        removeLegacyRecord(id: theme.id)
         return url
+    }
+
+    // A migrated record leaves its JSON self behind; it goes to the Finder
+    // Trash (recoverable), and only after the TOML file is safely on disk.
+    // Returns where it landed, or nil when there was nothing to remove or
+    // the Trash refused -- the leftover is harmless either way, because
+    // `load` prefers the TOML file.
+    @discardableResult
+    func removeLegacyRecord(id: String) -> URL? {
+        let legacy = legacyFileURL(id: id)
+        guard FileManager.default.fileExists(atPath: legacy.path) else { return nil }
+        var resulting: NSURL?
+        do { try FileManager.default.trashItem(at: legacy, resultingItemURL: &resulting) }
+        catch { return nil }
+        return resulting as URL?
+    }
+
+    // Removing a record takes both spellings: a migrated library has only
+    // the TOML file, one that never wrote a theme has only the JSON.
+    func removeRecord(id: String) throws {
+        var found = false
+        for url in [fileURL(id: id), legacyFileURL(id: id)]
+        where FileManager.default.fileExists(atPath: url.path) {
+            found = true
+            do { try FileManager.default.removeItem(at: url) }
+            catch { throw ThemeError(message: "cannot delete \(url.path): \(error.localizedDescription)") }
+        }
+        guard found else { throw ThemeError(message: "no theme \"\(id)\" in \(dir.path)") }
     }
 
     // Temp file, fsync, rename: a reader never sees half a record, and a
@@ -6463,10 +6933,11 @@ func usage() -> Never {
            omacosy-themecore theme delete <id> [--json]
            omacosy-themecore theme rename <id> <new name> [--json]
            omacosy-themecore theme duplicate <id> [--id ID] [--name NAME] [--json]
-           omacosy-themecore theme import <file> [--id ID] [--name NAME] [--format json|colors-toml|base16] [--replace|--rename] [--json]
+           omacosy-themecore theme migrate [--dry-run] [--json]
+           omacosy-themecore theme import <file> [--id ID] [--name NAME] [--format json|toml|colors-toml|base16] [--replace|--rename] [--json]
            omacosy-themecore theme export <id> [--out PATH | --bundle DIR] [--templates DIR] [--json]
-           omacosy-themecore theme materialize <id|file.json> [--wallpaper IMAGE] [--json]
-           omacosy-themecore theme wallpaper <id|file.json> [--source] [--json]
+           omacosy-themecore theme materialize <id|theme file> [--wallpaper IMAGE] [--json]
+           omacosy-themecore theme wallpaper <id|theme file> [--source] [--json]
            omacosy-themecore wallpaper list [--dir DIR] [--json]
            omacosy-themecore wallpaper scan [--dir DIR] [--json]
            omacosy-themecore wallpaper info <path> [--json]
@@ -6610,7 +7081,7 @@ func exportBundle(_ theme: Theme, to path: String, templates: String?) throws ->
                                             withIntermediateDirectories: true)
 
     try ThemeLibrary.writeAtomically(try theme.canonicalData(),
-                                     to: URL(fileURLWithPath: dir + "/\(theme.id).json"))
+                                     to: URL(fileURLWithPath: dir + "/\(theme.id).toml"))
 
     let rendered = theme.palette.rendered()
     try Materialise.colorsToml(rendered)
@@ -6652,7 +7123,7 @@ func exportBundle(_ theme: Theme, to path: String, templates: String?) throws ->
 
     // The terminal-tool configs come from the shell pipeline's own writers, so
     // an export matches what an apply produces. Absent or failing, the bundle
-    // still carries the JSON and the editor configs.
+    // still carries the record and the editor configs.
     if let script = termAutoThemeBin() {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: script)
@@ -7086,7 +7557,11 @@ case "theme":
             args.removeFirst()
             noExtraArguments()
             let theme = try library.load(id: id)
-            FileHandle.standardOutput.write(try theme.canonicalData())
+            // The record's own bytes (TOML for anything this build wrote),
+            // or the object as JSON when the caller asks -- the dashboard
+            // reads it that way.
+            if jsonOut { printJSON(theme.canonicalObject()) }
+            else { FileHandle.standardOutput.write(try theme.canonicalData()) }
             exit(0)
         } catch { themeError(error) }
 
@@ -7187,7 +7662,7 @@ case "theme":
                 data = FileHandle.standardInput.readDataToEndOfFile()
                 label = "stdin"
             }
-            var top = try jsonTopLevel(data, label: label)
+            var top = try themeTopLevel(data, label: label)
             let hadID = top["id"] != nil || idFlag != nil
             if let idFlag { top["id"] = idFlag }
             if let nameFlag { top["name"] = nameFlag }
@@ -7278,8 +7753,7 @@ case "theme":
             args.removeFirst()
             noExtraArguments()
             let theme = try library.load(id: id)
-            do { try FileManager.default.removeItem(at: library.fileURL(id: id)) }
-            catch { throw ThemeError(message: "cannot delete \(library.fileURL(id: id).path): \(error.localizedDescription)") }
+            try library.removeRecord(id: id)
             library.pruneUnreferencedMedia(theme.wallpaper.media)
             library.removeMaterialised(id: id)
             var promoted: String?
@@ -7297,6 +7771,44 @@ case "theme":
             }
             print("deleted \(id)")
             if let promoted { print("promoted \(promoted) as primary") }
+            exit(0)
+        } catch { themeError(error) }
+
+    case "migrate":
+        do {
+            let dryRun = takeBool("--dry-run")
+            noExtraArguments()
+            var migrated: [String] = []
+            var trashed: [String] = []
+            var warnings: [String] = []
+            // Every legacy record becomes its TOML self; the JSON original
+            // goes to the Finder Trash once the new file is written.
+            for url in library.recordFiles() where url.pathExtension.lowercased() == "json" {
+                let id = url.deletingPathExtension().lastPathComponent
+                do {
+                    let theme = try library.load(url: url)
+                    guard theme.id == id else {
+                        warnings.append("\(url.lastPathComponent): holds id \"\(theme.id)\"; leaving it alone")
+                        continue
+                    }
+                    if !dryRun {
+                        // The TOML first, the Trash after: a failure at
+                        // either step never loses the record.
+                        try ThemeLibrary.writeAtomically(try theme.canonicalData(),
+                                                        to: library.fileURL(id: id))
+                        if let gone = library.removeLegacyRecord(id: id) {
+                            trashed.append(gone.path)
+                        }
+                    }
+                    migrated.append(id)
+                } catch let e as ThemeError {
+                    warnings.append(e.message)
+                }
+            }
+            for warning in warnings { warn(warning) }
+            if jsonOut { printJSON(["migrated": migrated, "trashed": trashed, "dryRun": dryRun]) }
+            for id in migrated { print(dryRun ? "would migrate \(id)" : "migrated \(id)") }
+            if migrated.isEmpty { print("nothing to migrate") }
             exit(0)
         } catch { themeError(error) }
 
@@ -7386,8 +7898,10 @@ case "theme":
             let label = path.map { ($0 as NSString).lastPathComponent } ?? "stdin"
             let format = try importFormat(formatFlag, path: path, data: data)
             var theme: Theme
-            if format == "json" {
-                var top = try jsonTopLevel(data, label: label)
+            if format == "json" || format == "toml" {
+                var top = format == "toml"
+                    ? try tomlTopLevel(data, label: label)
+                    : try jsonTopLevel(data, label: label)
                 if let idFlag { top["id"] = idFlag }
                 if let nameFlag { top["name"] = nameFlag }
                 if top["id"] == nil {
@@ -7466,6 +7980,7 @@ case "theme":
             }
             let data = try theme.canonicalData()
             guard let out else {
+                if jsonOut { printJSON(theme.canonicalObject()) }
                 FileHandle.standardOutput.write(data)
                 exit(0)
             }

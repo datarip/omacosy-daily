@@ -3009,9 +3009,9 @@ func firstJSONObject(in output: String) -> [String: Any]? {
     return nil
 }
 
-// A theme import's file types: our JSON, an Omarchy colors.toml and a Base16
-// YAML (the engine also sniffs the content), plus plain text so an
-// extensionless file can be picked.
+// A theme import's file types: our theme record (JSON or TOML), an Omarchy
+// colors.toml and a Base16 YAML (the engine also sniffs the content), plus
+// plain text so an extensionless file can be picked.
 func importContentTypes() -> [UTType] {
     var types: [UTType] = [.json, .yaml, .plainText]
     if let toml = UTType(filenameExtension: "toml") { types.append(toml) }
@@ -3166,8 +3166,8 @@ func applyTheme(_ c: ThemeCell, done: @escaping () -> Void) {
     // the derived dir, a stock theme through its logical name
     let cmd: String
     if let id = c.editionID {
-        let json = HOME + "/.config/omacosy/themes/" + id + ".json"
-        cmd = "\(HOME)/.local/bin/omacosy-theme-switch set-theme \(shellQuote(json))"
+        // By id: the engine reads whichever spelling the library holds.
+        cmd = "\(HOME)/.local/bin/omacosy-theme-switch set-theme \(shellQuote(id))"
     } else if c.isCustom {
         cmd = "\(HOME)/.local/bin/omacosy-theme-switch set-raw \(shellQuote(c.wallpaper))"
     } else {
@@ -11471,7 +11471,7 @@ final class ThemeEditor {
             }
             return ("Couldn't save the theme. Try again.", nil)
         }
-        let (sc, so) = shell("\(themecoreBin()) theme show \(shellQuote(id)) 2>/dev/null")
+        let (sc, so) = shell("\(themecoreBin()) theme show \(shellQuote(id)) --json 2>/dev/null")
         if sc == 0, let fresh = (try? JSONSerialization.jsonObject(with: Data(so.utf8))) as? [String: Any] {
             return (nil, fresh)
         }
@@ -11518,8 +11518,7 @@ final class ThemeEditor {
     private func performApply(id: String, name: String) {
         root.footer.applyButton.busy = true
         DispatchQueue.global().async { [weak self] in
-            let json = HOME + "/.config/omacosy/themes/" + id + ".json"
-            _ = shell("\(HOME)/.local/bin/omacosy-theme-switch set-theme \(shellQuote(json))")
+            _ = shell("\(HOME)/.local/bin/omacosy-theme-switch set-theme \(shellQuote(id))")
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.root.footer.applyButton.busy = false
@@ -11608,16 +11607,17 @@ final class ThemeEditor {
         }
     }
 
-    // Import reads our JSON, a flat colors.toml or a Base16 (YAML) scheme.
-    // The engine refuses an id that already exists unless told which way to
-    // go, so the first try asks, then Rename or Replace re-runs with its flag.
+    // Import reads our theme record (JSON or TOML), a flat colors.toml or a
+    // Base16 (YAML) scheme. The engine refuses an id that already exists
+    // unless told which way to go, so the first try asks, then Rename or
+    // Replace re-runs with its flag.
     private func startImport() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Import"
-        panel.message = "Omacosy JSON, a colors.toml or a Base16 (YAML) scheme."
+        panel.message = "An Omacosy theme, a colors.toml or a Base16 (YAML) scheme."
         panel.allowedContentTypes = importContentTypes()
         panel.beginSheetModal(for: window) { [weak self] resp in
             guard let self, resp == .OK, let url = panel.url else { return }
@@ -11878,7 +11878,7 @@ final class ThemeEditor {
         case .edition(let e):
             let q = shellQuote(e.id)
             DispatchQueue.global().async { [weak self] in
-                let (code, out) = shell("\(themecoreBin()) theme show " + q + " 2>/dev/null")
+                let (code, out) = shell("\(themecoreBin()) theme show " + q + " --json 2>/dev/null")
                 guard code == 0, let data = out.data(using: .utf8),
                       let rec = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 else { return }

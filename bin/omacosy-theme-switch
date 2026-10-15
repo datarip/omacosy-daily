@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # omacosy-theme-switch [theme|wallpaper|set <name> [wallpaper]|
-#                       set-theme <theme.json>|set-raw <wallpaper>|off]
+#                       set-theme <id|theme file>|set-raw <wallpaper>|off]
 # — switch a theme instantly and in sync. Super+Shift+T and Super+Shift+B
 # call this; the dashboard calls set-theme for a saved edition and set-raw
 # for a plain wallpaper.
@@ -222,12 +222,14 @@ case "$mode" in
       case "$next" in
         theme:*)
           id="${next#theme:}"
-          json="$HOME/.config/omacosy/themes/$id.json"
-          theme_dir="$("$THEMECORE" theme materialize "$json")" || exit 1
+          # By id: the engine resolves whichever spelling the library holds
+          # (<id>.toml for anything a current build wrote, <id>.json for a
+          # record still waiting to be migrated).
+          theme_dir="$("$THEMECORE" theme materialize "$id")" || exit 1
           shown="$(find -L "$theme_dir/backgrounds" -maxdepth 1 -type f 2>/dev/null | sort | head -1)"
           wall="$(readlink -f "$shown" 2>/dev/null || true)"; [ -n "$wall" ] || wall="$shown"
           [ -n "$wall" ] || exit 1
-          source="$("$THEMECORE" theme wallpaper "$json" --source 2>/dev/null || true)"
+          source="$("$THEMECORE" theme wallpaper "$id" --source 2>/dev/null || true)"
           log "switch wallpaper -> theme:$id / $(basename "$wall")"
           show_overlay_then_relink "$wall" "$theme_dir" "theme:$id" "$source"
           exit 0 ;;
@@ -309,10 +311,10 @@ case "$mode" in
     ;;
 
   set-theme)
-    json="${1:?usage: omacosy-theme-switch set-theme <theme.json>}"
-    # Materialise first: an invalid JSON, or an edition whose image is gone,
+    record="${1:?usage: omacosy-theme-switch set-theme <id|theme file>}"
+    # Materialise first: an invalid record, or an edition whose image is gone,
     # fails here and touches neither the desktop nor the symlink.
-    dir="$("$THEMECORE" theme materialize "$json")" || exit 1
+    dir="$("$THEMECORE" theme materialize "$record")" || exit 1
     # The directory's backgrounds link is authoritative: the edition's own
     # image, or its heavy-blur variant when wallpaper.blur is on. Resolve
     # past the materialised directory so the pointer names the image, not a
@@ -321,7 +323,7 @@ case "$mode" in
     wall="$(readlink -f "$shown" 2>/dev/null || true)"
     [ -n "$wall" ] || wall="$shown"
     [ -n "$wall" ] || exit 1
-    source="$("$THEMECORE" theme wallpaper "$json" --source 2>/dev/null || true)"
+    source="$("$THEMECORE" theme wallpaper "$record" --source 2>/dev/null || true)"
     # <id>-<rev>; removing the shortest dash suffix strips exactly the
     # revision, whatever dashes the id itself carries.
     base="$(basename "$dir")"
@@ -344,7 +346,7 @@ case "$mode" in
     ;;
 
   *)
-    echo "usage: omacosy-theme-switch [theme|wallpaper|set <name> [wallpaper]|set-theme <theme.json>|set-raw <wallpaper>|off]" >&2
+    echo "usage: omacosy-theme-switch [theme|wallpaper|set <name> [wallpaper]|set-theme <id|theme file>|set-raw <wallpaper>|off]" >&2
     exit 2
     ;;
 esac

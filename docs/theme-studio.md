@@ -63,6 +63,11 @@ write byte-identical desktop files; an edition is the picture's own theme plus,
 only when you change them, its palette, its picture edits and its per-app
 overrides.
 
+Each saved edition is one TOML file, `~/.config/omacosy/themes/<id>.toml`.
+Schema 1 wrote JSON instead: those files are still read, and convert to TOML
+the next time the theme is saved. `omacosy-themecore theme migrate` converts
+a whole library at once, moving each superseded `.json` to the Finder Trash.
+
 The theme on the desktop right now carries a green **Active** pill in the
 bottom-left of its card. While the `custom` theme is on, `Super+Shift+B` walks
 the grid's own order — the saved editions A→Z first, then the `Wallpaper #N`
@@ -84,7 +89,7 @@ an edited theme is saved first, so the bundle always matches what is on screen.
 
 ```sh
 omacosy-themecore theme export <id> --bundle DIR        # the full folder
-omacosy-themecore theme export <id> --out FILE.json     # just the record
+omacosy-themecore theme export <id> --out FILE.toml     # just the record
 ```
 
 `--templates DIR` points at another `config/theme-templates` tree; it is found
@@ -96,7 +101,7 @@ A full bundle is 17 files (16 when the theme has no per-app overrides):
 
 | File | What it is |
 | --- | --- |
-| `<id>.json` | the theme record — the same file Omacosy keeps in `~/.config/omacosy/themes/` |
+| `<id>.toml` | the theme record — the same file Omacosy keeps in `~/.config/omacosy/themes/` (an older bundle's `<id>.json` imports too) |
 | `colors.toml` | the flat 22-key Omarchy palette |
 | `zed.json` | Zed theme |
 | `neovim.lua` | Neovim scheme (`omacom/aether.nvim`, LazyVim) |
@@ -121,7 +126,7 @@ written into a bundle.
 
 **From the editor.** Press **Import** and pick a file. Three formats are read:
 
-- Omacosy's own theme JSON (the `<id>.json` from a bundle);
+- Omacosy's own theme record, TOML (and the JSON an older bundle carries);
 - a flat Omarchy `colors.toml` (the 22-key shape the stock themes use);
 - a Base16 scheme (YAML). The format is sniffed from the content, so a
   correctly-named file needs no flag.
@@ -134,7 +139,7 @@ the saved record). Esc cancels.
 
 ```sh
 omacosy-themecore theme import <file> [--id ID] [--name NAME] \
-    [--format json|colors-toml|base16] [--replace|--rename] [--json]
+    [--format json|toml|colors-toml|base16] [--replace|--rename] [--json]
 ```
 
 Without `--replace` or `--rename`, an id that already exists is refused, and
