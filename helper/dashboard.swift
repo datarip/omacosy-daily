@@ -15190,7 +15190,7 @@ final class RootView: NSView {
     private lazy var tabViews: [NSView] = [options, workspaces, themes, wallpapers, storage, keys, update]
     var onHide: (() -> Void)?
 
-    private let logoH: CGFloat = 34
+    private let logoH: CGFloat = 40
     private let topPad: CGFloat = 16
     private let tabH: CGFloat = 40
     private let pad: CGFloat = 20
