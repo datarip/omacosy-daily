@@ -42,6 +42,7 @@ REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 THEMES_DIR="$REPO_DIR/themes"
 THEME_SET="$REPO_DIR/bin/theme-set"
 THEME_BG_NEXT="$REPO_DIR/bin/theme-bg-next"
+THEME_SWITCH="$REPO_DIR/bin/omacosy-theme-switch"
 
 # The stock themes take upstream's list. The custom theme adds gif.
 # Measured 2026-09-18: macOS accepts an animated gif as the desktop
@@ -239,13 +240,14 @@ cmd_path() {
 }
 
 # What a day= or night= value may say. One rule per form, decided by the
-# shape of the string, so a stock theme and a wallpaper of your own can
-# live in the same field:
+# shape of the string, so a stock theme, a wallpaper of your own and a saved
+# edition can live in the same field:
 #
 #   gruvbox                      a stock theme, its first wallpaper
 #   gruvbox/2-flower-basket.webp a stock theme, that exact wallpaper
 #   a_beach.jpg                  a file in the custom wallpaper directory
 #   /Volumes/Photos/dawn.jpg     any absolute path
+#   theme:sunset-drive           a saved edition from the Themes tab
 #
 # Prints two words: the theme to set, and the wallpaper to set inside it
 # (or "-" for the theme's own first image). Exit 1 and a reason if the
@@ -253,6 +255,19 @@ cmd_path() {
 resolve_spec() {
   local spec="$1" d
   [ -n "$spec" ] || { echo "empty" >&2; return 1; }
+
+  # an edition: validated against the library now, so a day= or night=
+  # value never points at a record that is gone
+  if [ "${spec#theme:}" != "$spec" ]; then
+    local id="${spec#theme:}"
+    [ -n "$id" ] || { echo "theme: needs an id" >&2; return 1; }
+    if [ -x "$THEMECORE" ] && "$THEMECORE" theme show "$id" >/dev/null 2>&1; then
+      printf 'theme:%s -\n' "$id"
+      return 0
+    fi
+    echo "no theme \"$id\" in the library" >&2
+    return 1
+  fi
 
   # an absolute path is a wallpaper, and which theme it belongs to depends
   # on where it lives
@@ -291,7 +306,16 @@ resolve_spec() {
 cmd_resolve() {
   local r; r="$(resolve_spec "${1:-}")" || return 1
   set -- $r
-  if [ "$2" = "-" ]; then echo "theme $1 (its first wallpaper)"; else echo "theme $1, wallpaper $2"; fi
+  if [ "${1#theme:}" != "$1" ]; then
+    # an edition's id is a slug; its NAME is the half a person recognises
+    local name; name="$("$THEMECORE" theme show "${1#theme:}" --json 2>/dev/null \
+      | jq -r '.name // empty' 2>/dev/null)"
+    echo "theme edition ${name:-${1#theme:}}"
+  elif [ "$2" = "-" ]; then
+    echo "theme $1 (its first wallpaper)"
+  else
+    echo "theme $1, wallpaper $2"
+  fi
 }
 
 # Put a day=/night= value on screen. This is what the appearance agent
@@ -300,6 +324,16 @@ cmd_apply() {
   local r; r="$(resolve_spec "${1:-}")" || return 1
   set -- $r
   local theme="$1" wall="$2"
+  if [ "${theme#theme:}" != "$theme" ]; then
+    # A saved edition: the fast, synced switch is the one route that can put
+    # a SPECIFIC edition on screen — theme-set only reaches the wallpaper's
+    # primary edition, which may be a different variation.
+    [ -x "$THEME_SWITCH" ] \
+      || { echo "omacosy-custom-theme: $THEME_SWITCH missing — run install.sh" >&2; return 1; }
+    "$THEME_SWITCH" set-theme "${theme#theme:}" >/dev/null || return 1
+    echo "$theme"
+    return 0
+  fi
   if [ "$theme" = custom ]; then
     # theme-set custom reads custom-index, so pointing it at the wanted
     # wallpaper first is what makes it land there rather than on the

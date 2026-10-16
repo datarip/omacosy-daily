@@ -757,10 +757,10 @@ what it found.
 ## 8. Day and night
 
 Two keys name what to show in each appearance. Either may be a **shipped
-theme** or a **wallpaper of your own**, so this is not limited to the
-custom theme.
+theme**, a **wallpaper of your own**, or a **saved edition**, so this is not
+limited to the custom theme.
 
-Four forms, one rule each:
+Five forms, one rule each:
 
 | you write | it means |
 | --- | --- |
@@ -768,10 +768,18 @@ Four forms, one rule each:
 | `gruvbox/2-flower-basket.webp` | that shipped theme, that wallpaper |
 | `a_beach.jpg` | that file in your wallpaper directory |
 | `/Volumes/Photos/dawn.jpg` | any absolute path |
+| `theme:sunset-drive` | that saved edition from the Themes tab |
 
 A leading `/` is a path. A name matching a directory under `themes/` is a
-shipped theme. `theme/file` is that theme's wallpaper. Anything else is a
+shipped theme. `theme/file` is that theme's wallpaper. `theme:<id>` is a
+saved edition; the id is the one in its record file name. Anything else is a
 filename in your directory.
+
+The quickest way to set them is the dashboard: right-click any card in the
+**Themes** tab for **Set as Day Theme** or **Set as Night Theme**. That
+writes the matching key below and switches `follow_appearance` on, so the
+set is immediately live; the card's menu shows a check beside the half it
+already holds.
 
 ```sh
 omacosy-custom-theme day   gruvbox

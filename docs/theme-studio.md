@@ -71,8 +71,11 @@ a whole library at once, moving each superseded `.json` to the Finder Trash.
 The theme on the desktop right now carries a green **Active** pill in the
 bottom-left of its card. While the `custom` theme is on, `Super+Shift+B` walks
 the grid's own order — the saved editions A→Z first, then the `Wallpaper #N`
-cells — and wraps, so the keyboard and the grid never disagree. Right-click a
-named edition for **Duplicate Theme**. The hover **trash** asks before removing:
+cells — and wraps, so the keyboard and the grid never disagree. Right-click
+any card for **Set as Day Theme** / **Set as Night Theme**: the macOS
+appearance then picks between them, and a check marks the half a card already
+holds; a named edition adds **Duplicate Theme** to the same menu. The hover
+**trash** asks before removing:
 an edition's trash deletes just the record, while a raw wallpaper's trash moves
 the picture to the Finder Trash and, as a separate choice, can delete the
 editions built from it. Nothing is ever hard-deleted.

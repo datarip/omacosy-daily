@@ -2815,6 +2815,45 @@ func activeThemeSpec() -> ActiveTheme? {
     return .stock(cur)
 }
 
+// The day=/night= spec that names a cell: a saved edition by its record id,
+// a raw wallpaper by its path, a stock theme's wallpaper as <theme>/<file>.
+// Exactly the forms `omacosy-custom-theme resolve` accepts.
+func dayNightSpec(for c: ThemeCell) -> String {
+    if let id = c.editionID { return "theme:" + id }
+    if c.isCustom { return c.wallpaper }
+    return c.logical + "/" + (c.wallpaper as NSString).lastPathComponent
+}
+
+// True when a day=/night= value names this cell. The exact spec the menu
+// writes matches, and so does a bare filename for a wallpaper in the
+// configured folder — the other spelling the value may take.
+func dayNightSpecNames(_ spec: String, _ c: ThemeCell) -> Bool {
+    guard !spec.isEmpty else { return false }
+    if let id = c.editionID { return spec == "theme:" + id }
+    if c.isCustom {
+        if spec.hasPrefix("/") { return canonicalPath(spec) == canonicalPath(c.wallpaper) }
+        if spec.contains("/") { return false }
+        return spec == (c.wallpaper as NSString).lastPathComponent
+    }
+    return spec == c.logical + "/" + (c.wallpaper as NSString).lastPathComponent
+}
+
+// The day=/night= values themes.conf holds now. Last line wins, the same
+// rule omacosy-custom-theme's conf_get applies, so the menu's check marks
+// cannot disagree with what the appearance agent would read.
+func dayNightSpecs() -> (day: String, night: String) {
+    var day = "", night = ""
+    guard let text = try? String(contentsOfFile: HOME + "/.config/omacosy/themes.conf",
+                                 encoding: .utf8) else { return (day, night) }
+    for line in text.split(separator: "\n") {
+        guard let eq = line.firstIndex(of: "=") else { continue }
+        let key = line[..<eq].trimmingCharacters(in: .whitespaces)
+        let value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+        if key == "day" { day = value } else if key == "night" { night = value }
+    }
+    return (day, night)
+}
+
 // --- theme editions ---------------------------------------------------------
 
 struct ThemeEdition {
@@ -3065,6 +3104,18 @@ func themecoreMessage(_ output: String, fallback: String) -> String {
     return fallback
 }
 
+// The bare message from a failed omacosy-custom-theme run, or the fallback.
+func customThemeMessage(_ output: String, fallback: String) -> String {
+    for line in output.split(separator: "\n") {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("omacosy-custom-theme:") else { continue }
+        let msg = String(t.dropFirst("omacosy-custom-theme:".count))
+            .trimmingCharacters(in: .whitespaces)
+        if !msg.isEmpty { return msg }
+    }
+    return fallback
+}
+
 // WCAG relative luminance, so the Edit pill can pick a label colour that
 // stays readable on the accent fill. 0.179 is the sRGB pivot where black
 // and white trade places.
@@ -3199,6 +3250,12 @@ final class ThemeGridView: NSView {
     var onToggleSelect: ((Int) -> Void)?
     // right-click "Duplicate Theme" on a named edition
     var onDuplicate: ((ThemeCell) -> Void)?
+    // right-click "Set as Day/Night Theme" on any cell; the tab owns the
+    // command. key is "day" or "night".
+    var onSetDayNight: ((ThemeCell, String) -> Void)?
+    // the day=/night= values themes.conf holds now, for the menu's check
+    // marks; set by the tab on every reload
+    var dayNight: (day: String, night: String) = ("", "")
     // Off-screen review only.
     func debugSetHover(_ i: Int?) { hoveredIndex = i; needsDisplay = true }
     private var hoveredIndex: Int?
@@ -3520,19 +3577,29 @@ final class ThemeGridView: NSView {
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    // Right-click on a named edition opens a small themed popup at the click
-    // (an NSMenu is a grey system panel). Raw Wallpaper #N cells have no
-    // record to copy, so they get no menu.
+    // Right-click opens a small themed popup at the click (an NSMenu is a
+    // grey system panel). Every cell can be made the day or the night theme;
+    // a named edition additionally offers Duplicate Theme. A check marks the
+    // half this cell already holds.
     override func rightMouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         guard let i = cellFrames.first(where: { $0.value.contains(p) })?.key,
-              cells.indices.contains(i), cells[i].isCustom, cells[i].editionID != nil else {
+              cells.indices.contains(i) else {
             super.rightMouseDown(with: event)
             return
         }
         let cell = cells[i]
-        ContextMenu.show(items: ["Duplicate Theme"], at: NSEvent.mouseLocation) { [weak self] _ in
-            self?.onDuplicate?(cell)
+        let check = "\u{f00c}  "
+        let dayItem = (dayNightSpecNames(dayNight.day, cell) ? check : "") + "Set as Day Theme"
+        let nightItem = (dayNightSpecNames(dayNight.night, cell) ? check : "") + "Set as Night Theme"
+        var items = [dayItem, nightItem]
+        if cell.editionID != nil { items.append("Duplicate Theme") }
+        ContextMenu.show(items: items, at: NSEvent.mouseLocation) { [weak self] index in
+            switch index {
+            case 0: self?.onSetDayNight?(cell, "day")
+            case 1: self?.onSetDayNight?(cell, "night")
+            default: self?.onDuplicate?(cell)
+            }
         }
     }
 
@@ -3671,6 +3738,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
         }
         grid.onToggleSelect = { [weak self] i in self?.toggleCell(i) }
         grid.onDuplicate = { [weak self] cell in self?.duplicate(cell) }
+        grid.onSetDayNight = { [weak self] cell, key in self?.setDayNight(cell, key: key) }
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(visibleChanged),
             name: NSView.boundsDidChangeNotification, object: scroll.contentView)
@@ -3845,6 +3913,39 @@ final class ThemesTabView: NSView, ScrollStepTab {
         }
     }
 
+    // Right-click Set as Day/Night Theme: write the key the appearance agent
+    // reads, switch following on — the whole point of the choice — and put
+    // it on screen now when the current appearance is the half chosen.
+    private func setDayNight(_ cell: ThemeCell, key: String) {
+        let isDay = key == "day"
+        let label = isDay ? "Day" : "Night"
+        let spec = dayNightSpec(for: cell)
+        status = "Setting \(label) Theme…"
+        needsDisplay = true
+        DispatchQueue.global().async { [weak self] in
+            let custom = "\(HOME)/.local/bin/omacosy-custom-theme"
+            let (code, out) = shell("\(custom) \(key) \(shellQuote(spec)) 2>&1")
+            var message: String
+            if code != 0 {
+                message = "Error: " + customThemeMessage(out, fallback: "The \(label) Theme was not set")
+            } else {
+                _ = shell("\(custom) follow on 2>/dev/null")
+                // The agent's own rule: the key is absent in light mode, so a
+                // non-zero read means light.
+                let (dc, dout) = shell("/usr/bin/defaults read -g AppleInterfaceStyle 2>/dev/null")
+                let dark = dc == 0 && dout.trimmingCharacters(in: .whitespacesAndNewlines) == "Dark"
+                let appliesNow = dark != isDay
+                if appliesNow { _ = shell("\(custom) apply \(shellQuote(spec)) >/dev/null 2>&1") }
+                message = "\(label) Theme: \(cell.title)"
+                    + (appliesNow ? " — applied" : " — follows the macOS appearance")
+            }
+            DispatchQueue.main.async {
+                self?.status = message
+                self?.reload()
+            }
+        }
+    }
+
     private var watchedPaths: [String] = []
     private func watchSources() {
         var paths: [String] = []
@@ -3865,6 +3966,10 @@ final class ThemesTabView: NSView, ScrollStepTab {
         let dir = wallpapersDir()
         // the live theme can change without the cell set changing
         grid.active = activeThemeSpec()
+        // the day/night values feed the context menu's check marks; a write
+        // to themes.conf lands here through the watch, and a set from the
+        // menu reloads explicitly
+        grid.dayNight = dayNightSpecs()
 
         // Re-entering the tab re-reads the shelves. When nothing changed,
         // leave the decoded thumbnails and palettes exactly as they are:
@@ -15297,6 +15402,58 @@ func editorStateSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--image-editor-selftest") {
     exit(editorStateSelfTest() == 0 ? 0 : 1)
+}
+
+// The context menu's day/night rules are two pure functions; drive them with
+// all three cell kinds so a spec-form change cannot half-land. Like the other
+// doors it runs before the window opens.
+func dayNightSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    let edition = ThemeCell(logical: "custom",
+                            wallpaper: HOME + "/.local/share/omacosy/theme-media/pic.png",
+                            title: "Sunset Drive (Night)", isCustom: true,
+                            paletteFile: "", editionID: "sunset-drive-night")
+    check("an edition's spec is theme:<id>",
+          dayNightSpec(for: edition) == "theme:sunset-drive-night")
+    check("an edition matches its own spec",
+          dayNightSpecNames("theme:sunset-drive-night", edition))
+    check("another edition does not match",
+          !dayNightSpecNames("theme:other", edition))
+    check("a wallpaper path does not match an edition",
+          !dayNightSpecNames(edition.wallpaper, edition))
+
+    let raw = ThemeCell(logical: "custom", wallpaper: "/tmp/pics/beach.jpg",
+                        title: "Wallpaper #1", isCustom: true, paletteFile: "")
+    check("a raw wallpaper's spec is its path",
+          dayNightSpec(for: raw) == "/tmp/pics/beach.jpg")
+    check("an absolute spec matches the raw cell",
+          dayNightSpecNames("/tmp/pics/beach.jpg", raw))
+    check("a bare filename matches a raw cell in the folder",
+          dayNightSpecNames("beach.jpg", raw))
+    check("a stock spec does not match a raw cell",
+          !dayNightSpecNames("gruvbox/beach.jpg", raw))
+
+    let stock = ThemeCell(logical: "gruvbox",
+                          wallpaper: "/repo/themes/gruvbox/backgrounds/2-flower.webp",
+                          title: "Gruvbox — 2 Flower", isCustom: false, paletteFile: "")
+    check("a stock cell's spec is <theme>/<file>",
+          dayNightSpec(for: stock) == "gruvbox/2-flower.webp")
+    check("the stock spec matches its cell",
+          dayNightSpecNames("gruvbox/2-flower.webp", stock))
+    check("another theme's wallpaper does not match",
+          !dayNightSpecNames("tokyo-night/2-flower.webp", stock))
+
+    print(failures == 0 ? "day-night selftest: all checks passed"
+                        : "day-night selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--day-night-selftest") {
+    exit(dayNightSelfTest() == 0 ? 0 : 1)
 }
 
 // The Themes gallery must open at the top when the tab is (re)shown, and must
