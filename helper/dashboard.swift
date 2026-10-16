@@ -136,6 +136,11 @@ func sha256Hex(_ s: String) -> String {
     SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
 }
 
+// omniwmctl, from whichever install location has it (same list as bar.swift)
+let omniwmctlBin = ["/opt/homebrew/bin/omniwmctl",
+                    "/Applications/OmniWM.app/Contents/MacOS/omniwmctl"]
+    .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "omniwmctl"
+
 func readConfKey(_ file: String, _ key: String) -> String? {
     guard let text = try? String(contentsOfFile: file, encoding: .utf8) else { return nil }
     for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -1283,9 +1288,12 @@ func screensInfo() -> [ScreenInfo] {
            let workspaces = p2["workspaces"] as? [[String: Any]] {
             var byDisp: [String: [String]] = [:]
             for w in workspaces {
+                // the raw name is the workspace's identity: app rules and
+                // names are keyed on it. displayName is only a label — the
+                // user's own name for the workspace, shown by the row.
                 guard let did = (w["display"] as? [String: Any])?["id"] as? String,
-                      let dn = w["displayName"] as? String else { continue }
-                byDisp[did, default: []].append(dn)
+                      let rn = w["rawName"] as? String else { continue }
+                byDisp[did, default: []].append(rn)
             }
             let ordered = displays.sorted {
                 (($0["isMain"] as? Bool) ?? false) && !(($1["isMain"] as? Bool) ?? false)
@@ -1306,60 +1314,106 @@ func screensInfo() -> [ScreenInfo] {
     return res
 }
 
-// APP_WORKSPACE_RULES is a multi-line shell string; read the block between
-// the quotes rather than a single line
-func readWorkspaceRules() -> [(String, String)] {
-    guard let text = try? String(contentsOfFile: SETTINGS, encoding: .utf8) else { return [] }
-    var out: [(String, String)] = []
+// The index of the first quote that is NOT escaped by a backslash: a name
+// may hold a `\"` of its own, so only an unescaped quote ends the block.
+private func closeQuoteIndex(_ s: String) -> String.Index? {
+    var escaped = false
+    for i in s.indices {
+        let c = s[i]
+        if escaped { escaped = false; continue }
+        if c == "\\" { escaped = true; continue }
+        if c == "\"" { return i }
+    }
+    return nil
+}
+
+// A multi-line shell string in settings.conf holds its value between the
+// quotes, so its lines are read from the FILE — the dashboard never sources
+// it. nil = the key is not there. These two and the escape pair below have
+// a copy in helper/overview.swift; keep them in step.
+func readConfBlock(_ key: String, _ file: String = SETTINGS) -> [String]? {
+    guard let text = try? String(contentsOfFile: file, encoding: .utf8) else { return nil }
+    var found = false
+    var out: [String] = []
     var inBlock = false
     for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
         let line = String(raw)
         if !inBlock {
-            guard line.hasPrefix("APP_WORKSPACE_RULES=") else { continue }
-            let after = line.dropFirst("APP_WORKSPACE_RULES=".count)
-            if after.hasPrefix("\"") {
-                let rest = after.dropFirst()
-                if let close = rest.firstIndex(of: "\"") {
-                    let one = rest[rest.startIndex..<close]
-                    for t in one.split(separator: "\n") {
-                        let parts = t.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-                        if parts.count >= 2 { out.append((parts[0], parts[1])) }
-                    }
-                } else {
-                    inBlock = true
-                }
+            guard line.hasPrefix("\(key)=") else { continue }
+            found = true
+            let after = line.dropFirst(key.count + 1)
+            guard after.hasPrefix("\"") else { return nil }
+            let rest = String(after.dropFirst())
+            if let q = closeQuoteIndex(rest) {
+                return rest[rest.startIndex..<q]
+                    .split(separator: "\n", omittingEmptySubsequences: false)
+                    .map(String.init)
+                    .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             }
+            inBlock = true
             continue
         }
-        if line.contains("\"") { inBlock = false; continue }
-        let t = line.trimmingCharacters(in: .whitespaces)
-        let parts = t.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-        if parts.count >= 2 { out.append((parts[0], parts[1])) }
+        if let q = closeQuoteIndex(line) {
+            let head = String(line[line.startIndex..<q]).trimmingCharacters(in: .whitespaces)
+            if !head.isEmpty { out.append(head) }
+            return out
+        }
+        if !line.trimmingCharacters(in: .whitespaces).isEmpty { out.append(line) }
+    }
+    return found ? out : nil
+}
+
+// settings.conf is read by the shell with `source`: inside the quotes a
+// backslash is eaten and $ or a backtick would expand. The writer escapes
+// those four characters; every reader undoes it.
+func escapeConfValue(_ s: String) -> String {
+    var out = ""
+    for c in s {
+        switch c {
+        case "\\": out += "\\\\"
+        case "\"": out += "\\\""
+        case "$": out += "\\$"
+        case "`": out += "\\`"
+        default: out.append(c)
+        }
+    }
+    return out
+}
+
+func unescapeConfValue(_ s: String) -> String {
+    var out = ""
+    var it = s.makeIterator()
+    while let c = it.next() {
+        guard c == "\\", let n = it.next() else { out.append(c); continue }
+        switch n {
+        case "\\", "\"", "$", "`": out.append(n)
+        default: out += "\\"; out.append(n)
+        }
     }
     return out
 }
 
 @discardableResult
-func writeWorkspaceRules(_ pairs: [(String, String)]) -> Bool {
-    guard let text = try? String(contentsOfFile: SETTINGS, encoding: .utf8) else { return false }
+func writeConfBlock(_ key: String, _ body: [String], _ file: String = SETTINGS) -> Bool {
+    guard let text = try? String(contentsOfFile: file, encoding: .utf8) else { return false }
     let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     var out: [String] = []
     var i = 0
     var replaced = false
     while i < lines.count {
         let line = lines[i]
-        if line.hasPrefix("APP_WORKSPACE_RULES=") && !replaced {
-            out.append("APP_WORKSPACE_RULES=\"")
-            for (app, ws) in pairs { out.append("\(app)    \(ws)") }
+        if line.hasPrefix("\(key)=") && !replaced {
+            out.append("\(key)=\"")
+            out.append(contentsOf: body)
             out.append("\"")
             replaced = true
-            let after = line.dropFirst("APP_WORKSPACE_RULES=".count)
-            if after.hasPrefix("\"") && after.dropFirst().contains("\"") {
+            let after = line.dropFirst(key.count + 1)
+            if after.hasPrefix("\""), closeQuoteIndex(String(after.dropFirst())) != nil {
                 i += 1
             } else {
                 i += 1
                 while i < lines.count {
-                    if lines[i].contains("\"") { break }
+                    if closeQuoteIndex(lines[i]) != nil { break }
                     i += 1
                 }
                 i += 1
@@ -1370,14 +1424,58 @@ func writeWorkspaceRules(_ pairs: [(String, String)]) -> Bool {
         i += 1
     }
     if !replaced {
-        out.append("APP_WORKSPACE_RULES=\"")
-        for (app, ws) in pairs { out.append("\(app)    \(ws)") }
+        out.append("\(key)=\"")
+        out.append(contentsOf: body)
         out.append("\"")
     }
     var result = out.joined(separator: "\n")
     if !result.hasSuffix("\n") { result += "\n" }
-    do { try result.write(toFile: SETTINGS, atomically: true, encoding: .utf8); return true }
+    do { try result.write(toFile: file, atomically: true, encoding: .utf8); return true }
     catch { return false }
+}
+
+// APP_WORKSPACE_RULES is a multi-line shell string: "<bundle id> <workspace>"
+// per line.
+func readWorkspaceRules(_ file: String = SETTINGS) -> [(String, String)] {
+    guard let lines = readConfBlock("APP_WORKSPACE_RULES", file) else { return [] }
+    var out: [(String, String)] = []
+    for line in lines {
+        let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        if parts.count >= 2 { out.append((parts[0], parts[1])) }
+    }
+    return out
+}
+
+@discardableResult
+func writeWorkspaceRules(_ pairs: [(String, String)]) -> Bool {
+    writeConfBlock("APP_WORKSPACE_RULES", pairs.map { "\($0.0)    \($0.1)" })
+}
+
+// WORKSPACE_NAMES is "<workspace> <display name>" per line, the name holding
+// spaces. The Workspaces tab writes it; omacosy-settings applies it to
+// OmniWM's built-in per-workspace displayName; the overview draws it under
+// both managers (an AeroSpace workspace has no name of its own beyond the
+// numeric one, which the slots depend on).
+func readWorkspaceNames(_ file: String = SETTINGS) -> [String: String] {
+    guard let lines = readConfBlock("WORKSPACE_NAMES", file) else { return [:] }
+    var out: [String: String] = [:]
+    for line in lines {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        let parts = t.split(maxSplits: 1, whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        guard parts.count == 2 else { continue }
+        let name = unescapeConfValue(parts[1].trimmingCharacters(in: .whitespaces))
+        if !name.isEmpty { out[parts[0]] = name }
+    }
+    return out
+}
+
+@discardableResult
+func writeWorkspaceNames(_ names: [String: String], _ file: String = SETTINGS) -> Bool {
+    let body = names.keys.sorted(by: numericAsc).compactMap { ws -> String? in
+        guard let n = names[ws], !n.isEmpty else { return nil }
+        return "\(ws)    \(escapeConfValue(n))"
+    }
+    return writeConfBlock("WORKSPACE_NAMES", body, file)
 }
 
 final class AppListView: NSView {
@@ -2275,12 +2373,14 @@ final class ChipStrip: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
-final class WorkspaceRowView: NSView {
+final class WorkspaceRowView: NSView, NSTextFieldDelegate {
     let ws: String
     var assigned: [String]
     let allApps: [AppInfo]
+    var displayName: String? { didSet { needsDisplay = true } }
     var onAssign: ((String) -> Void)?
     var onRemove: ((String) -> Void)?
+    var onRename: ((String, String?) -> Void)?
     private var chipFrames: [(NSRect, String)] = []
     private var overflowApps: [String] = []
     private var moreFrame: NSRect = .zero
@@ -2288,18 +2388,54 @@ final class WorkspaceRowView: NSView {
     private let addButton = ButtonView()
     private let chipScroll = NSScrollView()
     private let chipStrip: ChipStrip
-    private let labelW: CGFloat = 120
-    private let addW: CGFloat = 96
+    // the inline name editor; hidden until the name or the pen is clicked
+    let nameField = NSTextField()
+    private let penButton = ButtonView()
+    // [pill][name ....][✎][›][chips ....][＋ Add App]: the pill is a perfect
+    // square — a circle in rounded-corner mode — so two-digit workspaces fit
+    // it, and the pen keeps its own fixed column whatever the name's length
+    private let pillSide: CGFloat = 26
+    private let nameX: CGFloat = 36
+    private let penX: CGFloat = 150
+    private let penSide: CGFloat = 22
+    private let chevronX: CGFloat = 178
+    private let chipsX: CGFloat = 192
+    // narrowed from 96 to pay for the pill: the "＋ Add App" label measures
+    // 70 pt in Bold 12, so 80 still leaves a 5 pt margin each side
+    private let addW: CGFloat = 80
 
-    init(ws: String, assigned: [String], allApps: [AppInfo]) {
+    init(ws: String, assigned: [String], allApps: [AppInfo], displayName: String?) {
         self.ws = ws
         self.assigned = assigned
         self.allApps = allApps
+        self.displayName = displayName
         self.chipStrip = ChipStrip(allApps: allApps)
         super.init(frame: .zero)
         addButton.title = "＋ Add App"
         addButton.onClick = { [weak self] in self?.showMenu() }
         addSubview(addButton)
+        penButton.title = "\u{f040}"
+        penButton.centeredByBounds = true
+        penButton.fontSize = 11
+        penButton.secondary = true
+        penButton.toolTip = "Rename Workspace"
+        penButton.onClick = { [weak self] in self?.startRenaming() }
+        addSubview(penButton)
+        nameField.isBezeled = false
+        nameField.drawsBackground = true
+        nameField.backgroundColor = palette.itemBG.withAlphaComponent(0.5)
+        nameField.textColor = palette.label
+        nameField.font = nerdFont("Bold", 12)
+        nameField.focusRingType = .none
+        nameField.usesSingleLineMode = true
+        nameField.lineBreakMode = .byTruncatingTail
+        nameField.isEditable = false
+        nameField.isSelectable = false
+        nameField.isHidden = true
+        nameField.delegate = self
+        nameField.target = self
+        nameField.action = #selector(nameReturn)
+        addSubview(nameField)
         chipScroll.hasHorizontalScroller = true
         chipScroll.drawsBackground = false
         chipScroll.borderType = .noBorder
@@ -2322,6 +2458,98 @@ final class WorkspaceRowView: NSView {
         return 16 + 6 + advance(chipLabel(id), nerdFont("Regular", 11)) + 22
     }
 
+    // --- the workspace name, edited in place ---
+
+    private func nameText() -> String {
+        displayName ?? "Workspace \(ws)"
+    }
+
+    // the name stops short of the pen's fixed column, whatever its length
+    private func fittedName() -> (text: String, width: CGFloat) {
+        let f = nerdFont("Bold", 12)
+        let t = truncate(nameText(), f, penX - 10 - nameX)
+        return (t, advance(t, f))
+    }
+
+    private var nameRect: NSRect {
+        NSRect(x: nameX, y: (bounds.height - 24) / 2, width: fittedName().width, height: 24)
+    }
+
+    // both the name text and the pen button open the editor
+    var renameZone: NSRect { nameRect.union(penButton.frame) }
+
+    private(set) var editingName = false
+
+    func startRenaming() {
+        guard !editingName else { return }
+        editingName = true
+        nameField.stringValue = displayName ?? ""
+        nameField.placeholderString = "Workspace \(ws)"
+        nameField.isEditable = true
+        nameField.isSelectable = true
+        nameField.isHidden = false
+        nameField.frame = NSRect(x: nameX, y: (bounds.height - 20) / 2,
+                                 width: penX - 8 - nameX, height: 20)
+        window?.makeFirstResponder(nameField)
+        // select-all so a rename can just be typed; the field is single-line
+        // and a name is not prose
+        if let editor = nameField.currentEditor() {
+            editor.selectedRange = NSRange(location: 0, length: (nameField.stringValue as NSString).length)
+        }
+        needsDisplay = true
+    }
+
+    func endRenaming(commit: Bool) {
+        guard editingName else { return }
+        editingName = false
+        if commit {
+            var v = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            v = v.replacingOccurrences(of: "\t", with: " ")
+            while v.contains("  ") { v = v.replacingOccurrences(of: "  ", with: " ") }
+            if v.count > 40 { v = String(v.prefix(40)).trimmingCharacters(in: .whitespaces) }
+            let newName: String? = v.isEmpty ? nil : v
+            if newName != displayName {
+                displayName = newName
+                onRename?(ws, newName)
+            }
+        }
+        if let editor = nameField.currentEditor(), editor.window?.firstResponder === editor {
+            window?.makeFirstResponder(nil)
+        }
+        nameField.isEditable = false
+        nameField.isSelectable = false
+        nameField.isHidden = true
+        needsDisplay = true
+    }
+
+    @objc private func nameReturn() { endRenaming(commit: true) }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        // Esc cancels the edit and keeps the old name; every other way the
+        // field can end (Return, focus loss) commits what is in it
+        let movement = (obj.userInfo?["NSTextMovement"] as? Int) ?? 0
+        endRenaming(commit: movement != NSCancelTextMovement)
+    }
+
+    // a workspace name is not prose: the field editor's red dotted spell
+    // underline and smart substitutions have no business here
+    func controlTextDidBeginEditing(_ obj: Notification) {
+        guard let editor = obj.userInfo?["NSFieldEditor"] as? NSTextView else { return }
+        editor.isContinuousSpellCheckingEnabled = false
+        editor.isAutomaticSpellingCorrectionEnabled = false
+        editor.isAutomaticTextReplacementEnabled = false
+        editor.isAutomaticQuoteSubstitutionEnabled = false
+        editor.isAutomaticDashSubstitutionEnabled = false
+        editor.isGrammarCheckingEnabled = false
+    }
+
+    // the field's colours are properties, not drawing, so a theme change
+    // has to set them again
+    func refreshFieldColors() {
+        nameField.textColor = palette.label
+        nameField.backgroundColor = palette.itemBG.withAlphaComponent(0.5)
+    }
+
     // computed on every draw as well as on layout: a rebuild after a
     // removal does not always trigger layout(), and a stale overflow list is
     // exactly the "+N more" that would not come back
@@ -2329,7 +2557,7 @@ final class WorkspaceRowView: NSView {
         chipFrames.removeAll()
         overflowApps.removeAll()
         moreFrame = .zero
-        var x: CGFloat = labelW + 8
+        var x: CGFloat = chipsX
         let limit = bounds.width - addW - 8
         var placed = 0
         for (idx, id) in assigned.enumerated() {
@@ -2344,7 +2572,7 @@ final class WorkspaceRowView: NSView {
         }
         overflowApps = Array(assigned.dropFirst(placed))
         if !overflowApps.isEmpty {
-            let mx = chipFrames.last.map { $0.0.maxX + 8 } ?? (labelW + 8)
+            let mx = chipFrames.last.map { $0.0.maxX + 8 } ?? chipsX
             moreFrame = NSRect(x: mx, y: (bounds.height - 24) / 2, width: 80, height: 24)
         }
     }
@@ -2353,8 +2581,10 @@ final class WorkspaceRowView: NSView {
         super.layout()
         let w: CGFloat = addW, h: CGFloat = 24
         addButton.frame = NSRect(x: bounds.width - w, y: (bounds.height - h) / 2, width: w, height: h)
+        penButton.frame = NSRect(x: penX, y: (bounds.height - penSide) / 2,
+                                 width: penSide, height: penSide)
         computeChips()
-        let stripX = labelW + 8
+        let stripX = chipsX
         let stripW = max(0, bounds.width - stripX - addW - 8)
         chipScroll.frame = NSRect(x: stripX, y: 0, width: stripW, height: bounds.height)
         if expanded {
@@ -2373,11 +2603,25 @@ final class WorkspaceRowView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         computeChips()
-        drawMidLeft("Workspace \(ws)", nerdFont("Bold", 12), palette.label,
-                    x: 0, midTop: bounds.height / 2, height: bounds.height)
+        // the slot pill: the workspace's own number, still visible after it
+        // is given a name. A perfect square that becomes a circle in the
+        // rounded-corner mode — the same windowCornerRadius > 2 rule the
+        // segmented control uses
+        let pillRect = NSRect(x: 0, y: (bounds.height - pillSide) / 2,
+                              width: pillSide, height: pillSide)
+        let pillPath: NSBezierPath = windowCornerRadius(6) > 2
+            ? NSBezierPath(ovalIn: pillRect) : NSBezierPath(rect: pillRect)
+        palette.itemBG.withAlphaComponent(0.6).setFill()
+        pillPath.fill()
+        drawMidCenter(ws, nerdFont("Bold", 12), palette.label,
+                      centerX: pillRect.midX, midTop: bounds.height / 2, height: bounds.height)
+        if !editingName {
+            drawMidLeft(fittedName().text, nerdFont("Bold", 12), palette.label,
+                        x: nameX, midTop: bounds.height / 2, height: bounds.height)
+        }
         if !assigned.isEmpty, expanded || !overflowApps.isEmpty {
             drawMidLeft(expanded ? "‹" : "›", nerdFont("Bold", 12), palette.accent,
-                        x: labelW - 16, midTop: bounds.height / 2, height: bounds.height)
+                        x: chevronX, midTop: bounds.height / 2, height: bounds.height)
         }
         if expanded { return }   // the horizontally scrollable strip draws them
 
@@ -2396,7 +2640,7 @@ final class WorkspaceRowView: NSView {
         }
         if assigned.isEmpty {
             drawMidLeft("No app assigned", nerdFont("Regular", 11), palette.muted,
-                        x: labelW + 8, midTop: bounds.height / 2, height: bounds.height)
+                        x: chipsX, midTop: bounds.height / 2, height: bounds.height)
         } else if !overflowApps.isEmpty {
             // accent, and clickable: reveals the hidden apps in a sideways
             // scroll on this same row
@@ -2409,6 +2653,12 @@ final class WorkspaceRowView: NSView {
         // let the tab fold any OTHER open row before this click is handled
         onWillHandleClick?(self)
         let p = convert(event.locationInWindow, from: nil)
+        // the name and its pen open the editor; before the expand check, or
+        // a row with overflow would swallow the name click
+        if !editingName, renameZone.contains(p) {
+            startRenaming()
+            return
+        }
         if expanded {
             // the chips live in the strip subview, which folds the row itself
             // on a non-✕ tap; a click on the row body folds it too
@@ -2416,7 +2666,7 @@ final class WorkspaceRowView: NSView {
             return
         }
         // the chevron/"+N more": expand into the scrollable strip
-        if !overflowApps.isEmpty, (moreFrame.contains(p) || p.x < labelW) {
+        if !overflowApps.isEmpty, (moreFrame.contains(p) || p.x < chipsX) {
             setExpanded(true)
             return
         }
@@ -2445,7 +2695,7 @@ final class WorkspaceRowView: NSView {
         // On collapse the strip leaves the hierarchy entirely, so it can never
         // paint over the folded row (a hidden view still could).
         if v {
-            let stripX = labelW + 8
+            let stripX = chipsX
             chipScroll.frame = NSRect(x: stripX, y: 0,
                                       width: max(0, bounds.width - stripX - addW - 8),
                                       height: bounds.height)
@@ -2480,12 +2730,14 @@ final class WorkspacesTabView: NSView, ScrollStepTab {
     func refreshColors() {
         needsDisplay = true
         screenSeg.needsDisplay = true
-        for r in rows { r.needsDisplay = true; r.subviews.forEach { $0.needsDisplay = true } }
+        for r in rows { r.needsDisplay = true; r.refreshFieldColors(); r.subviews.forEach { $0.needsDisplay = true } }
         scroller.refresh()
     }
     private var allApps: [AppInfo] = []
     private var rules: [(String, String)] = []
     private var savedRules: [(String, String)] = []
+    private var names: [String: String] = [:]
+    private var savedNames: [String: String] = [:]
     private var screenIndex = 0
     private var rows: [WorkspaceRowView] = []
     private let screenSeg = SegmentedView()
@@ -2509,6 +2761,8 @@ final class WorkspacesTabView: NSView, ScrollStepTab {
         allApps = installedApps()
         rules = readWorkspaceRules()
         savedRules = rules
+        names = readWorkspaceNames()
+        savedNames = names
         if screens.isEmpty { screens = [ScreenInfo(name: "This display", workspaces: (1...9).map(String.init))] }
         screenSeg.items = screens.map { $0.name }
         screenSeg.index = 0
@@ -2528,8 +2782,10 @@ final class WorkspacesTabView: NSView, ScrollStepTab {
         saveButton.onClick = { [weak self] in self?.save() }
         addSubview(saveButton)
         // one always-on monitor for the whole tab: a click anywhere outside
-        // the open row folds it back. Row lifetime does not matter here.
+        // the open row folds it back, and a click outside the name field
+        // commits the edit. Row lifetime does not matter here.
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] e in
+            self?.commitNameEditIfOutside(e)
             self?.collapseIfClickOutside(e)
             return e
         }
@@ -2541,6 +2797,19 @@ final class WorkspacesTabView: NSView, ScrollStepTab {
 
     private func collapseExpanded(except keep: WorkspaceRowView?) {
         if let r = expandedRow, r !== keep { r.setExpanded(false); expandedRow = nil }
+    }
+
+    // a click outside the name field commits the edit: in this app custom
+    // views never take first responder away on their own, so nothing else
+    // would end it
+    private func commitNameEditIfOutside(_ e: NSEvent) {
+        for r in rows where r.editingName {
+            guard e.window === r.window else { r.endRenaming(commit: true); continue }
+            let p = r.convert(e.locationInWindow, from: nil)
+            if !r.nameField.frame.contains(p), !r.renameZone.contains(p) {
+                r.endRenaming(commit: true)
+            }
+        }
     }
 
     func collapseIfClickOutside(_ e: NSEvent) {
@@ -2579,6 +2848,8 @@ final class WorkspacesTabView: NSView, ScrollStepTab {
     private func reloadFromDisk() {
         rules = readWorkspaceRules()
         savedRules = rules
+        names = readWorkspaceNames()
+        savedNames = names
         status = ""
         rebuildRows()
     }
@@ -2588,6 +2859,7 @@ final class WorkspacesTabView: NSView, ScrollStepTab {
 
     private var dirty: Bool {
         rules.map { "\($0.0) \($0.1)" }.sorted() != savedRules.map { "\($0.0) \($0.1)" }.sorted()
+            || names != savedNames
     }
 
     private func assigned(for ws: String) -> [String] {
@@ -2600,9 +2872,11 @@ final class WorkspacesTabView: NSView, ScrollStepTab {
         expandedRow = nil
         guard screens.indices.contains(screenIndex) else { return }
         for ws in screens[screenIndex].workspaces {
-            let row = WorkspaceRowView(ws: ws, assigned: assigned(for: ws), allApps: allApps)
+            let row = WorkspaceRowView(ws: ws, assigned: assigned(for: ws), allApps: allApps,
+                                       displayName: names[ws])
             row.onAssign = { [weak self] bundle in self?.assign(bundle, to: ws) }
             row.onRemove = { [weak self] bundle in self?.unassign(bundle) }
+            row.onRename = { [weak self] ws, name in self?.rename(ws, to: name) }
             row.onWillHandleClick = { [weak self] r in self?.collapseExpanded(except: r) }
             row.onExpandedChanged = { [weak self] r, exp in
                 if exp {
@@ -2629,6 +2903,11 @@ final class WorkspacesTabView: NSView, ScrollStepTab {
     private func unassign(_ bundle: String) {
         rules.removeAll { $0.0 == bundle }
         rebuildRows()
+    }
+
+    private func rename(_ ws: String, to name: String?) {
+        if let name { names[ws] = name } else { names.removeValue(forKey: ws) }
+        needsDisplay = true
     }
 
     override func layout() {
@@ -2688,23 +2967,50 @@ final class WorkspacesTabView: NSView, ScrollStepTab {
         status = "Applying…"
         needsDisplay = true
         let rules = self.rules
+        let names = self.names
+        let rulesChanged = rules.map { "\($0.0) \($0.1)" }.sorted()
+            != savedRules.map { "\($0.0) \($0.1)" }.sorted()
         // bundles taken out since the last save: omacosy-settings only adds
         // and corrects OmniWM rules, so these have to be pruned explicitly
         let removed = savedRules.map { $0.0 }.filter { b in !rules.contains { $0.0 == b } }
+        // a CLEARED name must go back to the raw workspace name by hand:
+        // omacosy-settings only applies the names the file still holds, and
+        // OmniWM would keep showing the stale displayName forever
+        let cleared = savedNames.keys.filter { names[$0] == nil }.sorted(by: numericAsc)
+        // a names-only save skips omacosy-settings: its top-gap step
+        // restarts the bar unconditionally, and renaming a workspace has no
+        // business reloading it. The renames are issued directly instead; a
+        // rules change still needs the full apply (aerospace.toml + OmniWM
+        // rules), and its 6b applies the names the file now holds.
+        var renames: [(String, String)] = []
+        if !rulesChanged {
+            for (ws, n) in names where savedNames[ws] != n { renames.append((ws, n)) }
+        }
+        renames += cleared.map { ($0, $0) }
+        renames.sort { numericAsc($0.0, $1.0) }
         DispatchQueue.global().async { [weak self] in
-            let wrote = writeWorkspaceRules(rules)
+            let wrote = writeWorkspaceRules(rules) && writeWorkspaceNames(names)
             var err = ""
             if wrote {
-                let (code, out) = shell("\(HOME)/.local/bin/omacosy-settings 2>&1")
-                if code != 0 {
-                    err = out.split(separator: "\n").last.map(String.init) ?? ""
-                } else if !removed.isEmpty {
-                    let args = removed.map(shellQuote).joined(separator: " ")
-                    _ = shell("\(HOME)/.local/bin/omacosy-ws-prune \(args) 2>&1")
+                if rulesChanged {
+                    let (code, out) = shell("\(HOME)/.local/bin/omacosy-settings 2>&1")
+                    if code != 0 {
+                        err = out.split(separator: "\n").last.map(String.init) ?? ""
+                    } else if !removed.isEmpty {
+                        let args = removed.map(shellQuote).joined(separator: " ")
+                        _ = shell("\(HOME)/.local/bin/omacosy-ws-prune \(args) 2>&1")
+                    }
+                }
+                if err.isEmpty, !renames.isEmpty {
+                    let cmds = renames.map {
+                        "\(omniwmctlBin) workspace rename \(shellQuote($0.0)) \(shellQuote($0.1))"
+                    }.joined(separator: "; ")
+                    _ = shell("if \(HOME)/.local/bin/omacosy-omni active >/dev/null 2>&1; then \(cmds); fi")
                 }
             } else { err = "could not write settings.conf" }
             DispatchQueue.main.async {
                 self?.savedRules = rules
+                self?.savedNames = names
                 self?.status = err.isEmpty ? "Saved" : "Error: \(err)"
                 self?.saveButton.busy = false
                 self?.needsDisplay = true
@@ -15714,6 +16020,87 @@ if CommandLine.arguments.contains("--dropdown-selftest") {
     exit(dropdownSelfTest() == 0 ? 0 : 1)
 }
 
+// The Workspace names block in settings.conf is read and written by hand
+// (the file is sourced by the shell, never by the dashboard), so its two
+// formats, its escaping and the in-place block replacement get their own
+// door. Like the other doors it runs before the window opens.
+func workspaceNamesSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    let tmp = NSTemporaryDirectory() + "omacosy-names-selftest-\(ProcessInfo.processInfo.processIdentifier)"
+    defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+    try? """
+    TERMINAL=Ghostty
+    WORKSPACE_NAMES="
+    1    Work
+    11    Deep Work
+    "
+
+    APP_FLOAT_RULES=""
+    """.write(toFile: tmp, atomically: true, encoding: .utf8)
+    check("a multi-line block is read",
+          readWorkspaceNames(tmp) == ["1": "Work", "11": "Deep Work"])
+    check("a key that is absent reads as nil", readConfBlock("MUSIC", tmp) == nil)
+
+    try? "WORKSPACE_NAMES=\"2    Leisures\"\n".write(toFile: tmp, atomically: true, encoding: .utf8)
+    check("a one-line block is read", readWorkspaceNames(tmp) == ["2": "Leisures"])
+
+    // the shelly characters must survive a write→read trip: the shell would
+    // eat or expand them if their escapes did not reach the file
+    let tricky = ["1": "It's a $5 \"work\" `day` \\ night", "9": "Course work"]
+    try? "TERMINAL=Ghostty\nWORKSPACE_NAMES=\"\"\nMUSIC=Spotify\n"
+        .write(toFile: tmp, atomically: true, encoding: .utf8)
+    check("the write lands", writeWorkspaceNames(tricky, tmp))
+    check("every name survives the trip", readWorkspaceNames(tmp) == tricky)
+    let text = (try? String(contentsOfFile: tmp, encoding: .utf8)) ?? ""
+    check("the key is replaced once, not duplicated",
+          text.components(separatedBy: "WORKSPACE_NAMES=").count == 2)
+    check("the keys around it are untouched",
+          text.contains("TERMINAL=Ghostty") && text.contains("MUSIC=Spotify"))
+    // and the real consumer is the shell: source the file and compare (the
+    // block keeps a leading and a trailing newline, like the rules block)
+    let (rc, sourced) = shell("bash -c '. \(shellQuote(tmp)); printf %s \"$WORKSPACE_NAMES\"'")
+    check("bash sources back the exact names",
+          rc == 0 && sourced == "\n1    It's a $5 \"work\" `day` \\ night\n9    Course work\n")
+
+    check("clearing writes an empty block", writeWorkspaceNames([:], tmp))
+    check("an empty block reads as no names", readWorkspaceNames(tmp).isEmpty)
+    check("the empty block keeps the key",
+          (try? String(contentsOfFile: tmp, encoding: .utf8))?
+              .contains("WORKSPACE_NAMES=\"\n\"") == true)
+
+    try? "TERMINAL=Ghostty\n".write(toFile: tmp, atomically: true, encoding: .utf8)
+    check("a file without the key gains one", writeWorkspaceNames(["3": "Learning"], tmp))
+    check("the appended block reads back", readWorkspaceNames(tmp) == ["3": "Learning"])
+
+    try? "WORKSPACE_NAMES=\"\n1\n2    Two\n\"\n"
+        .write(toFile: tmp, atomically: true, encoding: .utf8)
+    check("a line without a name is skipped", readWorkspaceNames(tmp) == ["2": "Two"])
+
+    // the same block machinery still serves the app rules
+    try? "APP_WORKSPACE_RULES=\"\ncom.apple.Safari    1\ncom.apple.mail      2\n\"\n"
+        .write(toFile: tmp, atomically: true, encoding: .utf8)
+    check("the rules reader still parses its block",
+          readWorkspaceRules(tmp).map { "\($0.0) \($0.1)" }
+              == ["com.apple.Safari 1", "com.apple.mail 2"])
+
+    check("escaping round-trips",
+          unescapeConfValue(escapeConfValue("a $b `c` \"d\" \\e")) == "a $b `c` \"d\" \\e")
+    check("an unknown escape stays literal", unescapeConfValue("C:\\Users") == "C:\\Users")
+
+    print(failures == 0 ? "workspace-names selftest: all checks passed"
+                        : "workspace-names selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--workspace-names-selftest") {
+    exit(workspaceNamesSelfTest() == 0 ? 0 : 1)
+}
+
 // The wallpaper editor's preview door (Phase 8b): render the in-process
 // CoreImage preview headlessly so its output can be compared, by hand, with
 // the engine's `image render --max 960`. `--blur` renders the wallpaper.blur
@@ -15774,8 +16161,8 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wh-icon-debu
 }
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-shot" {
     // Off-screen render for layout review. Never ordered front, so it cannot
-    // steal focus from a running dashboard. Add `options`, `themes`,
-    // `storage` or `keys` to pick a tab; default is the Wallpapers tab.
+    // steal focus from a running dashboard. Add `options`, `workspaces`,
+    // `themes`, `storage` or `keys` to pick a tab; default is the Wallpapers tab.
     app.setActivationPolicy(.accessory)
     let shotH: CGFloat = CommandLine.arguments.contains("tall") ? 1200 : 720
     let root = RootView(frame: NSRect(x: 0, y: 0, width: 860, height: shotH))
@@ -15785,6 +16172,7 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-sh
     let args = CommandLine.arguments
     var tabIndex = 3
     if args.contains("options") { tabIndex = 0 }
+    else if args.contains("workspaces") { tabIndex = 1 }
     else if args.contains("themes") { tabIndex = 2 }
     else if args.contains("storage") { tabIndex = 4 }
     else if args.contains("keys") { tabIndex = 5 }

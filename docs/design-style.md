@@ -142,6 +142,24 @@ Method and Presets pickers, and the Wallpapers tab's **Sort Order** and
   Mouse scrolling and clicking are alternatives, never the only way to move
   the selection. A new dropdown control must behave the same.
 
+## The Workspaces tab rows
+
+One row per workspace, 48 pt tall: a numbered **slot pill**, the editable
+name, the pen, the app chips, then **＋ Add App**.
+
+- The pill is a perfect **square** (26 pt) that becomes a **circle** in the
+  rounded-corner mode — the same `windowCornerRadius(6) > 2` rule the
+  segmented control reads, so square mode keeps it square. Its fill is the
+  chips' `palette.itemBG` at 0.6, the slot number in Bold 12 `palette.label`
+  centred inside, so a two-digit workspace (11, 19) still fits.
+- The **pen is a real `ButtonView`** (`secondary`, 22 pt square, the
+  `\u{f040}` glyph) in its own fixed column after the name — never chasing
+  the name's width — and the name is truncated to stop short of it. Both
+  the name text and the pen open the inline edit field; a click anywhere
+  else commits.
+- The Add App button is 80 pt, not 96: the label measures 70 pt in Bold 12,
+  and the pill and pen column come out of the same row budget.
+
 ## The dashboard tabs
 
 Every tab draws its first content title on one shared line: its centre 16 pt

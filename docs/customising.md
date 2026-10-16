@@ -91,6 +91,30 @@ line: a bundle id, or `title:` followed by part of the window title.
 OmniWM reads this list. AeroSpace takes its float rules from its own
 template.
 
+`WORKSPACE_NAMES` gives a workspace a name of your own, one per line:
+`<workspace> <name>`, the name holding spaces.
+
+```sh
+WORKSPACE_NAMES="
+1    Work
+2    Leisures
+"
+```
+
+The name is a label, not a new identity: the workspace keeps its number,
+so its slot chord (`Super+1`…`Super+9`), its remaining apps and the
+digit it shows everywhere stay the same. The `Super+,` settings'
+**Workspaces** tab edits the list in place — click the row's name or
+its pencil and press **Save** — and that is the usual way to set it.
+Under **AeroSpace** the name is drawn by Omacosy itself (the workspace
+overview's cards, the Workspaces tab); AeroSpace's own workspaces have
+no name other than the numeric one, so there is nothing else to write.
+Under **OmniWM** the same list is applied to its built-in per-workspace
+display name through `omniwmctl workspace rename`, so OmniWM's own
+surfaces agree; `omacosy-settings` (after an install, or a switch to
+OmniWM) re-applies it. Clearing a name in the Workspaces tab and saving
+puts the workspace's number back everywhere.
+
 The same file sets the apps the launch chords open: `TERMINAL`, `BROWSER`,
 `EMAIL`, `MUSIC` and `MESSENGER`. Give the app's name, or leave it empty to
 follow the system default where one exists. A changed app takes effect after
@@ -242,7 +266,7 @@ run it once soon after the install. It backs up both files to
 | the `~/.zshrc` stub, and lines appended to it | kept | — |
 | `~/.zshrc.local` | kept | — |
 | `aerospace.toml` | regenerated | writes your values back |
-| OmniWM `settings.toml` | regenerated | writes your rules back, under OmniWM |
+| OmniWM `settings.toml` | regenerated | writes your rules and workspace names back, under OmniWM |
 | `~/.config/omacosy/borders.conf` | re-copied | writes the ring radius and border width back |
 | `config/apps.local.conf` in the clone | read | rewritten from `settings.conf` |
 | the window corner preference | kept | set from `WINDOW_CORNER` |

@@ -58,7 +58,7 @@ fi
 
 # A key the file leaves out keeps its default. Empty means "leave it alone".
 TERMINAL="" BROWSER="" EMAIL="" MUSIC="" MESSENGER=""
-APP_WORKSPACE_RULES="" APP_FLOAT_RULES=""
+APP_WORKSPACE_RULES="" APP_FLOAT_RULES="" WORKSPACE_NAMES=""
 RING_RADIUS="" WINDOW_CORNER="" BORDER_WIDTH="" GHOSTTY_WINDOW_SHADOW="" SERIALIZE_APP_SPAWNS="0" AUTOHIDE=""
 # shellcheck source=/dev/null
 . "$SETTINGS"
@@ -512,6 +512,56 @@ else:
           % len(wanted))
 OMNIRULES
   fi
+fi
+
+# ── 6b. omniwm: workspace display names ───────────────────────────
+# AeroSpace has no display name of its own — a workspace IS its name, and
+# renaming one would break the Super+N slots — so the WORKSPACE_NAMES list
+# is drawn by omacosy's own surfaces (the overview, the settings tab) under
+# both managers. OmniWM HAS a per-workspace display name, so the same list
+# is applied there through its own IPC, which persists it in settings.toml;
+# this step is what re-applies the list after an install or a switch to
+# OmniWM. The dashboard's Save applies a change at once, and renames a
+# workspace back to its raw name when its name is cleared.
+if has_text "$WORKSPACE_NAMES" && "$BIN/omacosy-omni" active >/dev/null 2>&1; then
+  WORKSPACE_NAMES="$WORKSPACE_NAMES" python3 - <<'OMNINAMES'
+import json, os, subprocess
+
+pairs = []
+for line in os.environ.get("WORKSPACE_NAMES", "").split("\n"):
+    parts = line.split(None, 1)
+    if len(parts) == 2 and parts[1].strip():
+        pairs.append((parts[0], parts[1].strip()))
+if not pairs:
+    raise SystemExit
+
+done = subprocess.run(["omniwmctl", "query", "workspaces",
+                       "--fields", "raw-name,display-name", "--format", "json"],
+                      capture_output=True, text=True)
+try:
+    live = {w["rawName"]: w.get("displayName", w["rawName"])
+            for w in json.loads(done.stdout)["result"]["payload"]["workspaces"]}
+except Exception:
+    print("omacosy-settings: WARNING — could not read OmniWM's workspace names; left alone")
+    raise SystemExit
+
+changed = failed = 0
+for ws, name in pairs:
+    if ws not in live or live[ws] == name:
+        continue
+    r = subprocess.run(["omniwmctl", "workspace", "rename", ws, name],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        failed += 1
+        print("omacosy-settings: WARNING — renaming workspace %s failed: %s"
+              % (ws, (r.stderr or r.stdout).strip().split("\n")[0]))
+    else:
+        changed += 1
+
+if changed or failed:
+    print("omacosy-settings: omniwm workspace names — %d set, %d failed"
+          % (changed, failed))
+OMNINAMES
 fi
 
 # ── 7. serialised launch chords ───────────────────────────────────

@@ -458,6 +458,85 @@ func themeAccent() -> NSColor {
     return NSColor(calibratedRed: 0.31, green: 0.58, blue: 0.46, alpha: 1)
 }
 
+// --- workspace names ------------------------------------------------------
+
+// The display names the Workspaces tab writes into settings.conf as
+// WORKSPACE_NAMES="ws    name" lines. AeroSpace has no workspace display
+// name of its own, so this file is what both managers are drawn from.
+// This parser is a copy of dashboard.swift's readConfBlock /
+// unescapeConfValue pair; keep the two in step.
+func workspaceNamesFile() -> String {
+    FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".config/omacosy/settings.conf").path
+}
+
+private func closeQuoteIndex(_ s: String) -> String.Index? {
+    var escaped = false
+    for i in s.indices {
+        let c = s[i]
+        if escaped { escaped = false; continue }
+        if c == "\\" { escaped = true; continue }
+        if c == "\"" { return i }
+    }
+    return nil
+}
+
+private func unescapeConfValue(_ s: String) -> String {
+    var out = ""
+    var it = s.makeIterator()
+    while let c = it.next() {
+        guard c == "\\", let n = it.next() else { out.append(c); continue }
+        switch n {
+        case "\\", "\"", "$", "`": out.append(n)
+        default: out += "\\"; out.append(n)
+        }
+    }
+    return out
+}
+
+func loadWorkspaceNames() -> [String: String] {
+    let key = "WORKSPACE_NAMES"
+    guard let text = try? String(contentsOfFile: workspaceNamesFile(), encoding: .utf8) else { return [:] }
+    var lines: [String] = []
+    var found = false
+    var inBlock = false
+    for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        let line = String(raw)
+        if !inBlock {
+            guard line.hasPrefix("\(key)=") else { continue }
+            found = true
+            let after = line.dropFirst(key.count + 1)
+            guard after.hasPrefix("\"") else { return [:] }
+            let rest = String(after.dropFirst())
+            if let q = closeQuoteIndex(rest) {
+                lines = rest[rest.startIndex..<q]
+                    .split(separator: "\n", omittingEmptySubsequences: false)
+                    .map(String.init)
+                    .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                break
+            }
+            inBlock = true
+            continue
+        }
+        if let q = closeQuoteIndex(line) {
+            let head = String(line[line.startIndex..<q]).trimmingCharacters(in: .whitespaces)
+            if !head.isEmpty { lines.append(head) }
+            break
+        }
+        if !line.trimmingCharacters(in: .whitespaces).isEmpty { lines.append(line) }
+    }
+    guard found else { return [:] }
+    var out: [String: String] = [:]
+    for line in lines {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        let parts = t.split(maxSplits: 1, whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        guard parts.count == 2 else { continue }
+        let name = unescapeConfValue(parts[1].trimmingCharacters(in: .whitespaces))
+        if !name.isEmpty { out[parts[0]] = name }
+    }
+    return out
+}
+
 // --- thumbnails (ScreenCaptureKit) ---------------------------------------
 
 func croppedToContent(_ img: CGImage) -> CGImage {
@@ -566,6 +645,9 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 // re-read on every show: the daemon outlives any number of theme changes
 var accent = themeAccent()
+
+// the workspace display names, re-read with the accent on every show
+var wsNames: [String: String] = loadWorkspaceNames()
 
 // A NON-ACTIVATING panel (the Spotlight/Raycast recipe): it becomes
 // key — keyboard + clicks work instantly — WITHOUT activating our
@@ -1138,6 +1220,30 @@ func buildOverlay(_ snap: (order: [String], wins: [String: [Win]], focused: Stri
                 color: ws == focused ? accent : NSColor(calibratedWhite: 0.85, alpha: 1))
             num.frame = NSRect(x: 14, y: cardH - 34, width: 40, height: 24)
             card.addSubview(num)
+            // the workspace's name, when it has one: centred on the card and
+            // baseline-matched to the number — same colour rule too, accent
+            // while this workspace is the one on screen, plain otherwise
+            if let name = wsNames[ws] {
+                let n = label(name, size: 15, weight: .bold,
+                    color: ws == focused ? accent : NSColor(calibratedWhite: 0.85, alpha: 1))
+                n.lineBreakMode = .byTruncatingTail
+                n.alignment = .center
+                // widest centred frame that crosses neither the number (ends
+                // at 54) nor the app icons; a tiny card clamps to the space
+                // that is left rather than letting the text slide under either
+                let iconsW = CGFloat(min(items.count, 6)) * 24
+                let leftLimit: CGFloat = 54
+                let rightLimit = cardW - 14 - iconsW
+                let centred = 2 * min(cardW / 2 - leftLimit, rightLimit - cardW / 2)
+                let nameW = max(60, min(220, centred))
+                let x = max(leftLimit, min((cardW - nameW) / 2, rightLimit - nameW))
+                // -35.5: measured so the 15 pt name's baseline sits on the
+                // 20 pt number's — a label lays its text out from the frame
+                // top, so at the same top the smaller font's baseline comes
+                // out 3.5 pt high
+                n.frame = NSRect(x: x, y: cardH - 35.5, width: nameW, height: 22)
+                card.addSubview(n)
+            }
             // app icons beside the number, right-aligned
             for (i, w) in items.prefix(6).enumerated() {
                 let iv = NSImageView(frame: NSRect(
@@ -1264,6 +1370,7 @@ func showOverlay() {
     guard !overlayVisible else { return }
     overlayVisible = true
     accent = themeAccent()
+    wsNames = loadWorkspaceNames()
     // the backdrop orders front IMMEDIATELY — everything data-driven
     // (aerospace query, icons, thumbnails) fills in asynchronously, so
     // the swipe response is the window server's latency, nothing else
