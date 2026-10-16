@@ -373,7 +373,10 @@ with seven tabs:
   resolution and size. Hover a card for **save**, **bookmark**,
   **bulk-select** and **download**; downloads land in the wallpaper folder as
   the next `Wallpaper #N`, with a green check when they arrive and nothing
-  switching on its own. A **Bookmarked** filter shows saved pictures.
+  switching on its own. A bulk download retries a rate-limited or interrupted
+  file with a growing random wait, and a file that still fails keeps its tick
+  so **Download** offers exactly the failures again. A **Bookmarked** filter
+  shows saved pictures.
 - **Storage** — the local wallpapers folder (where it is, a button that opens
   it, **Add Images**, **Set Folder**) and a **Thumbnail Cache** row with its
   size, a **Clear Cache** button and a button that opens the cache folder.

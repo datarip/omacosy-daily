@@ -13256,7 +13256,15 @@ final class WHFileDownloader: NSObject, URLSessionDataDelegate {
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             completionHandler(.cancel)
-            finish(.failure(WHError.http((response as? HTTPURLResponse)?.statusCode ?? -1)))
+            if let http = response as? HTTPURLResponse, http.statusCode == 429 {
+                // map a rate limit the way the API client does, so the bulk
+                // retry can honour Retry-After; a one-shot download shows the
+                // wait in its failure text
+                let retry = http.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0) }
+                finish(.failure(WHError.rateLimited(retry)))
+            } else {
+                finish(.failure(WHError.http((response as? HTTPURLResponse)?.statusCode ?? -1)))
+            }
             return
         }
         expected = response.expectedContentLength
@@ -13301,6 +13309,37 @@ func whStartDownload(client: WallhavenClient, wallpaper: WHWallpaper, into dir: 
     let d = WHFileDownloader(destPath: dest, onProgress: onProgress, completion: completion)
     d.start(wallpaper.imageURL)
     return d
+}
+
+// --- bulk download retry ---------------------------------------------------
+
+// Wallhaven rate-limits a large batch. A bulk download retries the errors
+// that can pass — a 429, a 5xx, a dropped connection — and gives up on the
+// rest, so a deleted picture or an oversized file fails once and is reported.
+// The wait doubles per attempt (2 s, 4 s, 8 s …) and carries random jitter,
+// so a set does not retry in lock step; a server-sent Retry-After is honoured
+// instead. Six attempts means the first try plus five retries; wallhaven's
+// own docs state no backoff recipe (45 API calls/min, then a 429).
+let whBulkMaxAttempts = 6
+
+func whDownloadIsRetryable(_ error: Error) -> Bool {
+    guard let e = error as? WHError else { return false }
+    switch e {
+    case .rateLimited, .network: return true
+    case .http(let code): return code == 429 || (500...599).contains(code)
+    default: return false
+    }
+}
+
+// `attempt` is the attempt that just failed, 1-based. Retry-After is never
+// shortened and gets a little jitter on top; otherwise the wait is the
+// exponential 2·2^(attempt-1) seconds, capped at 30 s and wobbled ±40 %.
+func whRetryDelay(attempt: Int, error: Error) -> TimeInterval {
+    if case WHError.rateLimited(let after) = error, let a = after, a > 0 {
+        return min(max(a, 1), 30) * Double.random(in: 1.0...1.25)
+    }
+    let base = min(2.0 * pow(2.0, Double(max(attempt, 1) - 1)), 30.0)
+    return base * Double.random(in: 0.6...1.4)
 }
 
 // A thumbnail cache: studio/wallhaven-thumbs/<hash>.<ext>. Fetched with a
@@ -13774,6 +13813,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     private var bulkTotal = 0
     private var bulkDoneCount = 0
     private var bulkFailedCount = 0
+    private var bulkRetrying = 0
 
     private var searchToken = 0
     private var isSearching = false
@@ -13849,6 +13889,39 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         for w in grid.cards.prefix(n) { bookmarks.debugInsert(w) }
         config.bookmarkedOnly = true
         rebuildGrid()
+    }
+
+    // test door: seed the grid without a search or a network call
+    func debugSeedCards(_ ws: [WHWallpaper]) {
+        config.bookmarkedOnly = false
+        results = ws
+        rebuildGrid()
+    }
+
+    // test door: run a batch through the real landing bookkeeping with no
+    // network — `failures` names indexes that end failed, the rest succeed
+    // with an empty path, which the download manifest writer skips
+    func debugBulkSimulate(_ count: Int, failures: Set<Int>) {
+        guard count > 0, grid.cards.count >= count else { return }
+        let picks = Array(grid.cards.prefix(count))
+        selected = Set(picks.map { $0.id })
+        grid.selected = selected
+        bulkIDs = Set(picks.map { $0.id })
+        bulkTotal = count
+        bulkDoneCount = 0
+        bulkFailedCount = 0
+        bulkRetrying = 0
+        for (i, w) in picks.enumerated() {
+            finishDownload(w, res: failures.contains(i) ? .failure(WHError.network("selftest"))
+                                                         : .success(""),
+                           isBulk: true)
+        }
+    }
+
+    // test door: what the batch left behind
+    func debugBulkStatus() -> String {
+        "selected=[\(selected.sorted().joined(separator: ","))] failed=\(bulkFailedCount) " +
+        "done=\(bulkDoneCount) total=\(bulkTotal) gridSelected=\(grid.selected.count)"
     }
 
     override init(frame frameRect: NSRect) {
@@ -14178,6 +14251,10 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
 
     private func download(_ w: WHWallpaper) {
         guard activeDownloads[w.id] == nil, !downloadedIDs.contains(w.id) else { return }
+        startDownloadAttempt(w, attempt: 1)
+    }
+
+    private func startDownloadAttempt(_ w: WHWallpaper, attempt: Int) {
         let dir = wallpapersDir()
         grid.downloading[w.id] = 0
         grid.needsDisplay = true
@@ -14187,44 +14264,86 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
             self?.grid.needsDisplay = true
         }, completion: { [weak self] res in
             guard let self else { return }
-            self.activeDownloads[w.id] = nil
-            self.grid.downloading[w.id] = nil
-            let ok: Bool
-            if case .success(let path) = res {
-                ok = true
-                self.downloadedIDs.insert(w.id)
-                self.grid.downloaded = self.downloadedIDs
-                whRecordDownload((path as NSString).lastPathComponent, id: w.id, purity: w.purity)
-            } else {
-                ok = false
-            }
-            self.grid.needsDisplay = true
-
             let isBulk = self.bulkTotal > 0 && self.bulkIDs.contains(w.id)
-            if isBulk {
-                self.bulkIDs.remove(w.id)
-                self.bulkDoneCount += 1
-                if !ok { self.bulkFailedCount += 1 }
-                if self.bulkIDs.isEmpty {
-                    self.finishBulk()
-                } else {
-                    // dynamic: a progress ring with the running added count
-                    let frac = Double(self.bulkDoneCount) / Double(max(self.bulkTotal, 1))
-                    self.showBadge(.progress(frac),
-                                   label: "\(self.bulkDoneCount)/\(self.bulkTotal)", sticky: true)
-                }
-            } else if ok {
-                self.showBadge(.success, label: "Added")
-            } else if case .failure(let e) = res {
-                self.showBadge(.failure, label: "Failed — \(e.localizedDescription)")
+            if isBulk, case .failure(let e) = res,
+               attempt < whBulkMaxAttempts, whDownloadIsRetryable(e) {
+                self.scheduleBulkRetry(w, attempt: attempt, error: e)
+                return
             }
+            self.finishDownload(w, res: res, isBulk: isBulk)
         })
         activeDownloads[w.id] = d
     }
 
+    // A retry keeps the card in flight: its activeDownloads entry stays (so a
+    // stray click cannot start a second copy), the progress bar resets, and
+    // the wait comes from the shared jittered-backoff policy.
+    private func scheduleBulkRetry(_ w: WHWallpaper, attempt: Int, error: Error) {
+        grid.downloading[w.id] = 0
+        grid.needsDisplay = true
+        bulkRetrying += 1
+        updateBulkBadge()
+        let delay = whRetryDelay(attempt: attempt, error: error)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.bulkTotal > 0, self.bulkIDs.contains(w.id) else { return }
+            self.bulkRetrying = max(0, self.bulkRetrying - 1)
+            self.startDownloadAttempt(w, attempt: attempt + 1)
+            self.updateBulkBadge()
+        }
+    }
+
+    // The landing bookkeeping, shared by the first attempt and every retry: a
+    // success is recorded and clears the card's checkbox at once; a bulk item
+    // that is out of retries stays checked, so the next Download press retries
+    // exactly the failures.
+    private func finishDownload(_ w: WHWallpaper, res: Result<String, Error>, isBulk: Bool) {
+        activeDownloads[w.id] = nil
+        grid.downloading[w.id] = nil
+        let ok: Bool
+        if case .success(let path) = res {
+            ok = true
+            downloadedIDs.insert(w.id)
+            grid.downloaded = downloadedIDs
+            whRecordDownload((path as NSString).lastPathComponent, id: w.id, purity: w.purity)
+            if isBulk {
+                selected.remove(w.id)
+                grid.selected = selected
+            }
+        } else {
+            ok = false
+        }
+        grid.needsDisplay = true
+
+        if isBulk {
+            bulkIDs.remove(w.id)
+            bulkDoneCount += 1
+            if !ok { bulkFailedCount += 1 }
+            if bulkIDs.isEmpty {
+                finishBulk()
+            } else {
+                updateBulkBadge()
+            }
+        } else if ok {
+            showBadge(.success, label: "Added")
+        } else if case .failure(let e) = res {
+            showBadge(.failure, label: "Failed — \(e.localizedDescription)")
+        }
+    }
+
+    // dynamic: a progress ring with the running added count, plus a note while
+    // an item waits out its retry delay
+    private func updateBulkBadge() {
+        let frac = Double(bulkDoneCount) / Double(max(bulkTotal, 1))
+        let label = bulkRetrying > 0 ? "\(bulkDoneCount)/\(bulkTotal) · Retrying"
+                                     : "\(bulkDoneCount)/\(bulkTotal)"
+        showBadge(.progress(frac), label: label, sticky: true)
+    }
+
     // Bulk download: the button slot shows a progress ring and count, then a
-    // green check (or a red mark with the failures), after which the
-    // selection clears and the button is gone.
+    // green check (or a red mark with the failures). A file that lands clears
+    // its checkbox as it arrives; a file still failed at the end keeps it, so
+    // the button comes back offering exactly those and one more press retries
+    // only them.
     private func downloadSelected() {
         let items = grid.cards.filter {
             selected.contains($0.id) && !downloadedIDs.contains($0.id) && activeDownloads[$0.id] == nil
@@ -14233,6 +14352,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         bulkTotal = items.count
         bulkDoneCount = 0
         bulkFailedCount = 0
+        bulkRetrying = 0
         if bulkIDs.isEmpty { clearSelection(); return }
         showBadge(.progress(0), label: "0/\(bulkTotal)", sticky: true)
         for w in items { download(w) }
@@ -14242,7 +14362,8 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         let failed = bulkFailedCount
         let added = bulkDoneCount - failed
         bulkTotal = 0
-        clearSelection()
+        bulkRetrying = 0
+        // successes unchecked as they landed; the failures stay checked
         if failed == 0 {
             showBadge(.success, label: "Added \(added)")
         } else {
@@ -14984,6 +15105,33 @@ func whRunSelfTest() -> Int {
     check("rate limiter allows \(keyed.keyedPerMinute)/min with a key",
           keyedImmediate == keyed.keyedPerMinute)
 
+    // bulk retry policy: which errors get another attempt, and the wait shape
+    check("retry: 429 is retryable", whDownloadIsRetryable(WHError.http(429)))
+    check("retry: a rate-limit error is retryable", whDownloadIsRetryable(WHError.rateLimited(nil)))
+    check("retry: a server error is retryable", whDownloadIsRetryable(WHError.http(503)))
+    check("retry: a dropped connection is retryable", whDownloadIsRetryable(WHError.network("reset")))
+    check("retry: a 404 is final", !whDownloadIsRetryable(WHError.http(404)))
+    check("retry: an oversized file is final", !whDownloadIsRetryable(WHError.tooLarge))
+    check("retry: a bad link is final", !whDownloadIsRetryable(WHError.badURL("invalid")))
+    var firstInBand = true, growInBand = true, capInBand = true
+    var afterNotEarly = true, afterJittered = true
+    for _ in 0..<200 {
+        let d1 = whRetryDelay(attempt: 1, error: WHError.http(500))
+        if d1 < 2.0 * 0.6 - 0.0001 || d1 > 2.0 * 1.4 + 0.0001 { firstInBand = false }
+        let d3 = whRetryDelay(attempt: 3, error: WHError.network("reset"))
+        if d3 < 8.0 * 0.6 - 0.0001 || d3 > 8.0 * 1.4 + 0.0001 { growInBand = false }
+        let d9 = whRetryDelay(attempt: 9, error: WHError.http(500))
+        if d9 < 30.0 * 0.6 - 0.0001 || d9 > 30.0 * 1.4 + 0.0001 { capInBand = false }
+        let ra = whRetryDelay(attempt: 1, error: WHError.rateLimited(7))
+        if ra < 7.0 - 0.0001 { afterNotEarly = false }
+        if ra > 7.0 * 1.25 + 0.0001 { afterJittered = false }
+    }
+    check("retry: attempt 1 waits ~2 s", firstInBand)
+    check("retry: the wait grows to ~8 s by attempt 3", growInBand)
+    check("retry: the wait is capped at 30 s", capInBand)
+    check("retry: Retry-After is honoured, never shortened", afterNotEarly)
+    check("retry: Retry-After gets jitter on top", afterJittered)
+
     print(failures == 0 ? "wallhaven selftest: all checks passed"
                         : "wallhaven selftest: \(failures) failed")
     return failures
@@ -15056,6 +15204,47 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-do
         }
         exit(rc)
     } catch { print("download failed: \(error.localizedDescription)"); exit(1) }
+}
+
+// The requested bulk behaviour, driven headlessly: a file that lands clears
+// its checkbox the moment it arrives, and a file still failed after its
+// retries keeps it, so the button comes back offering exactly the failures.
+// No window and no network: the tab is built detached and its landing
+// bookkeeping is fed by hand.
+func bulkDownloadSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    palette = loadPalette()
+    let tab = WallpapersTabView(frame: NSRect(x: 0, y: 0, width: 860, height: 720))
+    let cards = (0..<6).compactMap { i in
+        WHWallpaper(json: ["id": "selftest\(i)",
+                           "path": "https://w.wallhaven.cc/full/ab/wallhaven-selftest\(i).jpg",
+                           "resolution": "1920x1080",
+                           "file_size": NSNumber(value: 1_000_000),
+                           "thumbs": ["small": "https://thumbs/selftest\(i).jpg"]])
+    }
+    check("the selftest builds its cards", cards.count == 6)
+    tab.debugSeedCards(cards)
+    tab.debugBulkSimulate(4, failures: [1, 3])
+    var s = tab.debugBulkStatus()
+    check("the selection keeps exactly the failures", s.contains("selected=[selftest1,selftest3]"))
+    check("the failures stay checked", s.contains("gridSelected=2"))
+    check("the counters read two failed of four", s.contains("failed=2") && s.contains("done=4"))
+    check("the batch ends", s.contains("total=0"))
+    tab.debugBulkSimulate(3, failures: [])
+    s = tab.debugBulkStatus()
+    check("a clean batch leaves nothing checked", s.contains("selected=[]"))
+    check("a clean batch has no failures", s.contains("failed=0"))
+    print(failures == 0 ? "bulk-download selftest: all checks passed"
+                        : "bulk-download selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--bulk-download-selftest") {
+    exit(bulkDownloadSelfTest() == 0 ? 0 : 1)
 }
 
 // Headless checks for EditorState's history and folding. Like
