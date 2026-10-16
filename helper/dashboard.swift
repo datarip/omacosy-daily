@@ -15175,11 +15175,465 @@ extension APIKeysTabView: RefreshableTab {}
 extension UpdateTabView: RefreshableTab {}
 extension WallpapersTabView: RefreshableTab {}
 
+// --- the logo intro ---------------------------------------------------------
+//
+// The wordmark comes alive when the modal opens: one of thirteen small
+// effects plays over the lit cells of the logo, picked at random each open
+// and never repeating the last (LOGO_INTRO in settings.conf pins one;
+// OMACOSY_LOGO_INTRO overrides for a single launch). The vocabulary is a
+// native take on ttfx (terminal text effects, MIT, github.com/omacom/ttfx —
+// by the Omarchy authors, itself a port of terminaltexteffects by
+// ChrisBuilds): laseretch's beam and sparks, sweep and waves' travelling
+// bands, middleout's rings, scattered's pops, print's typewriter, decrypt's
+// scramble, errorcorrect's signal lock, rain's falling drops, crumble's
+// debris, expand's blossom, highlight's flash and colorshift's shimmer.
+// Every effect flares each cell hot on arrival and cools it to its accent
+// shade, and ends on the same crisp wordmark. The grid is sampled from the
+// tinted wordmark at open time, so any future logo animates with no new
+// asset and no build step.
+
+struct LogoCell {
+    let col: Int
+    let row: Int
+    let coverage: CGFloat
+    let color: NSColor
+}
+
+struct LogoGrid {
+    let cols: Int
+    let rows: Int
+    let cells: [LogoCell]
+
+    // One sample per cell, drawn from the same tinted image the header shows.
+    // Coverage, not a cutoff: a cell that is half glyph draws at half alpha,
+    // so the grooves between the strips stay readable instead of filling in.
+    static func build(from image: NSImage, rows: Int) -> LogoGrid? {
+        guard rows > 0 else { return nil }
+        let aspect = image.size.width / max(image.size.height, 1)
+        let cols = max(1, Int((CGFloat(rows) * aspect).rounded()))
+        let count = cols * rows * 4
+        let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: count)
+        buf.initialize(repeating: 0, count: count)
+        defer { buf.deallocate() }
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(data: buf, width: cols, height: rows, bitsPerComponent: 8,
+                                  bytesPerRow: cols * 4, space: cs,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        image.draw(in: NSRect(x: 0, y: 0, width: cols, height: rows))
+        NSGraphicsContext.restoreGraphicsState()
+        var cells: [LogoCell] = []
+        for y in 0..<rows {
+            for x in 0..<cols {
+                let i = (y * cols + x) * 4
+                let a = CGFloat(buf[i + 3]) / 255
+                if a < 0.28 { continue }
+                // the buffer is premultiplied; divide the coverage back out to
+                // recover the strip's shade
+                let r = min(255, CGFloat(buf[i]) / a) / 255
+                let g = min(255, CGFloat(buf[i + 1]) / a) / 255
+                let b = min(255, CGFloat(buf[i + 2]) / a) / 255
+                // bitmap memory starts at the image's top row while the view
+                // draws row 0 at its bottom edge, so store rows bottom-up —
+                // without this every effect plays an upside-down wordmark
+                cells.append(LogoCell(col: x, row: rows - 1 - y, coverage: a,
+                                      color: NSColor(srgbRed: r, green: g, blue: b, alpha: 1)))
+            }
+        }
+        return LogoGrid(cols: cols, rows: rows, cells: cells)
+    }
+}
+
+// A small fixed-seed RNG: the walk is the effect, and a run worth debugging
+// should be reproducible from its seed.
+struct SplitMix64: RandomNumberGenerator {
+    var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E3779B97F4A7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+        return z ^ (z >> 31)
+    }
+}
+
+enum LogoIntroKind: String, CaseIterable {
+    case laseretch, sweep, middleout, scattered, print, decrypt, rain, waves, highlight, colorshift, errorcorrect, crumble, expand
+
+    // per-kind pacing: seconds for the whole reveal, the flare's cool-down,
+    // and the window a cell spends animating in before its reveal moment
+    var target: TimeInterval {
+        switch self {
+        case .highlight, .colorshift: return 0.15
+        case .expand: return 0.3
+        case .print, .errorcorrect: return 0.7
+        case .scattered: return 0.8
+        case .sweep, .middleout, .decrypt: return 0.9
+        default: return 1.0
+        }
+    }
+    var settle: TimeInterval {
+        switch self {
+        case .colorshift: return 0.95
+        case .errorcorrect: return 0.65
+        case .highlight: return 0.45
+        case .laseretch: return 0.26
+        case .print: return 0.12
+        case .sweep, .middleout: return 0.18
+        default: return 0.15
+        }
+    }
+    var lead: TimeInterval {
+        switch self {
+        case .decrypt: return 0.30
+        case .rain: return 0.35
+        case .crumble: return 0.40
+        case .expand: return 0.32
+        default: return 0
+        }
+    }
+}
+
+final class LogoIntroEffect {
+    let kind: LogoIntroKind
+    let cells: [LogoCell]
+    let order: [Int]     // the reveal order, indices into cells
+    let orderAt: [Int]   // cell index -> its position in the order
+    let lead: TimeInterval
+    let settle: TimeInterval
+    let step: TimeInterval
+    var duration: TimeInterval { lead + Double(order.count) * step + settle }
+
+    func revealTime(_ pos: Int) -> TimeInterval { lead + Double(pos) * step }
+
+    init(grid: LogoGrid, kind: LogoIntroKind, seed: UInt64) {
+        self.kind = kind
+        cells = grid.cells
+        self.lead = kind.lead
+        self.settle = kind.settle
+        var rng = SplitMix64(seed: seed)
+        let list = grid.cells
+        let count = list.count
+        var order: [Int]
+        switch kind {
+        case .laseretch:
+            // ttfx etches in a randomised depth-first walk (its recursive
+            // backtracker): the beam wanders like a hand, and a disconnected
+            // part (each glyph) restarts from a random lit cell.
+            var slot = [Int](repeating: -1, count: grid.cols * grid.rows)
+            for (i, c) in list.enumerated() { slot[c.row * grid.cols + c.col] = i }
+            var visited = [Bool](repeating: false, count: count)
+            order = []
+            var stack: [Int] = []
+            let shuffled = Array(0..<count).shuffled(using: &rng)
+            var cursor = 0
+            while order.count < count {
+                if stack.isEmpty {
+                    while cursor < shuffled.count, visited[shuffled[cursor]] { cursor += 1 }
+                    guard cursor < shuffled.count else { break }
+                    stack.append(shuffled[cursor])
+                    cursor += 1
+                }
+                let ci = stack.removeLast()
+                if visited[ci] { continue }
+                visited[ci] = true
+                order.append(ci)
+                let c = list[ci]
+                var next: [Int] = []
+                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let x = c.col + dx, y = c.row + dy
+                    guard x >= 0, x < grid.cols, y >= 0, y < grid.rows else { continue }
+                    let ni = slot[y * grid.cols + x]
+                    if ni >= 0, !visited[ni] { next.append(ni) }
+                }
+                next.shuffle(using: &rng)
+                stack.append(contentsOf: next)
+            }
+        case .sweep:
+            // a crisp diagonal band crossing the wordmark
+            order = (0..<count).sorted {
+                Double(list[$0].col) + 0.35 * Double(list[$0].row) <
+                Double(list[$1].col) + 0.35 * Double(list[$1].row)
+            }
+        case .waves:
+            // the same band, but its edge rides a sine down the wordmark
+            let wave = { (c: LogoCell) -> Double in
+                Double(c.col) + 4.0 * sin(Double(c.row) / Double(grid.rows) * Double.pi * 1.2)
+            }
+            order = (0..<count).sorted { wave(list[$0]) < wave(list[$1]) }
+        case .middleout:
+            // rings growing from the centre, with an organic edge
+            let cx = Double(grid.cols - 1) / 2, cy = Double(grid.rows - 1) / 2
+            let keys = (0..<count).map { i -> Double in
+                let c = list[i]
+                let dx = Double(c.col) - cx, dy = Double(c.row) - cy
+                return dx * dx + dy * dy + Double(rng.next() % 1000) / 1000 * 3
+            }
+            order = (0..<count).sorted { keys[$0] < keys[$1] }
+        case .print, .decrypt, .errorcorrect:
+            // top-left to bottom-right, the way one reads; decrypt's identity
+            // is the scramble each cell runs before it resolves, and
+            // errorcorrect's is the wrong shade each arrives wearing
+            order = (0..<count).sorted {
+                list[$0].row != list[$1].row ? list[$0].row > list[$1].row : list[$0].col < list[$1].col
+            }
+        case .scattered, .rain, .crumble, .expand, .highlight, .colorshift:
+            // no spatial order at all: they arrive from everywhere, or the
+            // whole wordmark arrives together
+            order = Array(0..<count).shuffled(using: &rng)
+        }
+        self.order = order
+        var at = [Int](repeating: 0, count: count)
+        for (p, ci) in order.enumerated() { at[ci] = p }
+        self.orderAt = at
+        // about the target duration whatever the logo, within sane bounds
+        self.step = min(0.0045, max(0.0002, kind.target / Double(max(1, count))))
+    }
+}
+
+final class LogoIntroView: NSView {
+    private struct Spark {
+        var x, y, vx, vy, life, maxLife: Double
+        let color: NSColor
+    }
+    private var grid: LogoGrid?
+    private var effect: LogoIntroEffect?
+    private var tickCount: UInt64 = 0
+    private var start: TimeInterval = 0
+    private var timer: Timer?
+    private var sparks: [Spark] = []
+    private var lastTick: TimeInterval = 0
+    private var lastRevealed = 0
+    private var finished = true
+    var onFinished: (() -> Void)?
+
+    // the wordmark is not a control: clicks fall through to the card below
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func start(grid: LogoGrid, kind: LogoIntroKind) {
+        stopTimer()
+        layer?.removeAllAnimations()
+        self.grid = grid
+        effect = LogoIntroEffect(grid: grid, kind: kind, seed: UInt64.random(in: .min ... .max))
+        sparks.removeAll()
+        lastRevealed = 0
+        tickCount = 0
+        finished = false
+        isHidden = false
+        alphaValue = 1
+        // a short lead-in so the first frames are not lost while the window
+        // settles on screen
+        start = ProcessInfo.processInfo.systemUptime + 0.05
+        lastTick = start
+        let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in self?.tick() }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+        needsDisplay = true
+    }
+
+    func cancel() {
+        stopTimer()
+        // drop any in-flight fade so a stale animation cannot pull the alpha
+        // down under a new run
+        layer?.removeAllAnimations()
+        finished = true
+        isHidden = true
+        alphaValue = 1
+        effect = nil
+        grid = nil
+        sparks.removeAll()
+    }
+
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func tick() {
+        guard !finished, let effect else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let elapsed = now - start
+        tickCount &+= 1
+        let revealed = min(effect.cells.count, Int(max(0, elapsed) / effect.step))
+        if effect.kind == .laseretch, revealed > lastRevealed {
+            for k in lastRevealed..<revealed { emitSparks(effect.order[k]) }
+        }
+        lastRevealed = revealed
+        updateSparks(dt: min(0.05, now - lastTick))
+        lastTick = now
+        if elapsed >= effect.duration {
+            stopTimer()
+            finished = true
+            onFinished?()
+        }
+        needsDisplay = true
+    }
+
+    private func emitSparks(_ index: Int) {
+        guard let grid else { return }
+        let cell = grid.cells[index]
+        let cellW = bounds.width / CGFloat(grid.cols)
+        let cellH = bounds.height / CGFloat(grid.rows)
+        let cx = bounds.minX + (CGFloat(cell.col) + 0.5) * cellW
+        let cy = bounds.minY + (CGFloat(cell.row) + 0.5) * cellH
+        let count = Double.random(in: 0...1) < 0.25 ? 2 : 1
+        for _ in 0..<count {
+            let life = Double.random(in: 0.35...0.55)
+            sparks.append(Spark(x: Double(cx), y: Double(cy),
+                                vx: Double.random(in: -55...55),
+                                vy: -Double.random(in: 30...110),
+                                life: life, maxLife: life, color: cell.color))
+        }
+        if sparks.count > 360 { sparks.removeFirst(sparks.count - 360) }
+    }
+
+    private func updateSparks(dt: TimeInterval) {
+        for i in sparks.indices {
+            sparks[i].vy -= 320 * dt
+            sparks[i].x += sparks[i].vx * dt
+            sparks[i].y += sparks[i].vy * dt
+            sparks[i].life -= dt
+        }
+        sparks.removeAll { $0.life <= 0 }
+    }
+
+    // cheap per-cell, per-frame noise for the decrypt scramble
+    private func flickerNoise(_ cell: LogoCell, _ tick: UInt64) -> UInt64 {
+        let seed = UInt64(bitPattern: Int64((cell.col &* 73856093) ^ (cell.row &* 19349663)))
+            ^ (tick &* 0x9E3779B97F4A7C15)
+        var h = SplitMix64(seed: seed)
+        return h.next()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let grid, let effect, !isHidden else { return }
+        NSGraphicsContext.current?.cgContext.clip(to: bounds)
+        let elapsed = finished ? effect.duration : ProcessInfo.processInfo.systemUptime - start
+        let cellW = bounds.width / CGFloat(grid.cols)
+        let cellH = bounds.height / CGFloat(grid.rows)
+        func cellRect(_ cell: LogoCell) -> NSRect {
+            NSRect(x: bounds.minX + CGFloat(cell.col) * cellW,
+                   y: bounds.minY + CGFloat(cell.row) * cellH,
+                   width: cellW, height: cellH)
+        }
+        let hot = mixColor(palette.accent, .white, 0.85)
+        let revealed = min(effect.cells.count, Int(max(0, elapsed) / effect.step))
+        for (ci, cell) in grid.cells.enumerated() {
+            let rt = effect.revealTime(effect.orderAt[ci])
+            if elapsed < rt {
+                if elapsed >= rt - effect.lead {
+                    switch effect.kind {
+                    case .rain:
+                        // the drop falls from above, accelerating into place
+                        let p = min(1, max(0, (elapsed - (rt - effect.lead)) / effect.lead))
+                        let drop = Double(5 + (cell.col * 7 + cell.row * 13) % 4)
+                        let lift = CGFloat(drop * (1 - p) * (1 - p)) * cellH
+                        cell.color.withAlphaComponent(cell.coverage).setFill()
+                        cellRect(cell).offsetBy(dx: 0, dy: lift).fill()
+                    case .crumble:
+                        // debris converges from a random direction and fades
+                        // into solid as it lands
+                        let p = min(1, max(0, (elapsed - (rt - effect.lead)) / effect.lead))
+                        let n = flickerNoise(cell, 7)
+                        let dist = Double(4 + n % 7)
+                        let angle = Double((n >> 8) % 628) / 100
+                        let rem = CGFloat(dist * (1 - p) * (1 - p))
+                        cell.color.withAlphaComponent(cell.coverage * CGFloat(0.35 + 0.65 * p)).setFill()
+                        cellRect(cell).offsetBy(dx: rem * CGFloat(cos(angle)) * cellW,
+                                                dy: rem * CGFloat(sin(angle)) * cellH).fill()
+                    case .expand:
+                        // the wordmark blossoms out of its centre
+                        let p = min(1, max(0, (elapsed - (rt - effect.lead)) / effect.lead))
+                        let ease = 1 - (1 - p) * (1 - p)
+                        let cx = bounds.minX + bounds.width / 2
+                        let cy = bounds.minY + bounds.height / 2
+                        let r = cellRect(cell)
+                        let dx = (cx - r.midX) * CGFloat(1 - ease)
+                        let dy = (cy - r.midY) * CGFloat(1 - ease)
+                        cell.color.withAlphaComponent(cell.coverage * CGFloat(0.3 + 0.7 * ease)).setFill()
+                        r.offsetBy(dx: dx, dy: dy).fill()
+                    case .decrypt:
+                        // the cell scrambles through the shades until its
+                        // number comes up; some ticks blank for the glitch
+                        let n = flickerNoise(cell, tickCount)
+                        if n % 5 != 0 {
+                            let level = CGFloat((n >> 8) % 1000) / 1000
+                            mixColor(cell.color, .white, 0.75 * level)
+                                .withAlphaComponent(cell.coverage).setFill()
+                            cellRect(cell).fill()
+                        }
+                    default:
+                        break
+                    }
+                }
+                continue
+            }
+            if effect.kind == .errorcorrect {
+                // the cell arrives wearing a wrong shade and locks on later
+                let wrongUntil = rt + Double(flickerNoise(cell, 3) % 1000) / 1000 * 0.45
+                if elapsed < wrongUntil {
+                    let n = flickerNoise(cell, tickCount)
+                    let wrong: NSColor
+                    switch n % 3 {
+                    case 0: wrong = mixColor(cell.color, .white, 0.6)
+                    case 1: wrong = mixColor(cell.color, .black, 0.7)
+                    default: wrong = cell.color
+                    }
+                    wrong.withAlphaComponent(cell.coverage).setFill()
+                    cellRect(cell).fill()
+                    continue
+                }
+                let heat = CGFloat(max(0, 1 - (elapsed - wrongUntil) / 0.18))
+                var color = cell.color
+                if heat > 0.01 { color = mixColor(cell.color, .white, 0.6 * heat) }
+                color.withAlphaComponent(cell.coverage).setFill()
+                cellRect(cell).fill()
+                continue
+            }
+            var color = cell.color
+            if effect.kind == .colorshift {
+                // shades chase each other through the wordmark, settling
+                let f = CGFloat(min(1, max(0, (elapsed - rt) / 0.9)))
+                let phase = Double(flickerNoise(cell, 0) % 628) / 100
+                let level = CGFloat(sin(elapsed * 16 + phase)) * (1 - f)
+                color = level >= 0 ? mixColor(cell.color, .white, 0.55 * level)
+                                   : mixColor(cell.color, .black, 0.55 * -level)
+            }
+            let heat = CGFloat(max(0, 1 - (elapsed - rt) / effect.settle))
+            if heat > 0.01 { color = mixColor(cell.color, .white, 0.7 * heat) }
+            color.withAlphaComponent(cell.coverage).setFill()
+            cellRect(cell).fill()
+        }
+        // the beam belongs to laseretch: the cell the laser is on and where
+        // it just was
+        if effect.kind == .laseretch, revealed > 0, revealed < effect.cells.count {
+            hot.withAlphaComponent(0.16).setFill()
+            cellRect(grid.cells[effect.order[revealed - 1]]).insetBy(dx: -1.3, dy: -1.3).fill()
+            for k in 0..<4 {
+                let pos = revealed - 1 - k
+                guard pos >= 0 else { break }
+                hot.withAlphaComponent(0.95 - 0.2 * CGFloat(k)).setFill()
+                cellRect(grid.cells[effect.order[pos]]).fill()
+            }
+        }
+        for s in sparks {
+            let f = CGFloat(max(0, s.life / s.maxLife))
+            mixColor(hot, s.color, 1 - f).withAlphaComponent(f * 0.9).setFill()
+            NSRect(x: CGFloat(s.x) - 0.8, y: CGFloat(s.y) - 0.8, width: 1.6, height: 1.6).fill()
+        }
+    }
+}
+
 final class RootView: NSView {
     let tabs = ["Options", "Workspaces", "Themes", "Wallpapers", "Storage", "API Keys", "Update"]
     var selected = 0
     private var logo: NSImage?
+    private var lastIntroKind: LogoIntroKind?
+    private var introRun = 0
     private let logoView = NSImageView()
+    private let logoIntro = LogoIntroView(frame: .zero)
     private let options = OptionsTabView(frame: .zero)
     private let workspaces = WorkspacesTabView(frame: .zero)
     private let themes = ThemesTabView(frame: .zero)
@@ -15200,6 +15654,8 @@ final class RootView: NSView {
         wantsLayer = true
         logoView.imageScaling = .scaleProportionallyUpOrDown
         addSubview(logoView)
+        logoIntro.isHidden = true
+        addSubview(logoIntro)
         addSubview(options)
         options.onApplied = { [weak self] in self?.optionsApplied() }
         themes.onApplied = { [weak self] in self?.paletteChanged() }
@@ -15237,10 +15693,73 @@ final class RootView: NSView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func reloadLogo() {
+        cancelLogoIntro()
         logo = logoImage()
         logoView.image = logo
         needsDisplay = true
         for v in tabViews { v.needsDisplay = true }
+    }
+
+    // The open animation: the wordmark comes alive when the modal is shown.
+    // The cell grid is sampled from the current tinted image each time, so a
+    // wordmark swap keeps animating with no new asset; reduce-motion goes
+    // straight to the resting logo.
+    func playLogoIntro() {
+        cancelLogoIntro()
+        layoutSubtreeIfNeeded()
+        guard let logo, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        guard let grid = LogoGrid.build(from: logo, rows: max(1, Int((logoH / 2.2).rounded()))),
+              !grid.cells.isEmpty else { return }
+        logoIntro.frame = logoView.frame
+        logoIntro.onFinished = { [weak self] in self?.finishLogoIntro() }
+        logoView.alphaValue = 0
+        logoIntro.start(grid: grid, kind: nextLogoIntroKind())
+    }
+
+    // LOGO_INTRO in settings.conf pins one effect (OMACOSY_LOGO_INTRO does it
+    // for a single launch, for testing); otherwise each open picks another
+    // one at random, never repeating the last, like the omarchy site's own
+    // rotation.
+    private func nextLogoIntroKind() -> LogoIntroKind {
+        if let pinned = logoIntroPin() {
+            lastIntroKind = pinned
+            return pinned
+        }
+        var rng = SplitMix64(seed: UInt64.random(in: .min ... .max))
+        var pool = LogoIntroKind.allCases
+        if let last = lastIntroKind, pool.count > 1 { pool.removeAll { $0 == last } }
+        let kind = pool.randomElement(using: &rng) ?? .laseretch
+        lastIntroKind = kind
+        return kind
+    }
+
+    private func logoIntroPin() -> LogoIntroKind? {
+        let env = ProcessInfo.processInfo.environment["OMACOSY_LOGO_INTRO"]
+        return (env ?? readConfKey(SETTINGS, "LOGO_INTRO")).flatMap(LogoIntroKind.init(rawValue:))
+    }
+
+    private func cancelLogoIntro() {
+        introRun &+= 1
+        logoIntro.cancel()
+        logoView.layer?.removeAllAnimations()
+        logoView.alphaValue = 1
+    }
+
+    // the effect has settled; land on the crisp wordmark and put the overlay
+    // away until the next open. A quick reopen starts a new run while this
+    // fade is still in flight, so introRun stamps it and a stale fade can
+    // never cancel the new run and leave the logo area empty.
+    private func finishLogoIntro() {
+        introRun &+= 1
+        let run = introRun
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.15
+            self.logoIntro.animator().alphaValue = 0
+            self.logoView.animator().alphaValue = 1
+        }, completionHandler: { [weak self] in
+            guard let self, self.introRun == run else { return }
+            self.logoIntro.cancel()
+        })
     }
 
     private var tabTop: CGFloat { topPad + logoH + 24 }
@@ -15282,6 +15801,7 @@ final class RootView: NSView {
             logoView.frame = NSRect(x: bounds.midX - w / 2,
                                     y: bounds.height - (tabTop + logoH) / 2,
                                     width: w, height: logoH)
+            logoIntro.frame = logoView.frame
         }
         for v in tabViews { v.frame = contentFrame }
     }
@@ -15434,6 +15954,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let root { root.resetTabsOnShow() }
         w.makeKeyAndOrderFront(nil)
         if let root { w.makeFirstResponder(root) }
+        if let root { root.playLogoIntro() }
         // AeroSpace hands the window to the screen without making it key, so
         // the first keystroke — Escape — has nowhere to go until a click. Ask
         // for focus again one tick later, once the window server has settled.

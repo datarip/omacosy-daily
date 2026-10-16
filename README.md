@@ -331,6 +331,7 @@ Your values live in one file outside the clone,
 | `AUTOHIDE` | whether the bar hides at rest: `off`, `on` or `auto`. `omacosy-bar-autohide` keeps it current, so your choice survives a reinstall |
 | `SERIALIZE_APP_SPAWNS` | one window at a time from a burst of presses on the music and messenger chords |
 | `GHOSTTY_WINDOW_SHADOW` | whether Ghostty draws its macOS window shadow (`on`, Ghostty's default, or `off`). Off removes the black rim a shadow makes around a dark, translucent Ghostty window under a tiling window manager; applies on the next Ghostty launch. `""` leaves Ghostty's default |
+| `LOGO_INTRO` | the effect the `Super+,` dashboard plays over its wordmark when it opens — `laseretch`, `sweep`, `waves`, `middleout`, `scattered`, `print`, `decrypt`, `errorcorrect`, `rain`, `crumble`, `expand`, `highlight` or `colorshift`. Empty or `random` picks a different one each open, never repeating the last; Reduce Motion skips the intro |
 
 `install.sh` regenerates the window-manager configs on each run, then
 runs `omacosy-settings`, which writes your values back into them. After
@@ -385,7 +386,9 @@ with seven tabs:
 
 It reads and writes the same files and commands as the CLI, so the window and
 the shell can never disagree, and it follows the theme palette — its wordmark,
-the lists and their scrollbars included. Up and Down scroll a list, Left and
+the lists and their scrollbars included. Opening it brings the wordmark alive:
+one of thirteen short effects, picked at random and never repeating the last
+(`LOGO_INTRO` in `settings.conf` pins one). Up and Down scroll a list, Left and
 Right move between tabs, and the app picker highlights the row under the
 keyboard or the pointer and applies it on Return; a theme card takes an accent
 ring under the pointer. `bin/omacosy-dashboard` is a single-instance launcher:
@@ -450,7 +453,7 @@ The keys and the daemons run these. You do not need to run them:
 | Park/restore the stack | `omacosy-toggle` | `bin/omacosy-toggle` |
 | System glue | `omacosy-helper` (self-compiled) | `helper/main.swift` |
 | Your settings | `omacosy-settings` | `config/settings.template.conf` (live copy: `~/.config/omacosy/settings.conf`) |
-| Settings | `omacosy-dashboard` (self-compiled accessory app on Super+,) | `helper/dashboard.swift`, `bin/omacosy-dashboard`, `helper/assets/omacosy-logo.*` |
+| Settings | `omacosy-dashboard` (self-compiled accessory app on Super+,; its wordmark intro is a native take on [ttfx](https://github.com/omacom/ttfx), MIT) | `helper/dashboard.swift`, `bin/omacosy-dashboard`, `helper/assets/omacosy-logo.*` |
 | Prompt | starship | `config/starship.toml` |
 | Shell | zsh | `zsh/zshrc` + your `~/.zshrc.local` |
 | CLI stack | fzf, eza, zoxide, ripgrep, bat, lazygit, btop | wired in `zsh/zshrc` |

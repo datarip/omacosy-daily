@@ -115,6 +115,34 @@ finishes, then returns it to normal: Save → "Saving…", Apply & Save →
 "Applying…", Export → "Exporting…", Clear Cache → "Flushing…", Install
 Update → "Updating…".
 
+## Motion
+
+Motion is rare, short, and always says that something arrived.
+
+- **The wordmark comes alive when the modal opens**: one of thirteen effects
+  plays over the logo's lit cells — laseretch's beam and sparks, sweep and
+  waves' travelling bands, middleout's rings, scattered's pops, print's
+  typewriter, decrypt's scramble, errorcorrect's signal lock, rain's falling
+  drops, crumble's debris, expand's blossom, highlight's flash and
+  colorshift's shimmer — a different one at random each open, never repeating
+  the last. Each cell flares hot on arrival and cools to its accent shade,
+  and every run ends by crossfading 0.15 s onto the crisp wordmark.
+  `LOGO_INTRO` in `settings.conf` pins one effect. `LogoIntroView` samples
+  the grid from the tinted wordmark at open time (about 18 rows, ~2.2 pt
+  cells, colour from the same shade ladder as the header), so a new logo
+  animates with no new asset. The vocabulary is a native take on
+  [ttfx](https://github.com/omacom/ttfx) (MIT) — the terminal text effects
+  engine by the Omarchy authors, itself a port of TerminalTextEffects by
+  ChrisBuilds. The dynamics were written from its Rust source (laseretch's
+  walk, flare and sparks closely; the rest as block-cell readings of its
+  ideas). Nothing from omarchy.us itself is used: the site's wrapper code and
+  its wordmark bitmap are unlicensed. The attribution line sits at the top of
+  the logo intro block in `helper/dashboard.swift`.
+- **Reduce Motion turns it off.** `playLogoIntro` checks
+  `NSWorkspace.accessibilityDisplayShouldReduceMotion` and shows the logo at
+  rest instead.
+- The 0.12 s button press dim above is the only other motion in the modal.
+
 ## Dropdowns
 
 A dropdown is never a native menu (the glass `NSMenu`): the Theme Editor's

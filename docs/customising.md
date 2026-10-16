@@ -231,6 +231,17 @@ the others). `omacosy-bar-autohide on|off|auto` changes it at once, with the
 top gap for windows, and writes the line in `settings.conf` for you. The
 next install applies it again, also after an uninstall.
 
+### The wordmark intro
+
+`LOGO_INTRO` in `settings.conf` names the effect the `Super+,` dashboard
+plays over its wordmark when it opens: `laseretch`, `sweep`, `waves`,
+`middleout`, `scattered`, `print`, `decrypt`, `errorcorrect`, `rain`,
+`crumble`, `expand`, `highlight` or `colorshift`. Empty or `random` picks a
+different one each open, never repeating the last — the same rotation idea
+as omarchy.us, whose effect engine, ttfx (MIT), the vocabulary is a native
+take on. Reduce Motion (System Settings → Accessibility → Display) skips
+the intro and shows the wordmark at rest.
+
 ## 5. Keep your shell config
 
 `install.sh` writes `~/.zshrc` once, as a short stub file that loads
