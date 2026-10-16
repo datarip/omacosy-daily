@@ -4482,7 +4482,7 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
                 MethodPicker.Row(header: nil, value: $0.name, label: $0.name)
             }
             MethodPicker.present(from: self.presetsButton, rows: rows, strips: [:],
-                                 currentMethod: "", title: "Presets") { [weak self] name in
+                                 currentMethod: "", title: "Presets", liveApply: true) { [weak self] name in
                 self?.presetsButton.title = name
                 self?.presetsButton.needsDisplay = true
                 self?.onPreset?(name)
@@ -7374,6 +7374,7 @@ final class MethodPicker: NSObject {
     private let root = MethodPickerRoot()
     private var rows: [Row]
     private var selected = 0
+    private let liveApply: Bool
     private var completion: ((String) -> Void)?
     private var monitors: [Any] = []
     private let W: CGFloat = 340
@@ -7382,8 +7383,10 @@ final class MethodPicker: NSObject {
     private let H: CGFloat
 
     private init(rows: [Row], strips: [String: [String]], currentMethod: String,
-                 title: String, completion: @escaping (String) -> Void) {
+                 title: String, liveApply: Bool,
+                 completion: @escaping (String) -> Void) {
         self.rows = rows
+        self.liveApply = liveApply
         self.completion = completion
         let h = min(430, max(80, MethodPickerList.height(for: rows) + 20 + 32))
         self.H = h
@@ -7408,10 +7411,11 @@ final class MethodPicker: NSObject {
 
     static func present(from view: NSView, rows: [Row], strips: [String: [String]],
                         currentMethod: String, title: String = "Method",
+                        liveApply: Bool = false,
                         completion: @escaping (String) -> Void) {
         active?.close()
         let p = MethodPicker(rows: rows, strips: strips, currentMethod: currentMethod,
-                             title: title, completion: completion)
+                             title: title, liveApply: liveApply, completion: completion)
         guard let host = view.window else { return }
         let btn = host.convertToScreen(view.convert(view.bounds, to: nil))
         var x = btn.minX
@@ -7457,13 +7461,25 @@ final class MethodPicker: NSObject {
     }
 
     private func move(_ delta: Int) {
-        var i = selected
-        repeat { i += delta } while rows.indices.contains(i) && rows[i].value == nil
-        guard rows.indices.contains(i), rows[i].value != nil else { return }
+        guard let i = Self.stepped(selected, delta, rows: rows) else { return }
         selected = i
-        root.selected = i
-        root.needsDisplay = true
-        root.scrollToSelected()
+        root.setSelected(i)
+        // Where the choice drives a live surface (the editor's Method and
+        // Presets), the highlighted row applies at once: the palette or the
+        // picture follows the arrows, and Return or a click is only ever a
+        // way to close. Opt-in — pickers whose pick fires a network search
+        // (the Wallpapers filters) must stay apply-on-pick.
+        if liveApply, let v = rows[i].value { completion?(v) }
+    }
+
+    // The first selectable row `delta` steps away, walking over group
+    // headers; nil when the list ends. Pure, so the arrow walk is testable
+    // off-screen.
+    static func stepped(_ from: Int, _ delta: Int, rows: [Row]) -> Int? {
+        var i = from
+        repeat { i += delta } while rows.indices.contains(i) && rows[i].value == nil
+        guard rows.indices.contains(i), rows[i].value != nil else { return nil }
+        return i
     }
 
     private func pickSelected() {
@@ -7535,6 +7551,18 @@ final class MethodPickerRoot: NSView {
     }
 
     func scrollToSelected() { list.scrollRowIntoView(selected, in: scroll) }
+
+    // An arrow move must reach the LIST, not just this card's index: the
+    // list is what draws the highlighted row and autoscrolls to it. Setting
+    // only the card's copy left the move invisible (Return still picked the
+    // unseen row), which read as "the arrow keys do nothing".
+    func setSelected(_ i: Int) {
+        selected = i
+        list.selected = i
+        list.needsDisplay = true
+        needsDisplay = true
+        scrollToSelected()
+    }
 }
 
 final class MethodPickerList: NSView {
@@ -8069,6 +8097,19 @@ func contrastRatioHex(_ a: String, _ b: String) -> Double {
 // and the large-text AA-L (3) the swatch cards already use.
 func contrastBadge(_ ratio: Double) -> String {
     ratio >= 7 ? "AAA" : (ratio >= 4.5 ? "AA" : (ratio >= 3 ? "AA-L" : "!"))
+}
+
+// The one AA tally behind the two readouts — the Accessibility table's
+// summary and the preview's pill: checks at or above WCAG AA (4.5) and the
+// total, so the two can never disagree about the same palette.
+func contrastAATally(_ rows: [PaletteModel.ContrastRow]) -> (pass: Int, total: Int) {
+    (rows.flatMap { $0.ratios }.filter { $0 >= 4.5 }.count, rows.count * 3)
+}
+
+// The preview pill's compact spelling of the same tally ("AA 21/27").
+func contrastAAPillText(_ rows: [PaletteModel.ContrastRow]) -> String {
+    let t = contrastAATally(rows)
+    return "AA \(t.pass)/\(t.total)"
 }
 
 // --- semantic colours -------------------------------------------------------
@@ -8979,7 +9020,7 @@ final class PaletteBuilderView: NSView {
                 }
             }
             MethodPicker.present(from: self.doc.methodButton, rows: rows, strips: model.strips,
-                                 currentMethod: model.method) { [weak model] value in
+                                 currentMethod: model.method, liveApply: true) { [weak model] value in
                 model?.chooseMethod(value)
             }
         }
@@ -9000,7 +9041,7 @@ final class PaletteBuilderView: NSView {
                     }
                 }
                 MethodPicker.present(from: self.doc.presetsButton, rows: rows, strips: strips,
-                                     currentMethod: model.sourceName ?? "") { [weak self] name in
+                                     currentMethod: model.sourceName ?? "", liveApply: true) { [weak self] name in
                     guard let colors = strips[name] else { return }
                     self?.model?.applyPreset(name, colors: colors)
                 }
@@ -9373,8 +9414,8 @@ final class PaletteBuilderDoc: NSView {
     private func drawContrast() {
         guard !contrast.isEmpty else { return }
         let h = bounds.height
-        let pass = contrast.flatMap { $0.ratios }.filter { $0 >= 4.5 }.count
-        let summary = "\(pass) of \(contrast.count * 3) pass AA"
+        let tally = contrastAATally(contrast)
+        let summary = "\(tally.pass) of \(tally.total) pass AA"
         let sf = nerdFont("Regular", 10)
         drawMidLeft(summary, sf, palette.muted,
                     x: insetL + contentW - advance(summary, sf), midTop: contrastTop + 9,
@@ -9713,21 +9754,30 @@ final class PreviewPaneView: NSView {
     // the preview so it never spills onto the editor's panels. The keys drop
     // the "Super+" prefix (the header carries it). The terminal stands down
     // while the sheet is up (see the draw dispatch).
-    private func drawCheatsheet(in screen: NSRect) {
-        NSGraphicsContext.saveGraphicsState()
-        NSBezierPath(rect: screen).addClip()
-        defer { NSGraphicsContext.restoreGraphicsState() }
-
-        let r = resolvedRoles()
+    private func cheatsheetCard(in screen: NSRect) -> NSRect {
         let margin: CGFloat = 16
         let gap: CGFloat = 12
         let menuBarH: CGFloat = 34
         let toolbarTop = screen.minY + 8 + 22
         let cardTop = screen.maxY - menuBarH - gap
         let cardBottom = toolbarTop + gap
-        let card = NSRect(x: screen.minX + margin, y: cardBottom,
-                          width: screen.width - margin * 2, height: max(80, cardTop - cardBottom))
-        let cardPath = NSBezierPath(roundedRect: card, xRadius: 10, yRadius: 10)
+        return NSRect(x: screen.minX + margin, y: cardBottom,
+                      width: screen.width - margin * 2, height: max(80, cardTop - cardBottom))
+    }
+
+    private func drawCheatsheet(in screen: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: screen).addClip()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+
+        let r = resolvedRoles()
+        // drawCheatsheet and the click-away dismissal share this rect, so
+        // the hit test can never disagree with the sheet on screen
+        let card = cheatsheetCard(in: screen)
+        // the real Super+K sheet follows the window-corner setting (bar.swift's
+        // CheatsheetView); the mock must not disagree with it
+        let cardPath = NSBezierPath(roundedRect: card, xRadius: windowCornerRadius(10),
+                                    yRadius: windowCornerRadius(10))
         r.bar.setFill()
         cardPath.fill()
         r.accent.withAlphaComponent(0.5).setStroke()
@@ -9939,9 +9989,11 @@ final class PreviewPaneView: NSView {
         let termBG = cols[0]
         let rect = terminalRect(in: screen)
 
-        // the focus ring, outside the window, in the ring role
+        // the focus ring, outside the window, in the ring role. Window and
+        // ring both follow the window-corner setting, like the real ones do
         if showRing {
-            let ring = NSBezierPath(roundedRect: rect.insetBy(dx: -3, dy: -3), xRadius: 10, yRadius: 10)
+            let ring = NSBezierPath(roundedRect: rect.insetBy(dx: -3, dy: -3),
+                                    xRadius: windowCornerRadius(10), yRadius: windowCornerRadius(10))
             r.ring.setStroke()
             ring.lineWidth = 2.5
             ring.stroke()
@@ -9949,7 +10001,8 @@ final class PreviewPaneView: NSView {
 
         // the window: Ghostty's 0.85 background, so the wallpaper shows through
         // exactly as it does on the desktop
-        let body = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+        let body = NSBezierPath(roundedRect: rect, xRadius: windowCornerRadius(8),
+                                yRadius: windowCornerRadius(8))
         termBG.withAlphaComponent(CGFloat(toolOpacity ?? globalOpacity ?? terminalOpacity ?? 100) / 100).setFill()
         body.fill()
         cols[8].withAlphaComponent(0.6).setStroke()
@@ -10016,6 +10069,28 @@ final class PreviewPaneView: NSView {
                 drawLine(line.map { ($0.0, tokenColor($0.1, cols)) })
             }
         }
+    }
+
+    // The Accessibility score, pinned over the wallpaper's bottom-left as the
+    // twin of the toolbar buttons bottom-right: the same AA tally the
+    // Accessibility table prints, so a colour edit can be judged against it
+    // without scrolling the Palette Builder down to the table after every
+    // change. Recomputed per draw, so it moves with the palette. Drawn in the
+    // app's own role pairing — barBG for the surface, accent for the ink —
+    // like every other Omacosy chrome element.
+    private func drawAAPill(in screen: NSRect) {
+        guard let model else { return }
+        let rows = model.contrastRows()
+        guard !rows.isEmpty else { return }
+        let text = contrastAAPillText(rows)
+        let font = nerdFont("Bold", 10)
+        let pill = NSRect(x: screen.minX + 8, y: screen.minY + 8,
+                          width: advance(text, font) + 16, height: 20)
+        palette.barBG.setFill()
+        NSBezierPath(roundedRect: pill, xRadius: windowCornerRadius(6),
+                     yRadius: windowCornerRadius(6)).fill()
+        drawBaseline(text, font, palette.accent,
+                     x: pill.minX + 8, baseline: pill.midY - font.capHeight / 2)
     }
 
     private var cachePath = ""
@@ -10204,6 +10279,7 @@ final class PreviewPaneView: NSView {
             // behind the sheet
             if showTerminal, !showCheatsheet { drawTerminal(in: screen) }
             if showCheatsheet { drawCheatsheet(in: screen) }
+            drawAAPill(in: screen)
         }
         // the frame line, drawn on every edge so the panel reads as a frame
         palette.muted.withAlphaComponent(0.3).setStroke()
@@ -10222,11 +10298,31 @@ final class PreviewPaneView: NSView {
             cropDrag = (cropHandleHit(p, cropScreenRect(fit)), p, cropRect)
             return
         }
-        if showTerminal, showCode, let i = tabRects.firstIndex(where: { $0.contains(p) }) {
+        // The mock overlays dismiss like real overlays do: a click outside
+        // the cheat sheet — or outside the terminal when no sheet is up —
+        // closes it, and the toolbar toggle follows. The click is spent on
+        // the dismissal, so it cannot also start a compare-hold.
+        let screen = self.screen
+        if showCheatsheet, !cheatsheetCard(in: screen).contains(p) {
+            showCheatsheet = false
+            viewCheatsheet.on = false
+            needsDisplay = true
+            return
+        }
+        if !showCheatsheet, showTerminal, !terminalRect(in: screen).contains(p) {
+            showTerminal = false
+            toggleTerminal.on = false
+            needsDisplay = true
+            return
+        }
+        // the tabs only exist while the terminal is drawn: a stale rect must
+        // not switch the language from under the cheat sheet
+        if showTerminal, !showCheatsheet, showCode,
+           let i = tabRects.firstIndex(where: { $0.contains(p) }) {
             if i != selectedLanguage { selectedLanguage = i; needsDisplay = true }
             return
         }
-        if showTerminal, terminalRect(in: screen).contains(p) {
+        if showTerminal, !showCheatsheet, terminalRect(in: screen).contains(p) {
             dragging = true
             dragStart = p
             dragOrigin = termOrigin
@@ -15542,6 +15638,80 @@ func windowCornerSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--window-corner-selftest") {
     exit(windowCornerSelfTest() == 0 ? 0 : 1)
+}
+
+// The preview's AA pill and the Accessibility table's summary are one tally;
+// drive it with synthetic rows so the two spellings cannot drift apart. Like
+// the other doors it runs before the window opens.
+func aaScoreSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    func row(_ ratios: [Double]) -> PaletteModel.ContrastRow {
+        PaletteModel.ContrastRow(name: "Label", hex: "#ffffff", ratios: ratios)
+    }
+    let rows = [row([21, 4.5, 4.49]), row([7, 3, 1.1])]
+    let tally = contrastAATally(rows)
+    check("AA counts 4.5 and above", tally.pass == 3)
+    check("every surface is counted", tally.total == 6)
+    check("the pill spells the tally compactly", contrastAAPillText(rows) == "AA 3/6")
+    check("a perfect palette reads full", contrastAAPillText([row([8, 8, 8])]) == "AA 3/3")
+    check("no rows means no pill text", contrastAAPillText([]) == "AA 0/0")
+    print(failures == 0 ? "aa-score selftest: all checks passed"
+                        : "aa-score selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--aa-score-selftest") {
+    exit(aaScoreSelfTest() == 0 ? 0 : 1)
+}
+
+// The picker's arrow keys must move the LIST's highlight, not just the
+// card's own index: the list is what draws the selected row, and a move
+// that only lands on the card looks like "the arrows do nothing" while
+// Return still picks the unseen selection. Drives the root off-screen and
+// walks the pure header-skipping step, like the other doors.
+func dropdownSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    let rows = [
+        MethodPicker.Row(header: "COLOR THEORY", value: nil, label: "COLOR THEORY"),
+        MethodPicker.Row(header: nil, value: "Analogous", label: "Analogous"),
+        MethodPicker.Row(header: nil, value: "Complementary", label: "Complementary"),
+        MethodPicker.Row(header: "MOOD", value: nil, label: "MOOD"),
+        MethodPicker.Row(header: nil, value: "Fire", label: "Fire"),
+    ]
+    check("a step off a row lands on the next row", MethodPicker.stepped(1, 1, rows: rows) == 2)
+    check("a step over a header skips it", MethodPicker.stepped(2, 1, rows: rows) == 4)
+    check("stepping back reaches the row before the header", MethodPicker.stepped(4, -1, rows: rows) == 2)
+    check("walking past the end stops", MethodPicker.stepped(4, 1, rows: rows) == nil)
+    check("walking past the top stops", MethodPicker.stepped(1, -1, rows: rows) == nil)
+
+    palette = loadPalette()
+    let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 430),
+                       styleMask: .borderless, backing: .buffered, defer: false)
+    let root = MethodPickerRoot(frame: NSRect(x: 0, y: 0, width: 340, height: 430))
+    win.contentView = root
+    root.rows = rows
+    root.selected = 1
+    root.relayout()
+    check("the card hands the current row to the list", root.list.selected == 1)
+    root.setSelected(4)
+    check("a move reaches the list's highlight", root.selected == 4 && root.list.selected == 4)
+    root.setSelected(2)
+    check("moving back reaches it too", root.selected == 2 && root.list.selected == 2)
+    print(failures == 0 ? "dropdown selftest: all checks passed"
+                        : "dropdown selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--dropdown-selftest") {
+    exit(dropdownSelfTest() == 0 ? 0 : 1)
 }
 
 // The wallpaper editor's preview door (Phase 8b): render the in-process

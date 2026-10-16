@@ -132,6 +132,15 @@ Method and Presets pickers, and the Wallpapers tab's **Sort Order** and
   with Regular 12 `palette.label`; the selected row is `palette.accent` at 0.85
   filled, in `palette.barBG`, with a `\u{f00c}` tick. The card is sized to its
   list (`min(430, rows + 52)`), so a short list is a short menu.
+- **Keyboard first.** Omacosy is a keyboard-driven app, so every dropdown
+  opens keyboard-ready: ↑ and ↓ walk the rows (group headers are skipped) and
+  the list scrolls to keep the highlighted row visible, Return picks it and
+  Esc closes. Where the choice drives a live surface — the editor's Method
+  and Presets — the highlighted row applies as you walk, so the preview
+  follows the arrows and Return is only ever a close; a picker whose pick
+  fires work of its own (the Wallpapers filters' search) applies on pick.
+  Mouse scrolling and clicking are alternatives, never the only way to move
+  the selection. A new dropdown control must behave the same.
 
 ## The dashboard tabs
 

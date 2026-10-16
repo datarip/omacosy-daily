@@ -23,14 +23,23 @@ mode, keeps Omacosy's chrome on theme.
 
 The editor previews the theme you are building **live**: its own background,
 text, pills and accent follow the draft as you transform the palette, before
-you apply. The centre pane's toolbar toggles the mock **menu bar**, the
-**terminal**, the focus **ring** and a fake **cheat sheet** (the one surface
-that shows Muted as the descriptions, Label as the keys and Accent as the
-headings). And the **Semantic Colors** section carries two Omacosy-owned
-groups — **Omacosy** (**Background, Pill, Muted, Label, Accent**) and
-**Ring & Status** (**Ring, Red, Green, Yellow**) — that are editable
-**independently of the palette the terminal tools use**. Overriding one
-changes only that Omacosy surface, never the `colors.toml` the terminal
+you apply; the **Method** and **Presets** dropdowns apply the highlighted
+row at once as you walk them with ↑ and ↓, so the preview follows the
+arrows and Return is only ever a close. The centre pane's toolbar toggles
+the mock **menu bar**, the **terminal**, the focus **ring** and a fake
+**cheat sheet** (the one surface that shows Muted as the descriptions,
+Label as the keys and Accent as the headings). The mock terminal, the
+cheat sheet and the ring follow the **Window & UI Corners** setting, and a
+small **AA** pill in the preview's bottom-left — the app's background with
+accent ink — carries the same pass count as the **Accessibility** table,
+live, so a colour change can be checked without scrolling the Palette
+Builder down to the table. A click
+outside the mock terminal or the cheat sheet dismisses it, and its toolbar
+toggle follows. And the **Semantic Colors** section carries two
+Omacosy-owned groups — **Omacosy** (**Background, Pill, Muted, Label,
+Accent**) and **Ring & Status** (**Ring, Red, Green, Yellow**) — that are
+editable **independently of the palette the terminal tools use**. Overriding
+one changes only that Omacosy surface, never the `colors.toml` the terminal
 follows; click a card to open the colour inspector, and the pin dot plus the
 header Reset or "Reset N pinned" return them to auto.
 
