@@ -313,17 +313,26 @@ case "$mode" in
   set-theme)
     record="${1:?usage: omacosy-theme-switch set-theme <id|theme file>}"
     # Materialise first: an invalid record, or an edition whose image is gone,
-    # fails here and touches neither the desktop nor the symlink.
-    dir="$("$THEMECORE" theme materialize "$record")" || exit 1
+    # fails here and touches neither the desktop nor the symlink. The JSON
+    # answer carries the source too, so one engine start replaces the second
+    # `theme wallpaper --source` call.
+    out="$("$THEMECORE" theme materialize "$record" --json)" || exit 1
+    dir="$(printf '%s' "$out" | jq -r '.dir')"
+    source="$(printf '%s' "$out" | jq -r '.source // empty')"
+    [ -n "$dir" ] && [ -d "$dir" ] || exit 1
     # The directory's backgrounds link is authoritative: the edition's own
     # image, or its heavy-blur variant when wallpaper.blur is on. Resolve
     # past the materialised directory so the pointer names the image, not a
-    # revision folder that may be pruned.
-    shown="$(find -L "$dir/backgrounds" -maxdepth 1 -type f 2>/dev/null | sort | head -1)"
+    # revision folder that may be pruned. There is exactly one entry, so a
+    # glob avoids three helper processes.
+    shown=""
+    for f in "$dir"/backgrounds/*; do
+      [ -f "$f" ] && { shown="$f"; break; }
+    done
+    [ -n "$shown" ] || exit 1
     wall="$(readlink -f "$shown" 2>/dev/null || true)"
     [ -n "$wall" ] || wall="$shown"
     [ -n "$wall" ] || exit 1
-    source="$("$THEMECORE" theme wallpaper "$record" --source 2>/dev/null || true)"
     # <id>-<rev>; removing the shortest dash suffix strips exactly the
     # revision, whatever dashes the id itself carries.
     base="$(basename "$dir")"

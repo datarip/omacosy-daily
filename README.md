@@ -331,7 +331,7 @@ Your values live in one file outside the clone,
 | `AUTOHIDE` | whether the bar hides at rest: `off`, `on` or `auto`. `omacosy-bar-autohide` keeps it current, so your choice survives a reinstall |
 | `SERIALIZE_APP_SPAWNS` | one window at a time from a burst of presses on the music and messenger chords |
 | `GHOSTTY_WINDOW_SHADOW` | whether Ghostty draws its macOS window shadow (`on`, Ghostty's default, or `off`). Off removes the black rim a shadow makes around a dark, translucent Ghostty window under a tiling window manager; applies on the next Ghostty launch. `""` leaves Ghostty's default |
-| `LOGO_INTRO` | the effect the `Super+,` dashboard plays over its wordmark when it opens — `laseretch`, `sweep`, `waves`, `middleout`, `scattered`, `print`, `decrypt`, `errorcorrect`, `rain`, `crumble`, `expand`, `highlight`, `colorshift`, `beams`, `slice`, `wipe` or `spray`. Empty or `random` picks a different one each open, never repeating the last; Reduce Motion skips the intro |
+| `LOGO_INTRO` | the effect the `Super+,` dashboard plays over its wordmark when it opens — `laseretch`, `sweep`, `waves`, `middleout`, `scattered`, `print`, `decrypt`, `errorcorrect`, `rain`, `crumble`, `expand`, `highlight`, `colorshift`, `beams`, `slice`, `wipe` or `spray`. Empty or `random` picks a different one each open, never repeating the last; each run lasts about half a second to just over a second. Reduce Motion skips the intro |
 
 `install.sh` regenerates the window-manager configs on each run, then
 runs `omacosy-settings`, which writes your values back into them. After
@@ -381,6 +381,8 @@ with seven tabs:
 - **Storage** — the local wallpapers folder (where it is, a button that opens
   it, **Add Images**, **Set Folder**) and a **Thumbnail Cache** row with its
   size, a **Clear Cache** button and a button that opens the cache folder.
+  Clearing also drops the dashboard's colour-strip cache; both rebuild as the
+  tabs are opened again.
 - **API Keys** — the wallhaven.cc API key, masked, stored locally.
 - **Update** — `omacosy-update --check`, with the install button behind it.
 

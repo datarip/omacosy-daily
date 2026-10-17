@@ -3215,8 +3215,7 @@ func editionImage(_ e: ThemeEdition) -> String? {
 
 // Every wallpaper in the configured folder is an auto-theme
 // (`Wallpaper #N`); named editions always sit on top.
-func customVariants() -> [ThemeCell] {
-    let dir = wallpapersDir()
+func customVariants(_ dir: String) -> [ThemeCell] {
     let files = ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [])
         .filter { isImageFile($0) }.sorted()
     let editions = allEditions()
@@ -3495,6 +3494,58 @@ func customPalette(_ wallpaper: String) -> [NSColor] {
     return parseSketchybar(dir + "/sketchybar.sh")
 }
 
+// The gallery needs a 16-colour strip for every raw wallpaper. Deriving it
+// costs two processes and a theme rebuild; the result only changes when the
+// picture or the deriving tools do, so it is kept next to the thumbnails.
+let paletteCacheVersion = 1
+
+// Bumped automatically when any of the tools that produce the colours change,
+// so a rebuild invalidates old entries without a manual version bump.
+let paletteCacheSalt: String = {
+    func stamp(_ path: String) -> String {
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: resolved),
+              let date = attrs[.modificationDate] as? Date else { return "-" }
+        return String(Int64(date.timeIntervalSince1970))
+    }
+    return ["omacosy-custom-theme", "omacosy-derive", "omacosy-term-palette"]
+        .map { stamp(HOME + "/.local/bin/" + $0) }
+        .joined(separator: ":")
+}()
+
+func customPaletteCachePath(_ wallpaper: String) -> String? {
+    guard let attrs = try? FileManager.default.attributesOfItem(atPath: wallpaper),
+          let mtime = attrs[.modificationDate] as? Date else { return nil }
+    let millis = Int64((mtime.timeIntervalSince1970 * 1000).rounded())
+    let seed = "\(wallpaper)|\(millis)|\(paletteCacheSalt)|v\(paletteCacheVersion)"
+    return HOME + "/.local/state/omacosy/dashboard/palettes/"
+        + String(sha256Hex(seed).prefix(24)) + ".json"
+}
+
+func cachedCustomPalette(_ wallpaper: String) -> [NSColor] {
+    let cache = customPaletteCachePath(wallpaper)
+    if let cache,
+       let data = FileManager.default.contents(atPath: cache),
+       let top = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+       (top["version"] as? Int) == paletteCacheVersion,
+       let colors = top["colors"] as? [String], colors.count == 16 {
+        let parsed = colors.compactMap(hexColor)
+        if parsed.count == 16 { return parsed }
+    }
+    let palette = customPalette(wallpaper)
+    let colors = palette.compactMap(hexString)
+    if palette.count == 16, colors.count == 16, let cache,
+       let data = try? JSONSerialization.data(
+            withJSONObject: ["version": paletteCacheVersion, "colors": colors],
+            options: [.sortedKeys]) {
+        try? FileManager.default.createDirectory(
+            atPath: (cache as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true)
+        try? data.write(to: URL(fileURLWithPath: cache), options: .atomic)
+    }
+    return palette
+}
+
 func shellQuote(_ s: String) -> String {
     "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
@@ -3502,7 +3553,17 @@ func shellQuote(_ s: String) -> String {
 func thumbnail(_ path: String, maxPixel: Int = 360) -> NSImage? {
     let dir = HOME + "/.local/state/omacosy/dashboard/thumbs"
     let cache = dir + "/" + stableHash(path + ":\(maxPixel)") + ".png"
-    if let img = NSImage(contentsOfFile: cache) { return img }
+    // Decode the cached PNG here, on the caller's background queue. Returning
+    // NSImage(contentsOfFile:) leaves the decode lazy, so the first draw while
+    // scrolling would do it on the main thread.
+    if FileManager.default.fileExists(atPath: cache) {
+        if let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: cache) as CFURL, nil),
+           let cg = CGImageSourceCreateImageAtIndex(src, 0,
+                [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) {
+            return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        }
+        if let img = NSImage(contentsOfFile: cache) { return img }
+    }
     guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
     let opts: [CFString: Any] = [
         kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -3543,9 +3604,30 @@ final class ThemeGridView: NSView {
     var customDir: String?
     var thumbs: [Int: NSImage] = [:]
     var palettes: [Int: [NSColor]] = [:]
-    var pending: Set<Int> = []
     var cellFrames: [Int: NSRect] = [:]
     var headers: [(NSRect, String)] = []
+    private var pendingThumbs: Set<Int> = []
+    private var pendingPalettes: Set<Int> = []
+    // Deriving a palette is the expensive half of a card load; keep a few in
+    // flight so a fast scroll cannot launch one process pair per cell.
+    private let paletteQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = 4
+        q.qualityOfService = .utility
+        return q
+    }()
+    // Everything in a card that depends only on its title and width. Built
+    // once per grid rebuild, so draw() never measures or truncates text.
+    private struct CellRender {
+        let title: String
+        let titleW: CGFloat
+        let badge: String
+    }
+    private var renders: [Int: CellRender] = [:]
+    private lazy var titleFont = nerdFont("Regular", 11)
+    private lazy var badgeFont = nerdFont("Regular", 10)
+    private lazy var pillFont = nerdFont("Bold", 11)
+    private lazy var activePillFont = nerdFont("Bold", 10)
     var onApplied: ((String) -> Void)?
     // the Edit pill's click: opens the Theme Editor on this cell
     var onEdit: ((ThemeCell) -> Void)?
@@ -3643,52 +3725,95 @@ final class ThemeGridView: NSView {
         customHeaderRect = flip(customHeaderRect)
         separatorRect = flip(separatorRect)
 
+        renders.removeAll()
+        for (i, f) in cellFrames where cells.indices.contains(i) {
+            let c = cells[i]
+            let n = c.variations
+            let badge = n > 0 ? "· \(n) variation\(n == 1 ? "" : "s")" : ""
+            let badgeW = badge.isEmpty ? 0 : advance(badge, badgeFont) + 8
+            let title = truncate(c.title, titleFont, f.width - badgeW)
+            renders[i] = CellRender(title: title, titleW: advance(title, titleFont),
+                                    badge: badge)
+        }
+
         frame.size = NSSize(width: W, height: contentH)
         needsDisplay = true
     }
 
+    func resetPending() {
+        pendingThumbs.removeAll()
+        pendingPalettes.removeAll()
+    }
+
+    private func invalidate(_ i: Int) {
+        if let f = cellFrames[i] { setNeedsDisplay(f) }
+    }
+
     func loadVisible(_ rect: NSRect) {
         for (i, f) in cellFrames where f.intersects(rect) {
-            guard thumbs[i] == nil, !pending.contains(i) else { continue }
-            pending.insert(i)
-            loadCell(i)
+            guard cells.indices.contains(i) else { continue }
+            if thumbs[i] == nil, !pendingThumbs.contains(i) {
+                pendingThumbs.insert(i)
+                loadThumb(i)
+            }
+            if palettes[i] == nil, !pendingPalettes.contains(i) {
+                pendingPalettes.insert(i)
+                loadPalette(i)
+            }
         }
     }
 
-    private func loadCell(_ i: Int) {
-        guard cells.indices.contains(i) else { pending.remove(i); return }
+    private func loadThumb(_ i: Int) {
+        guard cells.indices.contains(i) else { pendingThumbs.remove(i); return }
         let c = cells[i]
-        DispatchQueue.global().async { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let img = thumbnail(c.wallpaper)
-            let pal: [NSColor]
-            if !c.storedColors.isEmpty { pal = c.storedColors }
-            else if c.isCustom { pal = customPalette(c.wallpaper) }
-            else { pal = parseColorsToml(c.paletteFile) }
             DispatchQueue.main.async {
                 // a reload may have reshuffled the cells while this was in
                 // flight; only land on the cell it was decoded for
                 guard let self, self.cells.indices.contains(i),
                       self.cells[i].wallpaper == c.wallpaper else { return }
                 self.thumbs[i] = img
+                self.pendingThumbs.remove(i)
+                self.invalidate(i)
+            }
+        }
+    }
+
+    private func loadPalette(_ i: Int) {
+        guard cells.indices.contains(i) else { pendingPalettes.remove(i); return }
+        let c = cells[i]
+        paletteQueue.addOperation { [weak self] in
+            guard let self else { return }
+            let pal: [NSColor]
+            if !c.storedColors.isEmpty { pal = c.storedColors }
+            else if c.isCustom { pal = cachedCustomPalette(c.wallpaper) }
+            else { pal = parseColorsToml(c.paletteFile) }
+            DispatchQueue.main.async {
+                guard self.cells.indices.contains(i),
+                      self.cells[i].wallpaper == c.wallpaper else { return }
                 self.palettes[i] = pal
-                self.pending.remove(i)
-                self.needsDisplay = true
+                self.pendingPalettes.remove(i)
+                self.invalidate(i)
             }
         }
     }
 
     override func draw(_ dirtyRect: NSRect) {
         // section labels only: the folder buttons live in the Wallpapers tab,
-        // which owns the directory
-        for (r, title) in headers {
-            drawMidLeft(title, nerdFont("Bold", 13), palette.accent,
+        // which owns the directory. Only the dirty part is redrawn, so a
+        // thumbnail arriving (or one hovered card changing) costs one card,
+        // not the whole gallery.
+        let headerFont = nerdFont("Bold", 13)
+        for (r, title) in headers where r.intersects(dirtyRect) {
+            drawMidLeft(title, headerFont, palette.accent,
                         x: 0, midTop: bounds.height - r.midY, height: bounds.height)
         }
-        if cells.contains(where: { $0.isCustom }) {
+        if cells.contains(where: { $0.isCustom }), separatorRect.intersects(dirtyRect) {
             palette.muted.withAlphaComponent(0.25).setFill()
             separatorRect.fill()
         }
-        for (i, f) in cellFrames {
+        for (i, f) in cellFrames where f.intersects(dirtyRect) {
             drawCell(i, f)
         }
     }
@@ -3723,18 +3848,15 @@ final class ThemeGridView: NSView {
             thumb.stroke()
         }
 
-        let titleFont = nerdFont("Regular", 11)
-        let badgeFont = nerdFont("Regular", 10)
-        let n = cells[i].variations
-        let badge = n > 0 ? "· \(n) variation\(n == 1 ? "" : "s")" : ""
-        let badgeW = badge.isEmpty ? 0 : advance(badge, badgeFont) + 8
-        let title = truncate(cells[i].title, titleFont, f.width - badgeW)
+        let render = renders[i]
+        let title = render?.title ?? cells[i].title
+        let badge = render?.badge ?? ""
         let titleTop = bounds.height - (f.minY + cellPaletteH + cellLabelH)
         drawTopLeft(title, titleFont, palette.label,
                     x: f.minX, top: titleTop, height: bounds.height)
         if !badge.isEmpty {
             drawTopLeft(badge, badgeFont, palette.muted,
-                        x: f.minX + advance(title, titleFont) + 8,
+                        x: f.minX + (render?.titleW ?? advance(title, titleFont)) + 8,
                         top: titleTop, height: bounds.height)
         }
 
@@ -3764,7 +3886,7 @@ final class ThemeGridView: NSView {
                 palette.accent.setFill()
                 shape.fill()
                 let ink = relativeLuminance(palette.accent) > 0.179 ? palette.barBG : palette.label
-                drawMidCenter(label, nerdFont("Bold", 11), ink,
+                drawMidCenter(label, pillFont, ink,
                               centerX: pill.midX, midTop: bounds.height - pill.midY, height: bounds.height)
             }
         }
@@ -3777,7 +3899,7 @@ final class ThemeGridView: NSView {
             let shape = NSBezierPath(roundedRect: pill, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
             NSColor.systemGreen.setFill()
             shape.fill()
-            drawMidCenter(label, nerdFont("Bold", 10), .white,
+            drawMidCenter(label, activePillFont, .white,
                           centerX: pill.midX, midTop: bounds.height - pill.midY, height: bounds.height)
         }
     }
@@ -3790,8 +3912,11 @@ final class ThemeGridView: NSView {
         case .edition(let id): return c.editionID == id
         case .stock(let name): return !c.isCustom && c.logical == name
         case .raw(let path):
-            return c.isCustom && c.editionID == nil
-                && canonicalPath(c.wallpaper) == canonicalPath(path)
+            guard c.isCustom, c.editionID == nil else { return false }
+            // The index stores the same spelling the cell holds, so the string
+            // check settles the normal case without touching the filesystem.
+            if c.wallpaper == path { return true }
+            return canonicalPath(c.wallpaper) == canonicalPath(path)
         }
     }
 
@@ -3922,15 +4047,17 @@ final class ThemeGridView: NSView {
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         let hit = cellFrames.first { $0.value.contains(p) }?.key
-        guard hit != hoveredIndex else { return }
+        let old = hoveredIndex
+        guard hit != old else { return }
         hoveredIndex = hit
-        needsDisplay = true
+        if let old { invalidate(old) }
+        if let hit { invalidate(hit) }
     }
 
     override func mouseExited(with event: NSEvent) {
-        guard hoveredIndex != nil else { return }
+        guard let old = hoveredIndex else { return }
         hoveredIndex = nil
-        needsDisplay = true
+        invalidate(old)
     }
 }
 
@@ -4268,8 +4395,8 @@ final class ThemesTabView: NSView, ScrollStepTab {
     @objc private func visibleChanged() { grid.loadVisible(scroll.documentVisibleRect); scroller.refresh() }
 
     func reload() {
-        let cells = stockVariants() + customVariants()
         let dir = wallpapersDir()
+        let cells = stockVariants() + customVariants(dir)
         // the live theme can change without the cell set changing
         grid.active = activeThemeSpec()
         // the day/night values feed the context menu's check marks; a write
@@ -4308,7 +4435,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
         }
         grid.thumbs = thumbs
         grid.palettes = palettes
-        grid.pending.removeAll()
+        grid.resetPending()
         needsGridRebuild = true
         needsLayout = true
     }
@@ -7349,25 +7476,23 @@ final class PaletteModel {
         let previous = baseColors
         DispatchQueue.global().async { [weak self] in
             guard let self else { return }
+            // Magic asks for one object that carries both the 16 colours and
+            // the role accent; a separate --roles run would repeat the same
+            // six-pass analysis.
             let cmd = m == "magic"
-                ? "palette magic \(q) --json"
+                ? "palette magic \(q) --roles --json"
                 : "palette extract \(q) --mode \(m)\(light ? " --light" : "") --json"
             let (code, out) = self.themecore(cmd)
             var colors: [String] = []
+            var magicAccent: String? = nil
             if code == 0, let data = out.data(using: .utf8),
                let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                 colors = obj["colors"] as? [String] ?? []
-            }
-            // A magic re-extraction is the wallpaper's own theme again: the
-            // accent returns to the picture's role accent (so the edition
-            // matches the raw Wallpaper cell), not the palette's orange.
-            var magicAccent: String? = nil
-            if m == "magic" {
-                let (rc, ro) = self.themecore("palette magic \(q) --roles --json")
-                if rc == 0, let d = ro.data(using: .utf8),
-                   let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
-                    magicAccent = obj["accent"] as? String
-                }
+                // A magic re-extraction is the wallpaper's own theme again:
+                // the accent returns to the picture's role accent (so the
+                // edition matches the raw Wallpaper cell), not the palette's
+                // orange.
+                magicAccent = obj["accent"] as? String
             }
             guard colors.count == 16 else { return }
             DispatchQueue.main.async {
@@ -9822,6 +9947,12 @@ final class PreviewPaneView: NSView {
     // 1440x900: the frame derive.swift crops the menu-bar band from.
     static let screenAspect: CGFloat = 1440.0 / 900.0
     static let barFraction: CGFloat = 34.0 / 900.0
+    // The mock bar's clock: one formatter for every redraw.
+    private static let clockFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
 
     // Overlays, toggled from the toolbar (step 3); on by default so the
     // preview opens as the desktop looks.
@@ -10020,11 +10151,9 @@ final class PreviewPaneView: NSView {
         }
 
         // right cluster, laid out from the right edge inwards
-        let clock = DateFormatter()
-        clock.dateFormat = "HH:mm"
         let right: [(glyph: String, label: String, color: NSColor)] = [
             ("\u{F035B}", "", r.accent),                // activity
-            ("", clock.string(from: Date()), r.label),  // clock
+            ("", Self.clockFormatter.string(from: Date()), r.label),  // clock
             ("\u{F0079}", "84%", r.label),              // battery
             ("\u{F05A9}", "", r.label),                 // wifi
         ]
@@ -11978,6 +12107,10 @@ final class ThemeEditor {
             }
             return ("Couldn't save the theme. Try again.", nil)
         }
+        // A current engine returns the saved record in the save payload, so
+        // the editor does not need a second process. An older engine (or a
+        // hand-down binary) falls back to `theme show`.
+        if let fresh = obj["record"] as? [String: Any] { return (nil, fresh) }
         let (sc, so) = shell("\(themecoreBin()) theme show \(shellQuote(id)) --json 2>/dev/null")
         if sc == 0, let fresh = (try? JSONSerialization.jsonObject(with: Data(so.utf8))) as? [String: Any] {
             return (nil, fresh)
@@ -12473,38 +12606,22 @@ final class ThemeEditor {
                         return
                     }
                 }
-                // Fallback: a fresh extraction; the two calls run in parallel.
-                let lock = NSLock()
+                // Fallback: one extraction returns both the roles and the
+                // 16 colours. It used to be two full six-pass scans in
+                // parallel, which doubled the work for the same answer.
+                let (c, o) = shell("\(themecoreBin()) palette magic \(q) --roles --json 2>/dev/null")
                 var colors: [String] = []
-                var roles: [String: Any] = [:]
-                let group = DispatchGroup()
-                group.enter()
-                DispatchQueue.global().async {
-                    let (c, o) = shell("\(themecoreBin()) palette magic \(q) --json 2>/dev/null")
-                    if c == 0, let d = o.data(using: .utf8),
-                       let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
-                        lock.lock(); colors = obj["colors"] as? [String] ?? []; lock.unlock()
-                    }
-                    group.leave()
+                var accent: String?
+                var resolved = "dark"
+                if c == 0, let d = o.data(using: .utf8),
+                   let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
+                    colors = obj["colors"] as? [String] ?? []
+                    accent = obj["accent"] as? String
+                    resolved = (obj["ladder"] as? String) == "light" ? "light" : "dark"
                 }
-                group.enter()
-                DispatchQueue.global().async {
-                    let (c, o) = shell("\(themecoreBin()) palette magic \(q) --roles --json 2>/dev/null")
-                    if c == 0, let d = o.data(using: .utf8),
-                       let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
-                        lock.lock(); roles = obj; lock.unlock()
-                    }
-                    group.leave()
-                }
-                group.wait()
-                lock.lock()
-                let finalColors = colors
-                let accent = roles["accent"] as? String
-                let resolved = (roles["ladder"] as? String) == "light" ? "light" : "dark"
-                lock.unlock()
                 DispatchQueue.main.async {
-                    guard finalColors.count == 16 else { return }
-                    self.model.seedDraft(image: wallpaper, colors: finalColors,
+                    guard colors.count == 16 else { return }
+                    self.model.seedDraft(image: wallpaper, colors: colors,
                                          accent: accent, resolved: resolved)
                 }
             }
@@ -12610,7 +12727,7 @@ final class StorageTabView: NSView {
         chooseButton.toolTip = "Change the Wallpaper Folder"
         chooseButton.onClick = { [weak self] in self?.chooseDirectory() }
         cacheButton.title = "Clear Cache"
-        cacheButton.toolTip = "Delete the cached thumbnails; they rebuild as you browse"
+        cacheButton.toolTip = "Delete the cached thumbnails and colour strips; they rebuild as you browse"
         cacheButton.onClick = { [weak self] in self?.clearCache() }
         cacheOpenButton.title = "\u{f07b}"
         cacheOpenButton.centeredByBounds = true
@@ -12698,12 +12815,13 @@ final class StorageTabView: NSView {
         }
     }
 
-    // Both thumbnail shelves live under ~/.local/state/omacosy: the wallhaven
-    // browse cache and the dashboard's decoded previews. Flushing clears the
-    // pictures only; the wallpapers and bookmarks stay, and the thumbnails
-    // rebuild as the tabs are opened again.
+    // Both cache shelves live under ~/.local/state/omacosy: the wallhaven
+    // browse cache, the dashboard's decoded previews and its colour strips.
+    // Flushing clears the derived files only; the wallpapers, themes and
+    // bookmarks stay, and the caches rebuild as the tabs are opened again.
     private static func cacheDirs() -> [String] {
-        [whThumbsDir(), HOME + "/.local/state/omacosy/dashboard/thumbs"]
+        [whThumbsDir(), HOME + "/.local/state/omacosy/dashboard/thumbs",
+         HOME + "/.local/state/omacosy/dashboard/palettes"]
     }
 
     private static func computeCacheSummary() -> String {
@@ -12741,7 +12859,7 @@ final class StorageTabView: NSView {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.cacheButton.busy = false
-                self.status = count == 0 ? "Cache already empty" : "Cleared \(count) cached thumbnails"
+                self.status = count == 0 ? "Cache already empty" : "Cleared \(count) cached files"
                 self.cacheSummaryText = text
                 self.needsDisplay = true
             }
@@ -14081,6 +14199,13 @@ final class WHGridView: NSView {
     private let bottomPad: CGFloat = 16
     private let icon: CGFloat = 24
     private let iconPad: CGFloat = 8
+    // The hover scrim is the same gradient every time; building one per
+    // hovered card per draw was pure allocation.
+    private lazy var scrimGradient: NSGradient? = NSGradient(colorsAndLocations:
+        (NSColor.black.withAlphaComponent(0.42), 0.0),
+        (NSColor.black.withAlphaComponent(0.0), 0.34),
+        (NSColor.black.withAlphaComponent(0.0), 0.48),
+        (NSColor.black.withAlphaComponent(0.72), 1.0))
 
     private func minColWidth() -> CGFloat {
         switch cardSize {
@@ -14165,13 +14290,7 @@ final class WHGridView: NSView {
         if showOverlays {
             NSGraphicsContext.current?.saveGraphicsState()
             thumb.setClip()
-            if let grad = NSGradient(colorsAndLocations:
-                (NSColor.black.withAlphaComponent(0.42), 0.0),
-                (NSColor.black.withAlphaComponent(0.0), 0.34),
-                (NSColor.black.withAlphaComponent(0.0), 0.48),
-                (NSColor.black.withAlphaComponent(0.72), 1.0)) {
-                grad.draw(in: t, angle: 270)
-            }
+            scrimGradient?.draw(in: t, angle: 270)
             NSGraphicsContext.current?.restoreGraphicsState()
         }
 
@@ -14249,15 +14368,25 @@ final class WHGridView: NSView {
         hoverTracking = t
     }
 
+    private func invalidate(_ i: Int) {
+        if let f = cellFrames[i] { setNeedsDisplay(f) }
+    }
+
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         var hit: Int?
         for (i, f) in cellFrames where f.contains(p) { hit = i; break }
-        if hit != hovered { hovered = hit; needsDisplay = true }
+        guard hit != hovered else { return }
+        let old = hovered
+        hovered = hit
+        if let old { invalidate(old) }
+        if let hit { invalidate(hit) }
     }
 
     override func mouseExited(with event: NSEvent) {
-        if hovered != nil { hovered = nil; needsDisplay = true }
+        guard let old = hovered else { return }
+        hovered = nil
+        invalidate(old)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -14280,12 +14409,20 @@ final class WHGridView: NSView {
             guard i < cards.count else { continue }
             let w = cards[i]
             if thumbs[w.id] != nil || pending.contains(w.id) { continue }
-            if let img = whCachedThumb(w.thumbURL) { thumbs[w.id] = img; needsDisplay = true; continue }
+            if let img = whCachedThumb(w.thumbURL) {
+                thumbs[w.id] = img
+                invalidate(i)
+                continue
+            }
             pending.insert(w.id)
             whFetchThumb(w.thumbURL) { [weak self] img in
                 guard let self else { return }
                 self.pending.remove(w.id)
-                if let img { self.thumbs[w.id] = img; self.needsDisplay = true }
+                if let img {
+                    self.thumbs[w.id] = img
+                    guard i < self.cards.count, self.cards[i].id == w.id else { return }
+                    self.invalidate(i)
+                }
             }
         }
     }
@@ -15199,6 +15336,17 @@ struct LogoCell {
     let row: Int
     let coverage: CGFloat
     let color: NSColor
+    // The same colour with the coverage baked in. The intro draws this for
+    // most cells, so it is built once with the grid instead of once per frame.
+    let fill: NSColor
+
+    init(col: Int, row: Int, coverage: CGFloat, color: NSColor) {
+        self.col = col
+        self.row = row
+        self.coverage = coverage
+        self.color = color
+        self.fill = color.withAlphaComponent(coverage)
+    }
 }
 
 struct LogoGrid {
@@ -15307,6 +15455,12 @@ enum LogoIntroKind: String, CaseIterable {
 }
 
 final class LogoIntroEffect {
+    // One tuning knob for the whole rotation. The per-kind targets below were
+    // written to read well at 1.0; 0.75 turns the longest 1.55 s run into
+    // ~1.16 s and the average into ~0.8 s, without changing any effect's
+    // shape. Raise it toward 1.0 for the older, slower pace.
+    static let pace: TimeInterval = 0.75
+
     let kind: LogoIntroKind
     let cells: [LogoCell]
     let order: [Int]     // the reveal order, indices into cells
@@ -15321,8 +15475,8 @@ final class LogoIntroEffect {
     init(grid: LogoGrid, kind: LogoIntroKind, seed: UInt64) {
         self.kind = kind
         cells = grid.cells
-        self.lead = kind.lead
-        self.settle = kind.settle
+        self.lead = kind.lead * LogoIntroEffect.pace
+        self.settle = kind.settle * LogoIntroEffect.pace
         var rng = SplitMix64(seed: seed)
         let list = grid.cells
         let count = list.count
@@ -15398,8 +15552,28 @@ final class LogoIntroEffect {
         for (p, ci) in order.enumerated() { at[ci] = p }
         self.orderAt = at
         // about the target duration whatever the logo, within sane bounds
-        self.step = min(0.0045, max(0.0002, kind.target / Double(max(1, count))))
+        self.step = min(0.0045, max(0.0002,
+            kind.target * LogoIntroEffect.pace / Double(max(1, count))))
     }
+}
+
+// The intro's colours are sRGB by construction. `mixColor` resolves both
+// operands through ColorSync on every call, which showed up as the largest
+// cost in a 1 ms sample of the animation. Component math is the same blend
+// without the conversion, and `logoAlpha` avoids the same round trip when a
+// cell's coverage is applied.
+@inline(__always)
+func logoMix(_ a: NSColor, _ b: NSColor, _ t: CGFloat) -> NSColor {
+    NSColor(srgbRed: a.redComponent + (b.redComponent - a.redComponent) * t,
+            green: a.greenComponent + (b.greenComponent - a.greenComponent) * t,
+            blue: a.blueComponent + (b.blueComponent - a.blueComponent) * t,
+            alpha: 1)
+}
+
+@inline(__always)
+func logoAlpha(_ c: NSColor, _ a: CGFloat) -> NSColor {
+    NSColor(srgbRed: c.redComponent, green: c.greenComponent,
+            blue: c.blueComponent, alpha: a)
 }
 
 final class LogoIntroView: NSView {
@@ -15407,6 +15581,8 @@ final class LogoIntroView: NSView {
         var x, y, vx, vy, life, maxLife: Double
         let color: NSColor
     }
+    private let logoWhite = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+    private let logoBlack = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
     private var grid: LogoGrid?
     private var effect: LogoIntroEffect?
     private var tickCount: UInt64 = 0
@@ -15416,6 +15592,15 @@ final class LogoIntroView: NSView {
     private var lastTick: TimeInterval = 0
     private var lastRevealed = 0
     private var finished = true
+    private var cellRects: [NSRect] = []
+    private var cellRectsSize = NSSize.zero
+    // OMACOSY_LOGO_TRACE=1 prints one summary line per run to stderr: timer
+    // ticks, real draw calls and their average cost. Useful when judging a
+    // pacing or renderer change without guessing from a screen recording.
+    private let tracing = ProcessInfo.processInfo.environment["OMACOSY_LOGO_TRACE"] != nil
+    private var traceTicks = 0
+    private var traceDraws = 0
+    private var traceDrawTime = 0.0
     var onFinished: (() -> Void)?
 
     // the wordmark is not a control: clicks fall through to the card below
@@ -15426,20 +15611,40 @@ final class LogoIntroView: NSView {
         layer?.removeAllAnimations()
         self.grid = grid
         effect = LogoIntroEffect(grid: grid, kind: kind, seed: UInt64.random(in: .min ... .max))
+        buildCellRects()
         sparks.removeAll()
         lastRevealed = 0
         tickCount = 0
+        traceTicks = 0
+        traceDraws = 0
+        traceDrawTime = 0
         finished = false
         isHidden = false
         alphaValue = 1
         // a short lead-in so the first frames are not lost while the window
         // settles on screen
-        start = ProcessInfo.processInfo.systemUptime + 0.05
+        start = ProcessInfo.processInfo.systemUptime + 0.03
         lastTick = start
         let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
         needsDisplay = true
+    }
+
+    // The geometry is fixed for the run: build it once instead of rebuilding
+    // a rect and two divisions for every cell, every frame.
+    private func buildCellRects() {
+        guard let grid, grid.cols > 0, grid.rows > 0 else {
+            cellRects.removeAll(); cellRectsSize = .zero; return
+        }
+        let cellW = bounds.width / CGFloat(grid.cols)
+        let cellH = bounds.height / CGFloat(grid.rows)
+        cellRects = grid.cells.map { cell in
+            NSRect(x: bounds.minX + CGFloat(cell.col) * cellW,
+                   y: bounds.minY + CGFloat(cell.row) * cellH,
+                   width: cellW, height: cellH)
+        }
+        cellRectsSize = bounds.size
     }
 
     func cancel() {
@@ -15452,6 +15657,8 @@ final class LogoIntroView: NSView {
         alphaValue = 1
         effect = nil
         grid = nil
+        cellRects.removeAll()
+        cellRectsSize = .zero
         sparks.removeAll()
     }
 
@@ -15465,6 +15672,7 @@ final class LogoIntroView: NSView {
         let now = ProcessInfo.processInfo.systemUptime
         let elapsed = now - start
         tickCount &+= 1
+        if tracing { traceTicks += 1 }
         let revealed = min(effect.cells.count, Int(max(0, elapsed) / effect.step))
         if effect.kind == .laseretch, revealed > lastRevealed {
             for k in lastRevealed..<revealed { emitSparks(effect.order[k]) }
@@ -15475,6 +15683,14 @@ final class LogoIntroView: NSView {
         if elapsed >= effect.duration {
             stopTimer()
             finished = true
+            if tracing {
+                let avg = traceDraws > 0 ? traceDrawTime / Double(traceDraws) * 1000 : 0
+                let line = "logo trace \(effect.kind.rawValue): ticks=\(traceTicks) "
+                    + "draws=\(traceDraws) avgDraw="
+                    + String(format: "%.2f", avg) + "ms duration="
+                    + String(format: "%.2f", effect.duration) + "s\n"
+                FileHandle.standardError.write(Data(line.utf8))
+            }
             onFinished?()
         }
         needsDisplay = true
@@ -15518,18 +15734,26 @@ final class LogoIntroView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let grid, let effect, !isHidden else { return }
+        let traceStart = tracing ? ProcessInfo.processInfo.systemUptime : 0
+        defer {
+            if tracing {
+                traceDraws += 1
+                traceDrawTime += ProcessInfo.processInfo.systemUptime - traceStart
+            }
+        }
+        if cellRects.count != grid.cells.count || cellRectsSize != bounds.size {
+            buildCellRects()
+        }
+        guard cellRects.count == grid.cells.count else { return }
         NSGraphicsContext.current?.cgContext.clip(to: bounds)
         let elapsed = finished ? effect.duration : ProcessInfo.processInfo.systemUptime - start
         let cellW = bounds.width / CGFloat(grid.cols)
         let cellH = bounds.height / CGFloat(grid.rows)
-        func cellRect(_ cell: LogoCell) -> NSRect {
-            NSRect(x: bounds.minX + CGFloat(cell.col) * cellW,
-                   y: bounds.minY + CGFloat(cell.row) * cellH,
-                   width: cellW, height: cellH)
-        }
-        let hot = mixColor(palette.accent, .white, 0.85)
+        let hot = logoMix(palette.accent, logoWhite, 0.85)
+        let waveEdge = logoMix(palette.accent, logoWhite, 0.95)
         let revealed = min(effect.cells.count, Int(max(0, elapsed) / effect.step))
         for (ci, cell) in grid.cells.enumerated() {
+            let box = cellRects[ci]
             let rt = effect.revealTime(effect.orderAt[ci])
             if elapsed < rt {
                 if effect.kind == .decrypt || elapsed >= rt - effect.lead {
@@ -15539,8 +15763,8 @@ final class LogoIntroView: NSView {
                         let p = min(1, max(0, (elapsed - (rt - effect.lead)) / effect.lead))
                         let drop = Double(5 + (cell.col * 7 + cell.row * 13) % 4)
                         let lift = CGFloat(drop * (1 - p) * (1 - p)) * cellH
-                        cell.color.withAlphaComponent(cell.coverage).setFill()
-                        cellRect(cell).offsetBy(dx: 0, dy: lift).fill()
+                        cell.fill.setFill()
+                        box.offsetBy(dx: 0, dy: lift).fill()
                     case .crumble:
                         // debris converges from a random direction and fades
                         // into solid as it lands
@@ -15549,19 +15773,19 @@ final class LogoIntroView: NSView {
                         let dist = Double(4 + n % 7)
                         let angle = Double((n >> 8) % 628) / 100
                         let rem = CGFloat(dist * (1 - p) * (1 - p))
-                        cell.color.withAlphaComponent(cell.coverage * CGFloat(0.35 + 0.65 * p)).setFill()
-                        cellRect(cell).offsetBy(dx: rem * CGFloat(cos(angle)) * cellW,
-                                                dy: rem * CGFloat(sin(angle)) * cellH).fill()
+                        logoAlpha(cell.color, cell.coverage * CGFloat(0.35 + 0.65 * p)).setFill()
+                        box.offsetBy(dx: rem * CGFloat(cos(angle)) * cellW,
+                                     dy: rem * CGFloat(sin(angle)) * cellH).fill()
                     case .expand:
                         // the wordmark blossoms out of its centre
                         let p = min(1, max(0, (elapsed - (rt - effect.lead)) / effect.lead))
                         let ease = 1 - (1 - p) * (1 - p)
                         let cx = bounds.minX + bounds.width / 2
                         let cy = bounds.minY + bounds.height / 2
-                        let r = cellRect(cell)
+                        let r = box
                         let dx = (cx - r.midX) * CGFloat(1 - ease)
                         let dy = (cy - r.midY) * CGFloat(1 - ease)
-                        cell.color.withAlphaComponent(cell.coverage * CGFloat(0.3 + 0.7 * ease)).setFill()
+                        logoAlpha(cell.color, cell.coverage * CGFloat(0.3 + 0.7 * ease)).setFill()
                         r.offsetBy(dx: dx, dy: dy).fill()
                     case .middleout:
                         // phase one: every cell leaves the centre point and
@@ -15569,7 +15793,7 @@ final class LogoIntroView: NSView {
                         // phase two: the line splits open vertically into the
                         // wordmark while the colours settle
                         let local = min(1, max(0, (elapsed - (rt - effect.lead)) / effect.lead))
-                        let r = cellRect(cell)
+                        let r = box
                         let centre = NSPoint(x: bounds.midX, y: bounds.midY)
                         let midRow = NSPoint(x: r.midX, y: bounds.midY)
                         let split = CGFloat(0.42)   // share of the lead spent forming the line
@@ -15585,8 +15809,7 @@ final class LogoIntroView: NSView {
                             let ease = 0.5 - 0.5 * cos(q * .pi)
                             at = NSPoint(x: centre.x + (midRow.x - centre.x) * ease, y: centre.y)
                         }
-                        mixColor(cell.color, .white, white)
-                            .withAlphaComponent(cell.coverage).setFill()
+                        logoAlpha(logoMix(cell.color, logoWhite, white), cell.coverage).setFill()
                         NSRect(x: at.x - r.width / 2, y: at.y - r.height / 2,
                                width: r.width, height: r.height).fill()
                     case .waves:
@@ -15596,33 +15819,32 @@ final class LogoIntroView: NSView {
                         // a white-hot cutting edge, and a soft glow.
                         let local = min(1, max(0, (elapsed - (rt - effect.lead)) / effect.lead))
                         let rise = min(Int(local * 105) % 15, 14 - Int(local * 105) % 15)
-                        let r = cellRect(cell)
+                        let r = box
                         let h = CGFloat(rise + 1) / 8 * cellH
-                        let beam = mixColor(cell.color, .white, 0.85)
-                        let edge = mixColor(palette.accent, .white, 0.95)
-                        beam.withAlphaComponent(0.20 * cell.coverage).setFill()
+                        let beam = logoMix(cell.color, logoWhite, 0.85)
+                        let edge = waveEdge
+                        logoAlpha(beam, 0.20 * cell.coverage).setFill()
                         NSRect(x: r.minX - 0.5, y: r.minY - 0.5,
                                width: r.width + 1.0, height: h + 1.0).fill()
-                        mixColor(beam, .white, CGFloat(rise) / 7 * 0.35)
-                            .withAlphaComponent(cell.coverage).setFill()
+                        logoAlpha(logoMix(beam, logoWhite, CGFloat(rise) / 7 * 0.35), cell.coverage).setFill()
                         NSRect(x: r.minX, y: r.minY, width: r.width, height: h).fill()
-                        edge.withAlphaComponent(cell.coverage).setFill()
+                        logoAlpha(edge, cell.coverage).setFill()
                         NSRect(x: r.minX, y: r.minY + h - 0.7, width: r.width, height: 0.8).fill()
                     case .slice:
                         // the two halves slide in from opposite sides
                         let p = min(1, max(0, (elapsed - (rt - effect.lead)) / effect.lead))
                         let left = Double(cell.col) < Double(grid.cols - 1) / 2
                         let rem = CGFloat(bounds.width / 2) * (1 - p) * (1 - p)
-                        cell.color.withAlphaComponent(cell.coverage).setFill()
-                        cellRect(cell).offsetBy(dx: left ? -rem : rem, dy: 0).fill()
+                        cell.fill.setFill()
+                        box.offsetBy(dx: left ? -rem : rem, dy: 0).fill()
                     case .spray:
                         // cells fly out of a single nozzle at varying rates
                         let p = min(1, max(0, (elapsed - (rt - effect.lead)) / effect.lead))
                         let ease = CGFloat(1 - (1 - p) * (1 - p))
-                        let r = cellRect(cell)
+                        let r = box
                         let nx = bounds.minX + bounds.width / 2
                         let ny = bounds.minY
-                        cell.color.withAlphaComponent(cell.coverage * CGFloat(0.25 + 0.75 * ease)).setFill()
+                        logoAlpha(cell.color, cell.coverage * CGFloat(0.25 + 0.75 * ease)).setFill()
                         r.offsetBy(dx: (nx - r.midX) * (1 - ease),
                                    dy: (ny - r.midY) * (1 - ease)).fill()
                     case .decrypt:
@@ -15632,9 +15854,8 @@ final class LogoIntroView: NSView {
                         let filled = Int(n % 5)              // 0...4 quadrants lit
                         if filled > 0 {
                             let level = CGFloat((n >> 12) % 1000) / 1000
-                            mixColor(cell.color, .white, 0.35 + 0.3 * level)
-                                .withAlphaComponent(cell.coverage).setFill()
-                            let r = cellRect(cell)
+                            logoAlpha(logoMix(cell.color, logoWhite, 0.35 + 0.3 * level), cell.coverage).setFill()
+                            let r = box
                             let w = r.width / 2, h = r.height / 2
                             let spin = Int((n >> 8) & 3)
                             for q in 0..<4 where (q + spin) % 4 < filled {
@@ -15656,29 +15877,32 @@ final class LogoIntroView: NSView {
                     let n = flickerNoise(cell, tickCount)
                     let wrong: NSColor
                     switch n % 3 {
-                    case 0: wrong = mixColor(cell.color, .white, 0.6)
-                    case 1: wrong = mixColor(cell.color, .black, 0.7)
+                    case 0: wrong = logoMix(cell.color, logoWhite, 0.6)
+                    case 1: wrong = logoMix(cell.color, logoBlack, 0.7)
                     default: wrong = cell.color
                     }
-                    wrong.withAlphaComponent(cell.coverage).setFill()
-                    cellRect(cell).fill()
+                    logoAlpha(wrong, cell.coverage).setFill()
+                    box.fill()
                     continue
                 }
                 let heat = CGFloat(max(0, 1 - (elapsed - wrongUntil) / 0.18))
-                var color = cell.color
-                if heat > 0.01 { color = mixColor(cell.color, .white, 0.6 * heat) }
-                color.withAlphaComponent(cell.coverage).setFill()
-                cellRect(cell).fill()
+                if heat > 0.01 {
+                    logoAlpha(logoMix(cell.color, logoWhite, 0.6 * heat), cell.coverage).setFill()
+                } else {
+                    cell.fill.setFill()
+                }
+                box.fill()
                 continue
             }
-            var color = cell.color
+            var fill = cell.fill
             if effect.kind == .colorshift {
                 // shades chase each other through the wordmark, settling
                 let f = CGFloat(min(1, max(0, (elapsed - rt) / 0.9)))
                 let phase = Double(flickerNoise(cell, 0) % 628) / 100
                 let level = CGFloat(sin(elapsed * 16 + phase)) * (1 - f)
-                color = level >= 0 ? mixColor(cell.color, .white, 0.55 * level)
-                                   : mixColor(cell.color, .black, 0.55 * -level)
+                let color = level >= 0 ? logoMix(cell.color, logoWhite, 0.55 * level)
+                                       : logoMix(cell.color, logoBlack, 0.55 * -level)
+                fill = logoAlpha(color, cell.coverage)
             }
             let heat = CGFloat(max(0, 1 - (elapsed - rt) / effect.settle))
             let flare: CGFloat
@@ -15686,25 +15910,27 @@ final class LogoIntroView: NSView {
             case .beams: flare = 0.9
             default: flare = 0.7
             }
-            if heat > 0.01 { color = mixColor(cell.color, .white, flare * heat) }
-            color.withAlphaComponent(cell.coverage).setFill()
-            cellRect(cell).fill()
+            if heat > 0.01 {
+                fill = logoAlpha(logoMix(cell.color, logoWhite, flare * heat), cell.coverage)
+            }
+            fill.setFill()
+            box.fill()
         }
         // the beam belongs to laseretch: the cell the laser is on and where
         // it just was
         if effect.kind == .laseretch, revealed > 0, revealed < effect.cells.count {
             hot.withAlphaComponent(0.16).setFill()
-            cellRect(grid.cells[effect.order[revealed - 1]]).insetBy(dx: -1.3, dy: -1.3).fill()
+            cellRects[effect.order[revealed - 1]].insetBy(dx: -1.3, dy: -1.3).fill()
             for k in 0..<4 {
                 let pos = revealed - 1 - k
                 guard pos >= 0 else { break }
                 hot.withAlphaComponent(0.95 - 0.2 * CGFloat(k)).setFill()
-                cellRect(grid.cells[effect.order[pos]]).fill()
+                cellRects[effect.order[pos]].fill()
             }
         }
         for s in sparks {
             let f = CGFloat(max(0, s.life / s.maxLife))
-            mixColor(hot, s.color, 1 - f).withAlphaComponent(f * 0.9).setFill()
+            logoAlpha(logoMix(hot, s.color, 1 - f), f * 0.9).setFill()
             NSRect(x: CGFloat(s.x) - 0.8, y: CGFloat(s.y) - 0.8, width: 1.6, height: 1.6).fill()
         }
     }
@@ -15837,7 +16063,7 @@ final class RootView: NSView {
         introRun &+= 1
         let run = introRun
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.15
+            ctx.duration = 0.12
             self.logoIntro.animator().alphaValue = 0
             self.logoView.animator().alphaValue = 1
         }, completionHandler: { [weak self] in
@@ -16502,6 +16728,32 @@ func themesScrollSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--themes-scroll-selftest") {
     exit(themesScrollSelfTest() == 0 ? 0 : 1)
+}
+
+// Prints the intro's real cell count and duration per effect, so a pacing
+// change can be judged without screen-recording the modal. The numbers are
+// the animation itself; add the 0.03 s lead-in and 0.12 s crossfade for the
+// time the logo area is not the crisp wordmark.
+func logoTimingReport() -> Int {
+    palette = loadPalette()
+    guard let logo = logoImage(),
+          let grid = LogoGrid.build(from: logo,
+                                    rows: max(1, Int((40.0 / 2.2).rounded()))) else {
+        print("no logo")
+        return 1
+    }
+    print("cells \(grid.cells.count)")
+    for kind in LogoIntroKind.allCases {
+        let effect = LogoIntroEffect(grid: grid, kind: kind, seed: 1)
+        let name = kind.rawValue.padding(toLength: 14, withPad: " ", startingAt: 0)
+        print(name + String(format: "%.2f s  (lead %.2f, settle %.2f)",
+                            effect.duration, effect.lead, effect.settle))
+    }
+    return 0
+}
+
+if CommandLine.arguments.contains("--logo-timing") {
+    exit(logoTimingReport() == 0 ? 0 : 1)
 }
 
 // A saved Window & UI Corners (or Borders) change moves the radius every

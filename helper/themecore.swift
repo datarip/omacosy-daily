@@ -2428,6 +2428,11 @@ func extractionModeExists(_ mode: String) -> Bool {
 // output changes meaningfully.
 enum ExtractCache {
     static let version = 1
+    // The Magic roles are one six-pass image analysis. `magicUntouched` asks
+    // for them on every new theme revision, so they get their own cache beside
+    // the palette. Version them separately: the palette's output is stable
+    // while the role contract can grow.
+    static let rolesVersion = 1
 
     static var dir: String { "\(Wallpapers.stateDir)/studio/palettes" }
 
@@ -2439,6 +2444,16 @@ enum ExtractCache {
         let digest = Insecure.MD5.hash(data: Data(seed.utf8))
             .map { String(format: "%02x", $0) }.joined()
         return "\(digest)_\(mode)_v\(version)"
+    }
+
+    static func rolesKey(path: String) -> String? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let mtime = attrs[.modificationDate] as? Date else { return nil }
+        let millis = Int64((mtime.timeIntervalSince1970 * 1000).rounded())
+        let seed = "\(path)-\(millis)-magic-roles"
+        let digest = Insecure.MD5.hash(data: Data(seed.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        return "\(digest)_magic-roles_v\(rolesVersion)"
     }
 
     static func load(_ key: String) -> [String]? {
@@ -2460,6 +2475,62 @@ enum ExtractCache {
         } catch {
             warn("could not write the palette cache: \(error.localizedDescription)")
         }
+    }
+
+    static func loadRoles(_ key: String) -> MagicRoles? {
+        guard let data = FileManager.default.contents(atPath: "\(dir)/\(key).json"),
+              let top = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              JSONField.int(top["version"]) == rolesVersion,
+              let bar = top["bar"] as? String, let pill = top["pill"] as? String,
+              let muted = top["muted"] as? String, let label = top["label"] as? String,
+              let accent = top["accent"] as? String, let ring = top["ring"] as? String,
+              let surface = top["surface"] as? String
+        else { return nil }
+        return MagicRoles(bar: DerivePort.RGB(hex: bar),
+                          pill: DerivePort.RGB(hex: pill),
+                          muted: DerivePort.RGB(hex: muted),
+                          label: DerivePort.RGB(hex: label),
+                          accent: DerivePort.RGB(hex: accent),
+                          ring: DerivePort.RGB(hex: ring),
+                          surface: DerivePort.RGB(hex: surface),
+                          isLight: top["isLight"] as? Bool ?? false,
+                          isLowChroma: top["isLowChroma"] as? Bool ?? false)
+    }
+
+    static func saveRoles(_ key: String, _ roles: MagicRoles) {
+        do {
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            let object: [String: Any] = [
+                "version": rolesVersion, "saved": isoNow(),
+                "bar": roles.bar.hex, "pill": roles.pill.hex, "muted": roles.muted.hex,
+                "label": roles.label.hex, "accent": roles.accent.hex,
+                "ring": roles.ring.hex, "surface": roles.surface.hex,
+                "isLight": roles.isLight, "isLowChroma": roles.isLowChroma,
+            ]
+            let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            try data.write(to: URL(fileURLWithPath: "\(dir)/\(key).json"), options: .atomic)
+        } catch {
+            warn("could not write the magic-roles cache: \(error.localizedDescription)")
+        }
+    }
+
+    // The edition's own media is a byte-for-byte copy of the source, so the
+    // analysis is identical. Copying its two cache entries means a freshly
+    // saved theme applies without re-reading the picture.
+    static func copyCaches(fromPath source: String, toPath dest: String) {
+        guard source != dest else { return }
+        let fm = FileManager.default
+        func copy(_ sourceKey: String?, _ destKey: String?) {
+            guard let sourceKey, let destKey,
+                  sourceKey != destKey else { return }
+            let from = "\(dir)/\(sourceKey).json", to = "\(dir)/\(destKey).json"
+            guard fm.fileExists(atPath: from), !fm.fileExists(atPath: to) else { return }
+            try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try? fm.copyItem(atPath: from, toPath: to)
+        }
+        copy(key(path: source, light: false, mode: "magic"),
+             key(path: dest, light: false, mode: "magic"))
+        copy(rolesKey(path: source), rolesKey(path: dest))
     }
 }
 
@@ -3211,7 +3282,10 @@ struct MagicRoles {
     var ladder: String { isLight ? "light" : "dark" }
 }
 
-func magicRoles(url: URL) throws -> MagicRoles {
+func magicRoles(url: URL, useCache: Bool = true) throws -> MagicRoles {
+    let cacheKey = useCache ? ExtractCache.rolesKey(path: url.path) : nil
+    if let cacheKey, let cached = ExtractCache.loadRoles(cacheKey) { return cached }
+
     guard let base = DerivePort.baseColour(of: url) else {
         throw ThemeError(message: "cannot decode image: \(url.path)")
     }
@@ -3222,16 +3296,18 @@ func magicRoles(url: URL) throws -> MagicRoles {
         strip: DerivePort.stripSlices(of: url),
         chroma: DerivePort.pictureChroma(of: url),
         warm: DerivePort.warmToneColour(of: url))
-    return MagicRoles(bar: p.bar, pill: p.pill, muted: p.muted, label: p.label,
-                      accent: p.accent, ring: p.ring, surface: p.surface,
-                      isLight: p.isLight, isLowChroma: p.isLowChroma)
+    let roles = MagicRoles(bar: p.bar, pill: p.pill, muted: p.muted, label: p.label,
+                           accent: p.accent, ring: p.ring, surface: p.surface,
+                           isLight: p.isLight, isLowChroma: p.isLowChroma)
+    if let cacheKey { ExtractCache.saveRoles(cacheKey, roles) }
+    return roles
 }
 
 func magicPalette(url: URL, useCache: Bool = true) throws -> [String] {
     let key = ExtractCache.key(path: url.path, light: false, mode: "magic")
     if useCache, let key, let cached = ExtractCache.load(key) { return cached }
 
-    let roles = try magicRoles(url: url)
+    let roles = try magicRoles(url: url, useCache: useCache)
     let palette = TermFormula.palette(accent: roles.accent.hex,
                                       surface: roles.surface.hex,
                                       label: roles.label.hex)
@@ -5888,7 +5964,10 @@ struct ThemeLibrary {
         if ext.isEmpty { ext = "img" }
         let name = String(digest.prefix(16)) + "." + ext
         let dest = mediaDir.appendingPathComponent(name)
-        if FileManager.default.fileExists(atPath: dest.path) { return name }
+        if FileManager.default.fileExists(atPath: dest.path) {
+            ExtractCache.copyCaches(fromPath: url.path, toPath: dest.path)
+            return name
+        }
         do { try FileManager.default.createDirectory(at: mediaDir, withIntermediateDirectories: true) }
         catch { throw ThemeError(message: "cannot create \(mediaDir.path): \(error.localizedDescription)") }
         let tmp = mediaDir.appendingPathComponent(".\(name).tmp-\(ProcessInfo.processInfo.processIdentifier)")
@@ -5903,6 +5982,7 @@ struct ThemeLibrary {
             try? FileManager.default.removeItem(at: tmp)
             throw ThemeError(message: "cannot capture \(url.path): \(error.localizedDescription)")
         }
+        ExtractCache.copyCaches(fromPath: url.path, toPath: dest.path)
         return name
     }
 
@@ -7607,8 +7687,9 @@ case "theme":
                                               "wallpaper": image.path,
                                               "source": theme.wallpaper.path ?? NSNull()]
                 printJSON(payload)
+            } else {
+                print(dirPath)
             }
-            print(dirPath)
             exit(0)
         } catch { themeError(error) }
 
@@ -7713,7 +7794,8 @@ case "theme":
                         let payload: [String: Any] = ["saved": true, "id": theme.id, "name": theme.name,
                                                       "primary": existing.primary,
                                                       "path": library.fileURL(id: theme.id).path,
-                                                      "unchanged": true]
+                                                      "unchanged": true,
+                                                      "record": existing.canonicalObject()]
                         printJSON(payload)
                     }
                     print("saved \(theme.id) (unchanged)")
@@ -7741,7 +7823,8 @@ case "theme":
             let saved = (try? library.load(id: theme.id)) ?? theme
             if jsonOut {
                 printJSON(["saved": true, "id": saved.id, "name": saved.name,
-                           "primary": saved.primary, "path": library.fileURL(id: saved.id).path])
+                           "primary": saved.primary, "path": library.fileURL(id: saved.id).path,
+                           "record": saved.canonicalObject()])
             }
             print("saved \(saved.id) (\(library.fileURL(id: saved.id).path))")
             exit(0)
@@ -8187,13 +8270,22 @@ case "palette":
             }
             let url = URL(fileURLWithPath: path)
             if rolesOnly {
-                let roles = try magicRoles(url: url)
+                let roles = try magicRoles(url: url, useCache: !noCache)
+                // The editor needs the 16-colour seed as well as the roles.
+                // Returning both here saves a second six-pass extraction: the
+                // palette hangs off the roles we just read/computed.
+                let colors = noCache
+                    ? TermFormula.palette(accent: roles.accent.hex,
+                                          surface: roles.surface.hex,
+                                          label: roles.label.hex)
+                    : try magicPalette(url: url, useCache: true)
                 let low = roles.isLowChroma ? "+lowchroma" : ""
                 if jsonOut {
                     printJSON([
                         "bar": roles.bar.hex, "pill": roles.pill.hex, "muted": roles.muted.hex,
                         "label": roles.label.hex, "accent": roles.accent.hex, "ring": roles.ring.hex,
-                        "surface": roles.surface.hex, "ladder": roles.ladder, "lowChroma": roles.isLowChroma,
+                        "surface": roles.surface.hex, "ladder": roles.ladder,
+                        "lowChroma": roles.isLowChroma, "colors": colors,
                     ])
                 }
                 print("\(roles.bar.hex) \(roles.pill.hex) \(roles.muted.hex) \(roles.label.hex) "

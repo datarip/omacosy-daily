@@ -240,8 +240,9 @@ plays over its wordmark when it opens: `laseretch`, `sweep`, `waves`,
 `spray`. Empty or `random` picks a
 different one each open, never repeating the last — the same rotation idea
 as omarchy.us, whose effect engine, ttfx (MIT), the vocabulary is a native
-take on. Reduce Motion (System Settings → Accessibility → Display) skips
-the intro and shows the wordmark at rest.
+take on. Each run lasts about half a second to just over a second before it
+lands on the crisp wordmark. Reduce Motion (System Settings → Accessibility →
+Display) skips the intro and shows the wordmark at rest.
 
 ## 5. Keep your shell config
 

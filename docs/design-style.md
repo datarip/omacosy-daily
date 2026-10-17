@@ -129,7 +129,7 @@ Motion is rare, short, and always says that something arrived.
   slice's two halves, spray's nozzle, wipe's clean front, highlight's flash
   and colorshift's shimmer — a different one at random each open, never
   repeating the last. Each cell flares hot on arrival and cools to its accent
-  shade, and every run ends by crossfading 0.15 s onto the crisp wordmark.
+  shade, and every run ends by crossfading 0.12 s onto the crisp wordmark.
   `LOGO_INTRO` in `settings.conf` pins one effect. `LogoIntroView` samples
   the grid from the tinted wordmark at open time (about 18 rows, ~2.2 pt
   cells, colour from the same shade ladder as the header), so a new logo
@@ -141,6 +141,13 @@ Motion is rare, short, and always says that something arrived.
   ideas). Nothing from omarchy.us itself is used: the site's wrapper code and
   its wordmark bitmap are unlicensed. The attribution line sits at the top of
   the logo intro block in `helper/dashboard.swift`.
+- **The rotation is paced down as a set.** `LogoIntroEffect.pace` is the one
+  tuning knob (0.75 today): a run lasts about 0.6–1.2 s, the longest being
+  crumble at 1.16 s, the average about 0.85 s. Add the 0.03 s lead-in and the
+  0.12 s crossfade for the time before the crisp wordmark returns.
+  `omacosy-dashboard-bin --logo-timing` prints the real cell count and every
+  effect's numbers; `OMACOSY_LOGO_TRACE=1` prints one tick/draw summary per
+  run. Raise the pace toward 1.0 for the older, slower reading.
 - **Reduce Motion turns it off.** `playLogoIntro` checks
   `NSWorkspace.accessibilityDisplayShouldReduceMotion` and shows the logo at
   rest instead.
