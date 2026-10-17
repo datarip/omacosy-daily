@@ -55,7 +55,7 @@ and each one waits for its first run on a notched MacBook:
    start just below the bar and not one notch lower.
 3. The media pill sits at the left edge, because the camera takes the
    centre of the strip.
-4. The media title is cut at 20 characters, not 28.
+4. The media title scrolls on hover inside a 20-character window, not a 28-character one.
 5. At the top edge, the native menu bar comes down over the bar, so its
    menus and status icons are reachable. The bar rests below the native
    menu bar and above other apps' windows.
@@ -494,7 +494,9 @@ Why so much of it is self-built:
   for connects, SCDynamicStore for the network, IOPS for battery,
   CoreAudio for volume, DisplayServices for brightness, Spotify's own
   broadcast for the track. It polls for nothing macOS announces; its
-  only timers are the weather fetch and the clock. A workspace switch
+  only timers are the weather fetch, the clock and the 30 fps title
+  scroll, the last only while a track line is too wide for its pill and
+  the pointer is over it. A workspace switch
   repaints in 2.5 ms because it asks no one anything; the shell bar it
   replaced took 164 ms to answer the same event.
 
@@ -580,10 +582,12 @@ startup and does no config-file or image-file I/O while it draws.
   bar still owned, gone.
 - **Workspaces**: one segmented capsule per monitor showing only that
   monitor's workspaces; accent pill on the focused one; click to jump.
-- **Media**: prev / play-pause / next + track title (Spotify). Centered
-  on flat displays, left cluster on notched ones (per-display notch
-  detection via `NSScreen.safeAreaInsets`), hidden when Spotify isn't
-  running.
+- **Media**: prev / play-pause / next + track title (Spotify). A line
+  too wide for its pill shows an ellipsis at rest; hover the pill to
+  scroll the full line right to left. Centred in the room between the left and right
+  clusters on flat displays, left cluster on notched ones (per-display
+  notch detection via `NSScreen.safeAreaInsets`), hidden when Spotify
+  isn't running.
 - **Bluetooth**: device menu (click to connect/disconnect), power
   toggle.
 - **WiFi**: the pill is the icon alone; the popup names the network and

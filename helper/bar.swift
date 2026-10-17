@@ -1038,6 +1038,81 @@ func spotifyRunning() -> Bool {
     !NSRunningApplication.runningApplications(withBundleIdentifier: spotifyBundleID).isEmpty
 }
 
+// --- media marquee ---------------------------------------------------------
+// A long "artist — title" used to end in an ellipsis at 20 or 28
+// characters. While the pointer is over the media pill it now slides
+// right to left inside that same window, one copy following the last,
+// so the capsule keeps the width it always had and the whole line can
+// be read. At rest, and for a short line, it is the old static title
+// (with the ellipsis when there is more to see).
+//
+// The ticker exists only while the pointer is over a title that is too
+// wide for its window. It is a timer rather than a layer animation
+// because the title is part of the bar's one immediate-mode draw, and
+// stopping it on hover-out or a track change is one comparison.
+//
+// 40 pt a second is about five characters a second: fast enough not to
+// feel stuck, slow enough to read a long title as it passes.
+let mediaMarqueeSpeed: CGFloat = 40
+
+func mediaTitleLimit(_ notched: Bool) -> Int { notched ? 20 : 28 }
+
+var mediaMarqueePhase: CGFloat = 0
+var mediaMarqueeTimer: Timer?
+var mediaMarqueeLast: TimeInterval = 0
+
+func mediaTitleScrolls() -> Bool {
+    guard model.media.running, !model.media.title.isEmpty else { return false }
+    return surfaces.contains {
+        $0.view.mediaTitleHovered && model.media.title.count > mediaTitleLimit($0.notched)
+    }
+}
+
+// The pointer moves are already watched for the top-edge reveal; this
+// reuses them to decide whether a media pill is hovered. `screenPoint`
+// is in NSEvent.mouseLocation's coordinates (bottom-left of the main
+// display), and each bar converts it into its own view.
+func updateMediaHover() {
+    let point = NSEvent.mouseLocation
+    var changed = false
+    for surface in surfaces {
+        let over = surface.view.isOverMediaPill(point)
+        if over != surface.view.mediaTitleHovered {
+            surface.view.mediaTitleHovered = over
+            changed = true
+        }
+    }
+    guard changed else { return }
+    mediaMarqueePhase = 0
+    refreshMarquee()
+    repaint()
+}
+
+func refreshMarquee() {
+    guard mediaTitleScrolls() else {
+        mediaMarqueeTimer?.invalidate()
+        mediaMarqueeTimer = nil
+        mediaMarqueePhase = 0
+        return
+    }
+    guard mediaMarqueeTimer == nil else { return }
+    mediaMarqueeLast = ProcessInfo.processInfo.systemUptime
+    let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { _ in
+        guard mediaTitleScrolls() else {
+            mediaMarqueeTimer?.invalidate()
+            mediaMarqueeTimer = nil
+            mediaMarqueePhase = 0
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        mediaMarqueePhase += CGFloat(min(0.25, now - mediaMarqueeLast)) * mediaMarqueeSpeed
+        mediaMarqueeLast = now
+        repaintMedia()
+    }
+    mediaMarqueeTimer = timer
+    RunLoop.main.add(timer, forMode: .common)
+}
+
 func updateMedia(from info: [AnyHashable: Any]? = nil) {
     var next = Media()
     next.running = spotifyRunning()
@@ -1054,8 +1129,12 @@ func updateMedia(from info: [AnyHashable: Any]? = nil) {
     }
     guard next != model.media else { return }
     let t0 = DispatchTime.now().uptimeNanoseconds
+    if next.title != model.media.title { mediaMarqueePhase = 0 }
     model.media = next
+    refreshMarquee()
     repaint()
+    // the title window can move or change width under a still pointer
+    updateMediaHover()
     tlog(String(format: "media %@ %@ %.2f ms", next.playing ? "play" : "pause", next.title,
                 Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000))
 }
@@ -1076,7 +1155,10 @@ func primeMedia() {
         DispatchQueue.main.async {
             model.media = Media(running: true, playing: parts[0] == "playing",
                                 title: parts[1].isEmpty ? parts[2] : "\(parts[1]) — \(parts[2])")
+            mediaMarqueePhase = 0
+            refreshMarquee()
             repaint()
+            updateMediaHover()
         }
     }
 }
@@ -3145,22 +3227,59 @@ final class BarView: NSView {
 
     override var isFlipped: Bool { false }
 
-    // the media capsule: transport glyphs then the title, one pill. Its
-    // width is measured, not cached — sketchybar needs an md5-keyed width
-    // cache here only because it cannot measure text before laying out.
-    // The capsule was measured from a glyph string with spaces in it and
-    // then drawn glyph-by-glyph with different spacing, so the pill came
-    // out 7 px wider than its contents. One layout, used by both.
+    // the media capsule: transport glyphs then the title, one pill. The
+    // title is measured against the same 20/28 character window it has
+    // always been cut to, so a longer track scrolls inside that window
+    // instead of widening the pill.
     private func mediaGlyphs() -> [(String, String)] {
-        [("prev", "󰒮"), ("play", model.media.playing ? "󰏤" : "󰐊"), ("next", "󰒭")]
+        [("prev", "󰒮"), ("play", model.media.playing ? "󰏤" : "󰐊"),
+         ("next", "󰒭")]
+    }
+
+    private struct MediaMetrics {
+        var width: CGFloat = 0
+        var glyphs: [(String, String, CGFloat, CGFloat)] = []
+        var titleX: CGFloat = 0
+        var titleText = ""
+        var titleWidth: CGFloat = 0
+        var titleInk: CGFloat = 0
+        var titleScrolls = false
+    }
+
+    // The title window from the last full draw and everything a marquee
+    // tick needs to repaint just that window: the stored CTLine is what
+    // makes the 30 fps tick cheap — the text is laid out once, not again
+    // for every point it moves.
+    private var mediaTitleBox = NSRect.zero
+    private var mediaPillBox = NSRect.zero
+    var mediaTitleHovered = false
+    private var mediaTitleLine: CTLine?
+    private var mediaTitleCycle: CGFloat?
+    private var mediaTitleBaselineY: CGFloat = 0
+    private var marqueeRepaint = false
+
+    func repaintTitle() {
+        // A full redraw already owed will draw the current phase too; do
+        // not take that frame over with a title-only paint.
+        guard !mediaTitleBox.isEmpty, !needsDisplay, mediaTitleLine != nil else { return }
+        marqueeRepaint = true
+        setNeedsDisplay(mediaTitleBox)
+        displayIfNeeded()
+        marqueeRepaint = false
+    }
+
+    func isOverMediaPill(_ screenPoint: NSPoint) -> Bool {
+        guard !mediaPillBox.isEmpty, let window else { return false }
+        let p = convert(window.convertPoint(fromScreen: screenPoint), from: nil)
+        return mediaPillBox.contains(p)
     }
 
     // Positions first, size second: the pill is as wide as what it holds
     // plus equal padding, so the two can never disagree. Both ends measure
     // INK, so the trailing edge is not padded by a character's unused
     // advance the way the leading edge is not.
-    private func mediaLayout(_ titleFont: NSFont, _ iconFont: NSFont)
-        -> (width: CGFloat, glyphs: [(String, String, CGFloat, CGFloat)], titleX: CGFloat) {
+    private func mediaLayout(_ titleFont: NSFont, _ iconFont: NSFont) -> MediaMetrics {
+        guard model.media.running, !model.media.title.isEmpty else { return MediaMetrics() }
         var x: CGFloat = 10
         var placed: [(String, String, CGFloat, CGFloat)] = []
         for (name, glyph) in mediaGlyphs() {
@@ -3170,45 +3289,107 @@ final class BarView: NSView {
         }
         x += 6 // transport-to-title gap, on top of the 6 already added
         let titleX = x
-        let ink = inkBox(clippedTitle, titleFont)
-        return (titleX + ink.maxX + 10, placed, titleX)
-    }
-
-    private func mediaSize(_ titleFont: NSFont, _ iconFont: NSFont) -> CGFloat {
-        guard model.media.running, !model.media.title.isEmpty else { return 0 }
-        return mediaLayout(titleFont, iconFont).width
-    }
-
-    private var clippedTitle: String {
-        let limit = (surface?.notched ?? false) ? 20 : 28
         let title = model.media.title
-        return title.count <= limit ? title : String(title.prefix(limit - 1)) + "…"
+        let limit = mediaTitleLimit(surface?.notched ?? false)
+        let clipped = title.count <= limit ? title : String(title.prefix(limit - 1)) + "…"
+        let titleWidth = advance(clipped, titleFont)
+        let titleInk = advance(title, titleFont)
+        return MediaMetrics(width: titleX + titleWidth + 10, glyphs: placed,
+                            titleX: titleX, titleText: clipped, titleWidth: titleWidth,
+                            titleInk: titleInk, titleScrolls: titleInk > titleWidth + 0.5)
     }
 
-    private func drawMedia(at origin: CGFloat, _ titleFont: NSFont, _ iconFont: NSFont) {
-        guard model.media.running, !model.media.title.isEmpty else { return }
-        let width = mediaSize(titleFont, iconFont)
-        let pill = NSRect(x: origin, y: (barHeight - pillHeight) / 2, width: width, height: pillHeight)
+    private func drawMedia(_ layout: MediaMetrics, at origin: CGFloat,
+                           _ titleFont: NSFont, _ iconFont: NSFont) {
+        guard layout.width > 0 else { return }
+        let pill = NSRect(x: origin, y: (barHeight - pillHeight) / 2,
+                          width: layout.width, height: pillHeight)
         palette.itemBG.setFill()
         NSBezierPath(roundedRect: pill, xRadius: radius, yRadius: radius).fill()
 
-        let layout = mediaLayout(titleFont, iconFont)
         for (name, glyph, dx, w) in layout.glyphs {
             drawIcon(glyph, iconFont, palette.label,
                      centeredIn: NSRect(x: pill.minX + dx, y: pill.minY, width: w, height: pill.height))
             mediaRects.append((name, NSRect(x: pill.minX + dx - 4, y: 0, width: w + 8, height: barHeight)))
         }
-        drawText(clippedTitle, titleFont, palette.label,
-                 leftAt: pill.minX + layout.titleX, midY: pill.midY)
-        mediaRects.append(("title", NSRect(x: pill.minX + layout.titleX, y: 0,
-                                           width: advance(clippedTitle, titleFont), height: barHeight)))
+        // The title is clipped to its own window. At rest a too-long line
+        // is the old clipped text with its ellipsis; while hovered it is
+        // the full line sliding left, the next copy one cycle behind it,
+        // so the wrap has no seam. The CTLine is built here, once per full
+        // draw, and the marquee ticks reuse it.
+        let titleBox = NSRect(x: pill.minX + layout.titleX, y: pill.minY,
+                              width: layout.titleWidth, height: pill.height)
+        let scrolling = layout.titleScrolls && mediaTitleHovered
+        mediaTitleBox = titleBox
+        mediaPillBox = pill
+        mediaTitleLine = CTLineCreateWithAttributedString(NSAttributedString(
+            string: scrolling ? model.media.title : layout.titleText,
+            attributes: [.font: titleFont, .foregroundColor: palette.label]))
+        mediaTitleCycle = scrolling ? layout.titleInk + 40 : nil
+        mediaTitleBaselineY = pill.midY - titleFont.capHeight / 2
+        drawMediaTitle()
+        mediaRects.append(("title", NSRect(x: titleBox.minX, y: 0,
+                                           width: layout.titleWidth, height: barHeight)))
+    }
+
+    private func drawMediaTitle() {
+        guard let line = mediaTitleLine, let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let phase = mediaTitleCycle.map {
+            mediaMarqueePhase.truncatingRemainder(dividingBy: $0)
+        } ?? 0
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: mediaTitleBox).addClip()
+        ctx.textPosition = CGPoint(x: mediaTitleBox.minX - phase, y: mediaTitleBaselineY)
+        CTLineDraw(line, ctx)
+        if let cycle = mediaTitleCycle {
+            ctx.textPosition = CGPoint(x: mediaTitleBox.minX - phase + cycle,
+                                       y: mediaTitleBaselineY)
+            CTLineDraw(line, ctx)
+        }
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func draw(_ s: String, _ font: NSFont, _ color: NSColor, centeredIn box: NSRect) {
         drawText(s, font, color, centeredIn: box)
     }
 
+    private func rightItemWidth(_ item: BarItem, _ labelFont: NSFont, _ iconFont: NSFont) -> CGFloat {
+        let hasIcon = !item.icon.isEmpty
+        let hasLabel = !item.label.isEmpty
+        let iconInk = hasIcon ? inkBox(item.icon, iconFont).width : 0
+        let labelAdv = hasLabel ? advance(item.label, labelFont) : 0
+        let innerGap: CGFloat = hasIcon && hasLabel ? 7 : 0
+        return hasIcon && !hasLabel ? pillHeight : 10 + iconInk + innerGap + labelAdv + 10
+    }
+
+    // Where the right cluster's leftmost pill starts. The media capsule is
+    // centred in the room LEFT of it rather than in the whole bar: a long
+    // title window and the right cluster were both measured from their own
+    // edge, and on a 1440 pt display the two met in the middle.
+    private func rightClusterStart(_ labelFont: NSFont, _ iconFont: NSFont) -> CGFloat {
+        var width: CGFloat = 0
+        var count = 0
+        for name in rightOrder {
+            guard let item = rightItems[name], item.drawing,
+                  !(item.icon.isEmpty && item.label.isEmpty) else { continue }
+            width += rightItemWidth(item, labelFont, iconFont)
+            count += 1
+        }
+        guard count > 0 else { return bounds.maxX - padLeft }
+        return bounds.maxX - padLeft - width - CGFloat(count - 1) * gap
+    }
+
     override func draw(_ dirtyRect: NSRect) {
+        // A marquee tick is a title-only paint. The flag is raised by
+        // repaintTitle, which also refuses to run when a full redraw is
+        // already owed, so this cannot swallow another update. A full
+        // redraw (a track, theme or display change) takes the normal path.
+        if marqueeRepaint, mediaTitleLine != nil, palette.itemBG.alphaComponent >= 0.999 {
+            palette.itemBG.setFill()
+            mediaTitleBox.fill()
+            drawMediaTitle()
+            return
+        }
         chipRects.removeAll()
         itemRects.removeAll()
         mediaRects.removeAll()
@@ -3311,12 +3492,20 @@ final class BarView: NSView {
             leftEdge = pill.maxX
         }
 
-        // media: centred where there is room, in the left cluster where a
-        // notch owns the middle
-        let mediaW = mediaSize(chipFont, iconFont)
-        if mediaW > 0 {
-            drawMedia(at: surface.notched ? leftEdge + gap : (bounds.width - mediaW) / 2,
-                      chipFont, iconFont)
+        // media: centred in the room between the left cluster and the
+        // right cluster on a flat display; on a notched one it keeps its
+        // old place in the left cluster, because the camera owns the middle
+        let media = mediaLayout(chipFont, iconFont)
+        if media.width > 0 {
+            let roomFrom = leftEdge + gap
+            let roomTo = rightClusterStart(chipFont, iconFont) - gap
+            // Notched displays keep the old placement exactly: after the
+            // app pill, never the free-space centre. Only this flat branch
+            // is new; the 20-character window is unchanged.
+            let origin = surface.notched
+                ? roomFrom
+                : roomFrom + max(0, (roomTo - roomFrom - media.width) / 2)
+            drawMedia(media, at: origin, chipFont, iconFont)
         }
 
         // right cluster: laid out from the right edge inwards, so a pill
@@ -3336,10 +3525,9 @@ final class BarView: NSView {
             // lives in the label) and inherited the gap anyway, which is the
             // 7 px it sat right of centre by.
             let iconInk = hasIcon ? inkBox(item.icon, iconFont).width : 0
-            let labelAdv = hasLabel ? advance(item.label, labelFont) : 0
             let innerGap: CGFloat = hasIcon && hasLabel ? 7 : 0
             let square = hasIcon && !hasLabel
-            let width = square ? pillHeight : 10 + iconInk + innerGap + labelAdv + 10
+            let width = rightItemWidth(item, labelFont, iconFont)
             let pill = NSRect(x: cursor - width, y: (barHeight - pillHeight) / 2,
                               width: width, height: pillHeight)
             palette.itemBG.setFill()
@@ -3371,7 +3559,10 @@ final class BarView: NSView {
                                        owner: self))
     }
 
-    override func mouseExited(with event: NSEvent) { scheduleHullCheck() }
+    override func mouseExited(with event: NSEvent) {
+        scheduleHullCheck()
+        updateMediaHover()
+    }
 
     private func hit(_ event: NSEvent) -> String? {
         let p = convert(event.locationInWindow, from: nil)
@@ -3856,6 +4047,9 @@ func rebuildSurfaces(_ ids: [String: String]) {
         gone.window.orderOut(nil)
     }
     surfaces = kept
+    // a display that arrived or left changes which title window applies
+    refreshMarquee()
+    updateMediaHover()
     // A new surface orders itself front, which is the wrong resting state
     // for a display that auto-hides. Settle every surface here so startup
     // and a display change both land correctly instead of waiting for the
@@ -3934,6 +4128,21 @@ func repaint() {
             surface.view.needsDisplay = true
             surface.view.display()
         }
+    }
+}
+
+// A marquee tick: each bar repaints its title window only. `draw` sees a
+// dirty rect inside that window and takes its cheap path.
+func repaintMedia() {
+    MainActor.assumeIsolated {
+        // The cheap path paints the pill colour over the old text. With a
+        // translucent ITEM_BG that would composite it twice, so fall back
+        // to the whole bar for that palette.
+        if palette.itemBG.alphaComponent < 0.999 {
+            repaint()
+            return
+        }
+        for surface in surfaces { surface.view.repaintTitle() }
     }
 }
 
@@ -4926,10 +5135,14 @@ func pointerLeftTheHull() -> Bool {
 // it immediately, and the popup then never closes on its own
 var popupGuardToken: Any?
 var revealToken: Any?
-revealToken = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { _ in pointerAtScreenTop() }
+revealToken = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { _ in
+    pointerAtScreenTop()
+    updateMediaHover()
+}
 var revealLocalToken: Any?
 revealLocalToken = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { e in
     pointerAtScreenTop()
+    updateMediaHover()
     return e
 }
 
