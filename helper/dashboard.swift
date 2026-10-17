@@ -889,6 +889,46 @@ final class CustomScroller: NSView {
     }
 }
 
+// The floating arrow over the Themes gallery. It sits above the scroll view,
+// so it needs an opaque backdrop to stay legible over any thumbnail; the
+// arrow points the way the last scroll went and takes the user straight to
+// that end of the shelf.
+final class ScrollJumpButton: NSView {
+    // true draws the arrow up (jump to the top), false down (jump to the bottom)
+    var up = false { didSet { needsDisplay = true } }
+    var onClick: (() -> Void)?
+    // a wheel over the button belongs to the gallery behind it
+    var onScrollWheel: ((NSEvent) -> Void)?
+    private var pressed = false { didSet { needsDisplay = true } }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                               xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
+        palette.barBG.withAlphaComponent(0.92).setFill()
+        box.fill()
+        palette.muted.withAlphaComponent(0.5).setStroke()
+        box.lineWidth = 1
+        box.stroke()
+        whDrawGlyphCentered(up ? "\u{f062}" : "\u{f063}", in: bounds,
+                            color: palette.label, size: 13)
+        if pressed {
+            NSColor.black.withAlphaComponent(0.22).setFill()
+            box.fill()
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        pressed = true
+        onClick?()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            self?.pressed = false
+        }
+    }
+    override func scrollWheel(with event: NSEvent) { onScrollWheel?(event) }
+    override var acceptsFirstResponder: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 // --- arrow-key scrolling ---------------------------------------------------
 // A positive dy scrolls towards later content ("down"). Every document view
 // here is non-flipped, so later content sits at a *smaller* y origin: subtract
@@ -4284,9 +4324,14 @@ final class ThemesTabView: NSView, ScrollStepTab {
         scroller.refresh()
         selectButton.needsDisplay = true
         deleteButton.needsDisplay = true
+        jumpButton.needsDisplay = true
     }
     private let scroller = CustomScroller()
     private let scrollerW: CGFloat = 8
+    // the floating arrow that jumps to the far end in the last scroll direction
+    private let jumpButton = ScrollJumpButton()
+    private var jumpDown = true
+    private var lastScrollY: CGFloat?
     private let selectButton = ButtonView()
     private let deleteButton = ButtonView()
     private var selectionMode = false
@@ -4312,6 +4357,10 @@ final class ThemesTabView: NSView, ScrollStepTab {
         scroll.documentView = grid
         addSubview(scroller)
         scroller.scrollView = scroll
+        addSubview(jumpButton)
+        jumpButton.isHidden = true
+        jumpButton.onClick = { [weak self] in self?.jumpToEnd() }
+        jumpButton.onScrollWheel = { [weak self] e in self?.scroll.scrollWheel(with: e) }
         selectButton.title = "Select"
         selectButton.secondary = true
         selectButton.fontSize = 12
@@ -4389,6 +4438,10 @@ final class ThemesTabView: NSView, ScrollStepTab {
         scroller.refresh()
     }
     func debugReload() { reload() }
+    func debugJumpHidden() -> Bool { jumpButton.isHidden }
+    func debugJumpUp() -> Bool { jumpButton.up }
+    func debugJumpClick() { jumpButton.onClick?() }
+    func debugScroll(by dy: CGFloat) { scrollBy(scroll, dy); visibleChanged() }
 
     // --- bulk selection ----------------------------------------------------
 
@@ -4561,7 +4614,42 @@ final class ThemesTabView: NSView, ScrollStepTab {
         }
     }
 
-    @objc private func visibleChanged() { grid.loadVisible(scroll.documentVisibleRect); scroller.refresh() }
+    @objc private func visibleChanged() {
+        let y = scroll.contentView.bounds.origin.y
+        // A non-flipped document stores later content at a smaller y origin,
+        // so moving down the gallery decreases it.
+        if let last = lastScrollY, abs(y - last) > 0.5 { jumpDown = y < last }
+        lastScrollY = y
+        updateJumpButton()
+        grid.loadVisible(scroll.documentVisibleRect)
+        scroller.refresh()
+    }
+
+    // The arrow follows the last scroll direction while there is shelf on
+    // both sides of the viewport. At either end it flips to the only useful
+    // way out, so the button is never a dead control.
+    private func updateJumpButton() {
+        let maxScroll = max(0, grid.frame.height - scroll.contentSize.height)
+        let y = scroll.contentView.bounds.origin.y
+        if maxScroll <= 0.5 {
+            jumpButton.isHidden = true
+            return
+        }
+        if y <= 0.5 { jumpDown = false }                       // bottom: offer the top
+        else if y >= maxScroll - 0.5 { jumpDown = true }        // top: offer the bottom
+        jumpButton.up = !jumpDown
+        jumpButton.isHidden = false
+        jumpButton.needsDisplay = true
+    }
+
+    // "Straight to" the end, as asked: no animation, one jump.
+    private func jumpToEnd() {
+        let maxScroll = max(0, grid.frame.height - scroll.contentSize.height)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: jumpDown ? 0 : maxScroll))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        scroller.refresh()
+        updateJumpButton()
+    }
 
     func reload() {
         let dir = wallpapersDir()
@@ -4616,6 +4704,9 @@ final class ThemesTabView: NSView, ScrollStepTab {
         scroll.frame = NSRect(x: 0, y: band, width: max(0, bounds.width - scrollerW - 14), height: scrollH)
         scroller.frame = NSRect(x: bounds.width - scrollerW, y: band, width: scrollerW, height: scrollH)
         scroller.refresh()
+        let jumpSize: CGFloat = 30
+        jumpButton.frame = NSRect(x: scroll.frame.maxX - jumpSize - 12, y: band + 12,
+                                  width: jumpSize, height: jumpSize)
         // The Select/Delete buttons are centred on the bar, like the centred
         // Save on Options/Workspaces; the status sits to their left.
         let by = (band - 24) / 2
@@ -4649,9 +4740,12 @@ final class ThemesTabView: NSView, ScrollStepTab {
                 scroll.contentView.scroll(to: NSPoint(x: 0, y: top))
                 scroll.reflectScrolledClipView(scroll.contentView)
                 scroller.refresh()
+                jumpDown = true
+                lastScrollY = top
             }
         }
         grid.loadVisible(scroll.documentVisibleRect)
+        updateJumpButton()
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -15259,6 +15353,11 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     private let grid = WHGridView()
     private let scroller = CustomScroller()
     private let scrollerW: CGFloat = 8
+    // the same floating jump arrow the Themes gallery uses, for the
+    // Bookmarked view (the search results keep their own load-more scrolling)
+    private let jumpButton = ScrollJumpButton()
+    private var jumpDown = true
+    private var lastScrollY: CGFloat?
 
     private let field = NSTextField()
     private let searchButton = ButtonView()
@@ -15329,6 +15428,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
             v.needsDisplay = true
         }
         scroller.refresh()
+        jumpButton.needsDisplay = true
     }
 
     func scrollStep(_ dy: CGFloat) { scrollBy(scroll, dy) }
@@ -15361,6 +15461,46 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         for w in grid.cards.prefix(n) { bookmarks.debugInsert(w) }
         config.bookmarkedOnly = true
         rebuildGrid()
+    }
+
+    // test door: seed the Bookmarked view with synthetic cards, in memory only
+    func debugSeedBookmarks(_ n: Int) {
+        for i in 0..<n {
+            let w = WHWallpaper(json: [
+                "id": "jump\(i)",
+                "path": "https://example.invalid/jump\(i).jpg",
+                "url": "https://example.invalid/w/jump\(i)",
+                "resolution": "1920x1080",
+                "purity": "sfw",
+                "file_size": NSNumber(value: 1000),
+                "thumbs": ["small": ""],
+            ])!
+            bookmarks.debugInsert(w)
+        }
+        config.bookmarkedOnly = true
+        // the tab is attached after seeding, and its first show would
+        // otherwise run a real search before the shelf is visible
+        didInitialSearch = true
+        rebuildGrid()
+    }
+
+    func debugLeaveBookmarks() {
+        config.bookmarkedOnly = false
+        results = []
+        rebuildGrid()
+    }
+
+    func debugJumpTopY() -> CGFloat { max(0, grid.frame.height - scroll.contentSize.height) }
+    func debugJumpOriginY() -> CGFloat { scroll.contentView.bounds.origin.y }
+    func debugJumpHidden() -> Bool { jumpButton.isHidden }
+    func debugJumpUp() -> Bool { jumpButton.up }
+    func debugJumpClick() { jumpButton.onClick?() }
+    func debugJumpScroll(by dy: CGFloat) { scrollBy(scroll, dy); visibleChanged() }
+    func debugJumpToBottom() {
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        scroller.refresh()
+        updateJumpButton()
     }
 
     // test door: seed the grid without a search or a network call
@@ -15405,6 +15545,10 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         scroll.documentView = grid
         addSubview(scroller)
         scroller.scrollView = scroll
+        addSubview(jumpButton)
+        jumpButton.isHidden = true
+        jumpButton.onClick = { [weak self] in self?.jumpToEnd() }
+        jumpButton.onScrollWheel = { [weak self] e in self?.scroll.scrollWheel(with: e) }
         addSubview(badge)
         badge.style = .hidden
 
@@ -15750,6 +15894,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
         scroll.reflectScrolledClipView(scroll.contentView)
         scroller.refresh()
+        updateJumpButton()
         grid.needsDisplay = true
     }
 
@@ -15978,6 +16123,12 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
 
     @objc private func visibleChanged() {
         let vis = scroll.documentVisibleRect
+        let y = scroll.contentView.bounds.origin.y
+        // A non-flipped document stores later content at a smaller y origin,
+        // so moving down the shelf decreases it.
+        if let last = lastScrollY, abs(y - last) > 0.5 { jumpDown = y < last }
+        lastScrollY = y
+        updateJumpButton()
         grid.loadVisible(vis)
         scroller.refresh()
         // the document is non-flipped, so later results sit at lower y:
@@ -15985,11 +16136,40 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         if vis.minY < 600 { loadMore() }
     }
 
+    // The Bookmarked view is the one shelf here that reaches its end without
+    // loading more; the search results keep their load-more scrolling.
+    private func updateJumpButton() {
+        let maxScroll = max(0, grid.frame.height - scroll.contentSize.height)
+        let y = scroll.contentView.bounds.origin.y
+        guard config.bookmarkedOnly, maxScroll > 0.5 else {
+            jumpButton.isHidden = true
+            return
+        }
+        // at either end, point the only useful way out
+        if y <= 0.5 { jumpDown = false }
+        else if y >= maxScroll - 0.5 { jumpDown = true }
+        jumpButton.up = !jumpDown
+        jumpButton.isHidden = false
+        jumpButton.needsDisplay = true
+    }
+
+    // "Straight to" the end, as in the Themes gallery: one instant jump.
+    private func jumpToEnd() {
+        let maxScroll = max(0, grid.frame.height - scroll.contentSize.height)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: jumpDown ? 0 : maxScroll))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        scroller.refresh()
+        updateJumpButton()
+    }
+
     private func scrollToTop() {
         let maxY = max(0, grid.frame.height - scroll.contentSize.height)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: maxY))
         scroll.reflectScrolledClipView(scroll.contentView)
         scroller.refresh()
+        jumpDown = true
+        lastScrollY = maxY
+        updateJumpButton()
     }
 
     // --- header geometry ---
@@ -16088,6 +16268,9 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         scroll.frame = NSRect(x: 0, y: 16, width: max(0, W - scrollerW - 14), height: scrollH)
         scroller.frame = NSRect(x: W - scrollerW, y: 16, width: scrollerW, height: scrollH)
         scroller.refresh()
+        let jumpSize: CGFloat = 30
+        jumpButton.frame = NSRect(x: scroll.frame.maxX - jumpSize - 12, y: 16 + 12,
+                                  width: jumpSize, height: jumpSize)
         // the download indicator shares the bulk button's slot in the header
         badge.frame = frameFor(top: row3Top, x: 138, w: 200, h: row3H)
 
@@ -16107,6 +16290,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
             scrollToTop()
         }
         grid.loadVisible(scroll.documentVisibleRect)
+        updateJumpButton()
         needsDisplay = true
     }
 
@@ -17681,8 +17865,12 @@ func themesScrollSelfTest() -> Int {
         return 0
     }
     check("opens at the top", abs(tab.debugOriginY() - top) < 1)
+    check("at the top, the jump button offers the bottom",
+          !tab.debugJumpHidden() && !tab.debugJumpUp())
     tab.debugScrollToBottom()
     let bottom = tab.debugOriginY()
+    check("at the bottom, the arrow offers the top",
+          !tab.debugJumpHidden() && tab.debugJumpUp())
     tab.debugReload()
     tab.layoutSubtreeIfNeeded()
     check("an apply reload keeps the scroll position", abs(tab.debugOriginY() - bottom) < 1)
@@ -17691,6 +17879,18 @@ func themesScrollSelfTest() -> Int {
     win.contentView = tab
     tab.layoutSubtreeIfNeeded()
     check("a re-show opens at the top", abs(tab.debugOriginY() - top) < 1)
+    // the floating arrow: down at the top, up after a scroll upwards, and
+    // always pointing somewhere it can actually go
+    tab.debugJumpClick()
+    check("the down arrow jumps to the bottom", abs(tab.debugOriginY() - bottom) < 1)
+    check("the arrow now offers the top", !tab.debugJumpHidden() && tab.debugJumpUp())
+    tab.debugScroll(by: -120)   // negative dy walks back towards the top
+    check("scrolling up keeps the arrow pointing up",
+          !tab.debugJumpHidden() && tab.debugJumpUp())
+    tab.debugJumpClick()
+    check("the up arrow jumps to the top", abs(tab.debugOriginY() - top) < 1)
+    check("at the top, the arrow offers the bottom again",
+          !tab.debugJumpHidden() && !tab.debugJumpUp())
     print(failures == 0 ? "themes-scroll selftest: all checks passed"
                         : "themes-scroll selftest: \(failures) failed")
     return failures
@@ -17698,6 +17898,57 @@ func themesScrollSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--themes-scroll-selftest") {
     exit(themesScrollSelfTest() == 0 ? 0 : 1)
+}
+
+// The Bookmarked view gets the same floating arrow as the Themes gallery. It
+// must be absent from the search results, open offering the bottom, and flip
+// at each end.
+func wallpapersJumpSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    palette = loadPalette()
+    let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 720),
+                       styleMask: .borderless, backing: .buffered, defer: false)
+    let tab = WallpapersTabView(frame: NSRect(x: 0, y: 0, width: 860, height: 720))
+    // seed before attaching so the first show skips its network search, and
+    // again afterwards because the show re-reads the saved config
+    tab.debugSeedBookmarks(60)
+    win.contentView = tab
+    tab.debugSeedBookmarks(60)
+    tab.layoutSubtreeIfNeeded()
+    tab.layoutSubtreeIfNeeded()
+    let top = tab.debugJumpTopY()
+    guard top > 100 else {
+        print("wallpapers-jump selftest: SKIP (not enough bookmarks to scroll)")
+        return 0
+    }
+    check("bookmarks open at the top", abs(tab.debugJumpOriginY() - top) < 1)
+    check("at the top, the arrow offers the bottom",
+          !tab.debugJumpHidden() && !tab.debugJumpUp())
+    tab.debugJumpToBottom()
+    check("at the bottom, the arrow offers the top",
+          !tab.debugJumpHidden() && tab.debugJumpUp())
+    tab.debugJumpClick()
+    check("the up arrow jumps to the top", abs(tab.debugJumpOriginY() - top) < 1)
+    check("at the top, the arrow offers the bottom again",
+          !tab.debugJumpHidden() && !tab.debugJumpUp())
+    tab.debugJumpToBottom()
+    tab.debugJumpScroll(by: -120)   // negative dy walks back towards the top
+    check("scrolling up keeps the arrow pointing up",
+          !tab.debugJumpHidden() && tab.debugJumpUp())
+    tab.debugLeaveBookmarks()
+    tab.layoutSubtreeIfNeeded()
+    check("the arrow hides outside the Bookmarked view", tab.debugJumpHidden())
+    print(failures == 0 ? "wallpapers-jump selftest: all checks passed"
+                        : "wallpapers-jump selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--wallpapers-jump-selftest") {
+    exit(wallpapersJumpSelfTest() == 0 ? 0 : 1)
 }
 
 // Prints the intro's real cell count and duration per effect, so a pacing

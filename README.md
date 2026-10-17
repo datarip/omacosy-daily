@@ -366,7 +366,9 @@ with seven tabs:
   **Edit** reopens a saved variation, **Customize** starts a new one from
   a wallpaper in the Theme Editor — and a small **trash**. The trash asks
   before removing: the wallpaper **file goes to the Finder Trash**, and its
-  saved variations can be deleted at the same time.
+  saved variations can be deleted at the same time. A floating arrow in the
+  gallery's bottom-right corner jumps straight to the far end in the
+  direction you last scrolled.
 - **Wallpapers** — browses **wallhaven.cc**: a search row (query, sorting,
   order), category and purity chips, a resolution dropdown, **More Filters**
   (colour and ratio), S/M/L cards and a results count. It fetches three pages
@@ -377,7 +379,8 @@ with seven tabs:
   switching on its own. A bulk download retries a rate-limited or interrupted
   file with a growing random wait, and a file that still fails keeps its tick
   so **Download** offers exactly the failures again. A **Bookmarked** filter
-  shows saved pictures. Right-click a result for a compact metadata card:
+  shows saved pictures, with the same floating jump arrow for long shelves.
+  Right-click a result for a compact metadata card:
   resolution, ratio, size, type, upload date, views, favourites, source,
   colour swatches, uploader and a comma-separated tag list; a source link
   opens in the browser, and **Copy Link** copies the wallhaven page URL.

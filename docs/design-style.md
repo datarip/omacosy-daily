@@ -227,6 +227,15 @@ below the top of the tab's content area. A `drawMidLeft` title uses
 puts the centre on 16). All are Bold 13 accent. A new tab must put its first
 title on the same 16 pt line.
 
+**The gallery jump arrows** — the Themes gallery and the Wallpapers tab's
+**Bookmarked** view — are 30 pt squares, 12 pt inside the scroll area's
+bottom-right corner. Each is `palette.barBG` at 0.92 with a 1 px
+`palette.muted` border at 0.5 and a Regular 13 `palette.label` arrow
+(`\u{f063}` down, `\u{f062}` up), so it stays legible over any thumbnail. The
+arrow follows the last scroll direction while shelf remains on both sides,
+flips to the only way out at either end, and hides when the content fits. The
+search results keep their load-more scrolling and do not show the arrow.
+
 ## The wallpaper metadata card
 
 Right-clicking a Wallpapers result opens a compact, text-only card. It is
