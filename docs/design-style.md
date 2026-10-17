@@ -116,6 +116,26 @@ finishes, then returns it to normal: Save → "Saving…", Apply & Save →
 Update → "Updating…", Add App → "Loading…" while the app catalog finishes its
 first scan.
 
+## Text fields
+
+Editable fields — workspace and theme names, the Wallpapers search, the name
+prompt and the numeric editor fields — take their text decoration from the
+palette, never from a system colour:
+
+- **Selection** is `palette.selectionBackground` (`palette.accent`) under
+  `palette.selectionForeground` (`palette.barBG`) ink — the same pair as the
+  active workspace pill. A light label therefore stays readable on every
+  theme, where AppKit's fixed blue could swallow it. `ThemedWindow` applies
+  it whenever a field takes the keyboard (click, Tab or programmatic focus),
+  and `paletteChanged` re-applies it after a live or draft theme change.
+- **Focus ring**: the app picker's search is the one field that draws one — a
+  1 px `palette.accent` stroke at `windowCornerRadius(6)`, shown only while
+  the field has the keyboard and cleared when it loses it. Other editable
+  fields draw their own box; none uses AppKit's blue focus ring.
+
+A new editable field inherits both from its window. Do not set a literal
+selection or focus-ring colour on the control.
+
 ## Motion
 
 Motion is rare, short, and always says that something arrived.

@@ -388,7 +388,8 @@ with seven tabs:
 
 It reads and writes the same files and commands as the CLI, so the window and
 the shell can never disagree, and it follows the theme palette — its wordmark,
-the lists and their scrollbars included. Opening it brings the wordmark alive:
+the lists and their scrollbars included, and the selection highlight and focus
+ring of every editable field. Opening it brings the wordmark alive:
 one of seventeen short effects, picked at random and never repeating the last
 (`LOGO_INTRO` in `settings.conf` pins one). Up and Down scroll a list, Left and
 Right move between tabs, and the app picker highlights the row under the
