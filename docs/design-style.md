@@ -227,6 +227,14 @@ below the top of the tab's content area. A `drawMidLeft` title uses
 puts the centre on 16). All are Bold 13 accent. A new tab must put its first
 title on the same 16 pt line.
 
+**The Themes gallery sections.** The gallery is one list of titled blocks:
+**Omarchy Themes**, then **Custom Themes** (the saved editions), then **Auto
+Themes** (the raw `Wallpaper #N` pictures whose auto themes they seed). Each
+block is a Bold 13 accent heading on a 34 pt header, 8 pt above its first
+card. A block with no cells is left out, and the first block opens with no
+rule above it. Between blocks a 1 px `palette.muted` hairline at 0.25 sits
+22 pt after the previous block and 22 pt before the next heading.
+
 **The gallery jump arrows** — the Themes gallery and the Wallpapers tab's
 **Bookmarked** view — are 30 pt squares, 12 pt inside the scroll area's
 bottom-right corner. Each is `palette.barBG` at 0.92 with a 1 px

@@ -3853,13 +3853,15 @@ final class ThemeGridView: NSView {
     // the day=/night= values themes.conf holds now, for the menu's check
     // marks; set by the tab on every reload
     var dayNight: (day: String, night: String) = ("", "")
+    // Off-screen review/test only: the gallery's titled blocks, in order.
+    func debugSectionTitles() -> [String] { headers.map { $0.1 } }
+    func debugSeparatorCount() -> Int { separators.count }
     // Off-screen review only.
     func debugSetHover(_ i: Int?) { hoveredIndex = i; needsDisplay = true }
     private var hoveredIndex: Int?
     private var hoverTracking: NSTrackingArea?
 
-    private var customHeaderRect = NSRect.zero
-    private var separatorRect = NSRect.zero
+    private var separators: [NSRect] = []
     private let headerH: CGFloat = 34
     private let cellH: CGFloat = 180
     private let gapX: CGFloat = 14
@@ -3889,7 +3891,7 @@ final class ThemeGridView: NSView {
 
         var top: CGFloat = 0
         var x: CGFloat = padX
-        var idx = 0
+        var separatorRects: [NSRect] = []
 
         func placeCell(_ cellIndex: Int) {
             if x + cellW > padX + usable + 0.5 { x = padX; top += cellH + gapY }
@@ -3899,30 +3901,34 @@ final class ThemeGridView: NSView {
         }
         func endRow() { if x > padX { top += cellH + gapY; x = padX } }
 
-        let stockCount = cells.filter { !$0.isCustom }.count
-        if stockCount > 0 {
-            headers.append((NSRect(x: 0, y: top, width: W, height: headerH), "Omarchy Themes"))
+        // A gallery split into titled blocks. `separated` draws the hairline
+        // that marks a new block, so only the first one opens without a rule.
+        var placedSection = false
+        func placeSection(_ title: String, _ indices: [Int], separated: Bool) {
+            guard !indices.isEmpty else { return }
+            if separated {
+                top += 22
+                separatorRects.append(NSRect(x: 0, y: top, width: W, height: 1))
+                top += 1 + 22
+            }
+            headers.append((NSRect(x: 0, y: top, width: W, height: headerH), title))
             top += headerH + 8
-            for (i, c) in cells.enumerated() where !c.isCustom { placeCell(i); idx += 1 }
+            for i in indices { placeCell(i) }
             endRow()
             top += 6
+            placedSection = true
         }
 
-        // custom section: every wallpaper is an auto-theme, so the section
-        // shows whenever there is anything to show — no switch state gates it
-        let customIdx = cells.enumerated().filter { $0.element.isCustom }.map { $0.offset }
-        if !customIdx.isEmpty {
-            // a rule between the Omarchy grid and the custom grid, so the two
-            // galleries read as separate sections
-            top += 22
-            separatorRect = NSRect(x: 0, y: top, width: W, height: 1)
-            top += 1 + 22
-            customHeaderRect = NSRect(x: 0, y: top, width: W, height: headerH)
-            headers.append((customHeaderRect, "Custom Themes"))
-            top += headerH + 8
-            for i in customIdx { placeCell(i) }
-            endRow()
-        }
+        // Every wallpaper is an auto-theme, so the custom blocks show whenever
+        // there is anything to show — no switch state gates them. Custom
+        // `ThemeCell`s are the named editions; the rest are the raw seed
+        // wallpapers whose auto themes they are built from.
+        let stockIdx = cells.indices.filter { !cells[$0].isCustom }
+        let editedIdx = cells.indices.filter { cells[$0].isCustom && cells[$0].editionID != nil }
+        let seedIdx = cells.indices.filter { cells[$0].isCustom && cells[$0].editionID == nil }
+        placeSection("Omarchy Themes", stockIdx, separated: false)
+        placeSection("Custom Themes", editedIdx, separated: placedSection)
+        placeSection("Auto Themes", seedIdx, separated: placedSection)
 
         // convert top-coords to non-flipped bottom coords
         let contentH = max(top + 8, 200)
@@ -3931,8 +3937,7 @@ final class ThemeGridView: NSView {
         }
         for (k, v) in cellFrames { cellFrames[k] = flip(v) }
         headers = headers.map { (flip($0.0), $0.1) }
-        customHeaderRect = flip(customHeaderRect)
-        separatorRect = flip(separatorRect)
+        separators = separatorRects.map(flip)
 
         renders.removeAll()
         for (i, f) in cellFrames where cells.indices.contains(i) {
@@ -4018,9 +4023,9 @@ final class ThemeGridView: NSView {
             drawMidLeft(title, headerFont, palette.accent,
                         x: 0, midTop: bounds.height - r.midY, height: bounds.height)
         }
-        if cells.contains(where: { $0.isCustom }), separatorRect.intersects(dirtyRect) {
+        for r in separators where r.intersects(dirtyRect) {
             palette.muted.withAlphaComponent(0.25).setFill()
-            separatorRect.fill()
+            r.fill()
         }
         for (i, f) in cellFrames where f.intersects(dirtyRect) {
             drawCell(i, f)
@@ -13050,7 +13055,7 @@ final class StorageTabView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        // the Themes tab's Custom Themes header, verbatim: label, path and
+        // the Themes tab's section headers, verbatim: label, path and
         // the buttons centre on one line
         let mid = browseButton.frame.midY
         drawMidLeft("Local Wallpapers", nerdFont("Bold", 13), palette.accent,
@@ -17841,6 +17846,54 @@ func dayNightSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--day-night-selftest") {
     exit(dayNightSelfTest() == 0 ? 0 : 1)
+}
+
+// The Themes gallery splits the custom half into a Custom Themes block and
+// an Auto Themes block, each with its own rule and heading. Drive the layout
+// with synthetic cells so every mix of the three kinds is checked off-screen.
+func themeSectionsSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    let stock = ThemeCell(logical: "gruvbox", wallpaper: "/tmp/stock.webp",
+                          title: "Gruvbox — 2 Flower", isCustom: false,
+                          paletteFile: "/tmp/colors.toml")
+    let edited = ThemeCell(logical: "custom", wallpaper: "/tmp/edited.png",
+                           title: "Sunset Drive", isCustom: true,
+                           paletteFile: "", editionID: "sunset-drive")
+    let seed = ThemeCell(logical: "custom", wallpaper: "/tmp/seed.png",
+                         title: "Wallpaper #1", isCustom: true, paletteFile: "")
+    let grid = ThemeGridView(frame: NSRect(x: 0, y: 0, width: 860, height: 720))
+    func layout(_ cells: [ThemeCell]) -> ([String], Int) {
+        grid.cells = cells
+        grid.rebuild()
+        return (grid.debugSectionTitles(), grid.debugSeparatorCount())
+    }
+
+    let all = layout([stock, edited, seed])
+    check("all three kinds get a block", all.0 == ["Omarchy Themes", "Custom Themes", "Auto Themes"])
+    check("all three kinds get two rules", all.1 == 2)
+    check("stock alone gets no rule", layout([stock]).0 == ["Omarchy Themes"] && layout([stock]).1 == 0)
+    check("an edition alone gets no rule", layout([edited]).0 == ["Custom Themes"] && layout([edited]).1 == 0)
+    check("a seed alone gets no rule", layout([seed]).0 == ["Auto Themes"] && layout([seed]).1 == 0)
+    let noStock = layout([edited, seed])
+    check("edited and seed still split without stock",
+          noStock.0 == ["Custom Themes", "Auto Themes"] && noStock.1 == 1)
+    let noEdited = layout([stock, seed])
+    check("stock and seed are separated by one rule",
+          noEdited.0 == ["Omarchy Themes", "Auto Themes"] && noEdited.1 == 1)
+    let empty = layout([])
+    check("an empty gallery has no headings", empty.0.isEmpty && empty.1 == 0)
+
+    print(failures == 0 ? "themes-sections selftest: all checks passed"
+                        : "themes-sections selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--themes-sections-selftest") {
+    exit(themeSectionsSelfTest() == 0 ? 0 : 1)
 }
 
 // The Themes gallery must open at the top when the tab is (re)shown, and must

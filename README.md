@@ -359,8 +359,11 @@ with seven tabs:
   `omacosy-settings`, and drops any app rule you removed (under OmniWM that
   also prunes the manager's own rule).
 - **Themes** — every theme as a card with its colours; click one to apply it.
-  Your own wallpapers appear below the stock themes as `Wallpaper #N`;
-  the theme in use carries a green **Active** pill, each saved variation
+  The stock themes sit under **Omarchy Themes**; a rule and a **Custom
+  Themes** section follow with your saved variations, then a second rule and
+  **Auto Themes** with your own pictures as `Wallpaper #N` (each picture is a
+  theme of its own), so the two custom kinds read as separate lists.
+  The theme in use carries a green **Active** pill, each saved variation
   gets a named card of its own, and its picture
   carries a `· N variation(s)` badge. Hovering a card shows its pill —
   **Edit** reopens a saved variation, **Customize** starts a new one from

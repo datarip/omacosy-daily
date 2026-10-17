@@ -62,15 +62,17 @@ a new control should follow it rather than copy a number from somewhere else.
 
 Every picture in the wallpaper folder (set in the **Storage** tab) is already a
 theme of its own: the Themes
-tab shows each as a `Wallpaper #N` cell whose colours come from that picture
-(the same Magic extraction the raw cells use).
+tab shows each as a `Wallpaper #N` cell under the **Auto Themes** heading,
+whose colours come from that picture (the same Magic extraction the raw cells
+use).
 **Customize** on a raw cell opens the editor on a new, unsaved theme; **Save**
 or **Apply & Save** stores it as a named **edition**, and from then on it sits
-above the raw cells, sorted A→Z, with its own name and card — **Edit** reopens
-it. With an untouched Magic palette the edition and the raw cell it came from
-write byte-identical desktop files; an edition is the picture's own theme plus,
-only when you change them, its palette, its picture edits and its per-app
-overrides.
+in the **Custom Themes** section above the auto themes — a rule and a section
+title keep the two apart — sorted A→Z, with its own name and card — **Edit**
+reopens it. With an untouched Magic palette the edition and the raw cell it
+came from write byte-identical desktop files; an edition is the picture's own
+theme plus, only when you change them, its palette, its picture edits and its
+per-app overrides.
 
 Each saved edition is one TOML file, `~/.config/omacosy/themes/<id>.toml`.
 Schema 1 wrote JSON instead: those files are still read, and convert to TOML
