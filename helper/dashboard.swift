@@ -31,6 +31,74 @@ struct Palette {
     var label = NSColor.white
     var muted = NSColor.gray
     var barBG = NSColor.black
+    // Selected field text, the same pair the active workspace pill uses:
+    // accent as the fill, barBG as the ink. Deriving it from the palette
+    // replaces AppKit's system blue, which ignores the theme and can leave
+    // a light label unreadable on top of it.
+    var selectionBackground: NSColor { accent }
+    var selectionForeground: NSColor { barBG }
+}
+
+// One NSTextView is the field editor for every control in a window, so its
+// selection colours are set once per focus rather than per NSTextField. This
+// covers workspace and theme names, the wallpaper search, the name prompt,
+// and the numeric editor fields alike.
+func applySelectionColors(to editor: NSTextView) {
+    editor.selectedTextAttributes = [
+        .backgroundColor: palette.selectionBackground,
+        .foregroundColor: palette.selectionForeground,
+    ]
+}
+
+// A theme can change while a field has the keyboard, so re-apply to each
+// window's live field editor instead of waiting for the next focus.
+func refreshSelectionColors() {
+    for window in NSApp.windows {
+        guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { continue }
+        applySelectionColors(to: editor)
+    }
+}
+
+// Clicking, tabbing into or programmatically focusing a text field all go
+// through the window's makeFirstResponder. By the time super returns, the
+// shared field editor is first responder, and setting the selection colours
+// here lands before it draws the select-all highlight. The begin-editing
+// notification is too late: it is not posted until the first keystroke.
+class ThemedWindow: NSWindow {
+    @discardableResult
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        // the field losing the keyboard must repaint too, or its focus ring
+        // stays behind after the next field takes focus
+        let previous = (firstResponder as? NSTextView)?.delegate as? NSView
+        let ok = super.makeFirstResponder(responder)
+        if ok, let editor = firstResponder as? NSTextView, editor.isFieldEditor {
+            applySelectionColors(to: editor)
+            (editor.delegate as? NSView)?.needsDisplay = true
+        }
+        previous?.needsDisplay = true
+        return ok
+    }
+}
+
+// The picker's search is the one field AppKit would draw a focus ring for,
+// in the system accent. Draw it in the theme's accent instead, around the
+// field's own bezel; a field without the keyboard draws no ring.
+final class ThemedSearchField: NSSearchField {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        focusRingType = .none
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard currentEditor() != nil else { return }
+        let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                                xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
+        palette.accent.setStroke()
+        ring.lineWidth = 1
+        ring.stroke()
+    }
 }
 
 func color(fromARGB v: UInt64) -> NSColor {
@@ -1638,7 +1706,7 @@ final class AppListView: NSView {
 }
 
 final class PickerRoot: NSView {
-    let search = NSSearchField()
+    let search = ThemedSearchField()
     let scroll = NSScrollView()
     let list = AppListView()
     var titleText: String?
@@ -1697,7 +1765,7 @@ final class PickerRoot: NSView {
     }
 }
 
-final class PickerWindow: NSWindow {
+final class PickerWindow: ThemedWindow {
     override var canBecomeKey: Bool { true }
 }
 
@@ -4616,7 +4684,7 @@ enum EditorSubject {
     }
 }
 
-final class EditorWindow: NSWindow {
+final class EditorWindow: ThemedWindow {
     override var canBecomeKey: Bool { true }
 
     // End a value field's editing when a click falls outside it. The editor's
@@ -12745,6 +12813,7 @@ final class ThemeEditor {
         p.label = c("label", applied.label)
         p.muted = c("muted", applied.muted)
         palette = p
+        refreshSelectionColors()
         markTreeNeedsDisplay(root)
         if let dash = window.parent as? DashboardWindow, let v = dash.contentView {
             markTreeNeedsDisplay(v)
@@ -12759,6 +12828,7 @@ final class ThemeEditor {
         // the editor swapped the global palette to the draft; put the applied
         // theme's back before the dashboard takes over
         palette = loadPalette()
+        refreshSelectionColors()
         if let dash = window.parent as? DashboardWindow, let v = dash.contentView {
             markTreeNeedsDisplay(v)
         }
@@ -13322,7 +13392,7 @@ final class UpdateTabView: NSView {
 
 // --- window / root ---------------------------------------------------------
 
-final class DashboardWindow: NSWindow {
+final class DashboardWindow: ThemedWindow {
     // fires for every left click the window receives, before dispatch. Used
     // to fold an expanded workspace row back on a click anywhere else.
     var onMouseDown: ((NSEvent) -> Void)?
@@ -16079,6 +16149,7 @@ final class RootView: NSView {
     // the old theme until the next scroll or hover.
     func paletteChanged() {
         palette = loadPalette()
+        refreshSelectionColors()
         reloadLogo()
         for v in tabViews { (v as? RefreshableTab)?.refreshColors() }
         ThemeEditor.refreshColors()
