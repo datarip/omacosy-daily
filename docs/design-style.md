@@ -120,15 +120,16 @@ Update → "Updating…".
 Motion is rare, short, and always says that something arrived.
 
 - **The wordmark comes alive when the modal opens**: one of seventeen effects
-  plays over the logo's lit cells — laseretch's beam and sparks, sweep and
-  waves' travelling bands, beams' converging lights, middleout's single
+  plays over the logo's lit cells — laseretch's beam and sparks, sweep's
+  travelling band, waves' columns pushing in while every cell rides rising
+  and falling laser bars, beams' converging lights, middleout's single
   centre line splitting open vertically, scattered's pops, print's
-  typewriter, decrypt's scramble, errorcorrect's signal lock, rain's falling
-  drops, crumble's debris, expand's blossom, slice's two halves, spray's
-  nozzle, wipe's clean front, highlight's flash and colorshift's shimmer — a
-  different one at random each open, never repeating the last. Each cell
-  flares hot on arrival and cools to its accent shade, and every run ends by
-  crossfading 0.15 s onto the crisp wordmark.
+  typewriter, decrypt's ciphertext resolving cell by cell, errorcorrect's
+  signal lock, rain's falling drops, crumble's debris, expand's blossom,
+  slice's two halves, spray's nozzle, wipe's clean front, highlight's flash
+  and colorshift's shimmer — a different one at random each open, never
+  repeating the last. Each cell flares hot on arrival and cools to its accent
+  shade, and every run ends by crossfading 0.15 s onto the crisp wordmark.
   `LOGO_INTRO` in `settings.conf` pins one effect. `LogoIntroView` samples
   the grid from the tinted wordmark at open time (about 18 rows, ~2.2 pt
   cells, colour from the same shade ladder as the header), so a new logo
