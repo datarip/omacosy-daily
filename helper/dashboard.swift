@@ -13545,6 +13545,15 @@ struct WHWallpaper {
     let category: String
     let purity: String
     let thumbs: [String: String]
+    let views: Int
+    let favorites: Int
+    let source: String
+    let colors: [String]
+    let createdAt: String
+    let fileType: String
+    let ratio: String
+    let dimensionX: Int
+    let dimensionY: Int
 
     init?(json: [String: Any]) {
         guard let id = json["id"] as? String,
@@ -13557,12 +13566,42 @@ struct WHWallpaper {
         self.category = json["category"] as? String ?? ""
         self.purity = json["purity"] as? String ?? ""
         self.thumbs = json["thumbs"] as? [String: String] ?? [:]
+        self.views = (json["views"] as? NSNumber)?.intValue ?? 0
+        self.favorites = (json["favorites"] as? NSNumber)?.intValue ?? 0
+        self.source = json["source"] as? String ?? ""
+        self.colors = json["colors"] as? [String] ?? []
+        self.createdAt = json["created_at"] as? String ?? ""
+        self.fileType = json["file_type"] as? String ?? ""
+        self.ratio = json["ratio"] as? String ?? ""
+        self.dimensionX = (json["dimension_x"] as? NSNumber)?.intValue ?? 0
+        self.dimensionY = (json["dimension_y"] as? NSNumber)?.intValue ?? 0
     }
 
     // The card shows the large thumb; the bookmark stores it so a restart
     // can redraw the grid without a search.
     var thumbURL: String { thumbs["large"] ?? thumbs["original"] ?? thumbs["small"] ?? "" }
     var smallThumbURL: String { thumbs["small"] ?? thumbURL }
+}
+
+struct WHUploader {
+    let username: String
+    let group: String
+    let avatarURL: String
+}
+
+struct WHTag {
+    let id: Int
+    let name: String
+    let alias: String
+    let category: String
+}
+
+// A single-wallpaper response: the search fields plus the two things only
+// /w/<id> returns (the uploader and the tag list).
+struct WHDetails {
+    let wallpaper: WHWallpaper
+    let uploader: WHUploader?
+    let tags: [WHTag]
 }
 
 struct WHMeta {
@@ -13966,7 +14005,7 @@ final class WallhavenClient {
         return merged
     }
 
-    func info(_ id: String) throws -> WHWallpaper {
+    func info(_ id: String) throws -> WHDetails {
         guard id.range(of: "^[A-Za-z0-9]+$", options: .regularExpression) != nil else {
             throw WHError.badURL("bad id")
         }
@@ -13976,7 +14015,19 @@ final class WallhavenClient {
         guard let d = root["data"] as? [String: Any], let w = WHWallpaper(json: d) else {
             throw WHError.decode
         }
-        return w
+        let uploader = (d["uploader"] as? [String: Any]).flatMap { u -> WHUploader? in
+            guard let name = u["username"] as? String, !name.isEmpty else { return nil }
+            let avatar = (u["avatar"] as? [String: Any])?["32px"] as? String ?? ""
+            return WHUploader(username: name, group: u["group"] as? String ?? "", avatarURL: avatar)
+        }
+        let tags = (d["tags"] as? [[String: Any]] ?? []).compactMap { t -> WHTag? in
+            guard let name = t["name"] as? String, !name.isEmpty else { return nil }
+            return WHTag(id: (t["id"] as? NSNumber)?.intValue ?? 0,
+                         name: name,
+                         alias: t["alias"] as? String ?? "",
+                         category: t["category"] as? String ?? "Other")
+        }
+        return WHDetails(wallpaper: w, uploader: uploader, tags: tags)
     }
 }
 
@@ -14363,6 +14414,7 @@ final class WHGridView: NSView {
     var onBookmark: ((WHWallpaper) -> Void)?
     var onDownload: ((WHWallpaper) -> Void)?
     var onToggleSelect: ((WHWallpaper) -> Void)?
+    var onInfo: ((WHWallpaper) -> Void)?
 
     private let gap: CGFloat = 12
     private let metaH: CGFloat = 24
@@ -14575,6 +14627,19 @@ final class WHGridView: NSView {
         }
     }
 
+    override func rightMouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        for (i, f) in cellFrames where f.contains(p) {
+            guard i < cards.count else { return }
+            let old = hovered
+            hovered = i
+            if let old, old != i { invalidate(old) }
+            invalidate(i)
+            onInfo?(cards[i])
+            return
+        }
+    }
+
     func loadVisible(_ rect: NSRect) {
         for (i, f) in cellFrames where f.intersects(rect) {
             guard i < cards.count else { continue }
@@ -14596,6 +14661,596 @@ final class WHGridView: NSView {
                 }
             }
         }
+    }
+}
+
+// --- wallpaper metadata card ------------------------------------------------
+
+private func whMetaDate(_ raw: String) -> String {
+    // "2018-10-31 01:23:10" -> "31 Oct 2018". Read the date part as written;
+    // wallhaven does not document a timezone, so converting could move a day.
+    let day = raw.split(separator: " ").first ?? ""
+    let parts = day.split(separator: "-")
+    guard parts.count == 3, let month = Int(parts[1]), (1...12).contains(month) else { return "" }
+    let names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    return "\(Int(parts[2]) ?? 0) \(names[month - 1]) \(parts[0])"
+}
+
+private func whGroupedInt(_ n: Int) -> String {
+    let f = NumberFormatter()
+    f.numberStyle = .decimal
+    f.locale = Locale(identifier: "en_US")
+    return f.string(from: NSNumber(value: n)) ?? String(n)
+}
+
+private func whMetaCategory(_ raw: String) -> String {
+    switch raw.lowercased() {
+    case "general": return "General"
+    case "anime": return "Anime"
+    case "people": return "People"
+    default: return raw.isEmpty ? "" : raw.prefix(1).uppercased() + raw.dropFirst()
+    }
+}
+
+private func whMetaPurity(_ raw: String) -> String {
+    switch raw.lowercased() {
+    case "sfw": return "SFW"
+    case "sketchy": return "Sketchy"
+    case "nsfw": return "NSFW"
+    default: return raw
+    }
+}
+
+private func whInfoMessage(_ error: Error) -> String {
+    if let e = error as? WHError {
+        switch e {
+        case .rateLimited(let after):
+            if let a = after {
+                return "Wallhaven is limiting requests. Retry in \(max(1, Int(a.rounded()))) s."
+            }
+            return "Wallhaven is limiting requests. Try again in a minute."
+        case .http(401): return "This wallpaper needs an API key."
+        case .http(404): return "This wallpaper is no longer available."
+        default: break
+        }
+    }
+    return "Couldn't load the extra details."
+}
+
+// A pasted wallhaven page URL, with or without its scheme, becomes the one
+// wallpaper it names. A plain keyword is left to the normal search.
+private func whPastedID(_ raw: String) -> String? {
+    var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !s.isEmpty else { return nil }
+    let lower = s.lowercased()
+    if lower.hasPrefix("https://") { s = String(s.dropFirst(8)) }
+    else if lower.hasPrefix("http://") { s = String(s.dropFirst(7)) }
+    if s.lowercased().hasPrefix("www.") { s = String(s.dropFirst(4)) }
+    let head = "wallhaven.cc/w/"
+    guard s.lowercased().hasPrefix(head) else { return nil }
+    var id = String(s.dropFirst(head.count))
+    if let cut = id.firstIndex(where: { $0 == "/" || $0 == "?" || $0 == "#" }) {
+        id = String(id[..<cut])
+    }
+    guard !id.isEmpty,
+          id.range(of: "^[A-Za-z0-9]+$", options: .regularExpression) != nil else { return nil }
+    return id
+}
+
+// The source can point anywhere, unlike the wallhaven-only fetch guard. Only
+// http(s) links are opened, and only because the person clicked the value.
+private func whExternalURL(_ raw: String) -> URL? {
+    guard let c = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+          let scheme = c.scheme?.lowercased(),
+          scheme == "http" || scheme == "https",
+          let host = c.host, !host.isEmpty else { return nil }
+    return c.url
+}
+
+private enum WHMetaFact {
+    case text(String, String)
+    case colors(String, [String])
+}
+
+private struct WHMetaLayout {
+    let facts: [WHMetaFact]
+    let valueW: CGFloat
+    let uploaderTop: CGFloat
+    let tagsTop: CGFloat
+    let tagLines: [String]
+    let height: CGFloat
+}
+
+// The scrolling body of the card: facts, uploader and one comma-separated tag
+// line (wrapped). The facts come from the search result and draw at once; only
+// the uploader and the tags wait for /w/<id>.
+final class WHInfoBodyView: NSView {
+    var wallpaper: WHWallpaper
+    var uploader: WHUploader?
+    var tags: [WHTag] = []
+    var loading = true
+    var errorText = ""
+
+    private let padX: CGFloat = 20
+    private let colGap: CGFloat = 32
+    private let rowH: CGFloat = 24
+    private let headH: CGFloat = 24
+    private let lineH: CGFloat = 18
+    private let topPad: CGFloat = 10
+
+    init(wallpaper: WHWallpaper) {
+        self.wallpaper = wallpaper
+        super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func apply(_ d: WHDetails) {
+        wallpaper = d.wallpaper
+        uploader = d.uploader
+        tags = d.tags
+        loading = false
+        errorText = ""
+        window?.invalidateCursorRects(for: self)
+        needsDisplay = true
+    }
+
+    func setLoading() {
+        loading = true
+        errorText = ""
+        needsDisplay = true
+    }
+
+    func setError(_ text: String) {
+        loading = false
+        errorText = text
+        needsDisplay = true
+    }
+
+    private var facts: [WHMetaFact] {
+        var rows: [WHMetaFact] = []
+        if !wallpaper.resolution.isEmpty {
+            rows.append(.text("Resolution",
+                              wallpaper.resolution.replacingOccurrences(of: "x", with: " × ")))
+        }
+        if !wallpaper.ratio.isEmpty {
+            rows.append(.text("Aspect Ratio", wallpaper.ratio + " : 1"))
+        }
+        if wallpaper.fileSize > 0 {
+            rows.append(.text("File Size", whFormatSize(wallpaper.fileSize)))
+        }
+        let type = wallpaper.fileType.replacingOccurrences(of: "image/", with: "").uppercased()
+        if !type.isEmpty { rows.append(.text("File Type", type)) }
+        let date = whMetaDate(wallpaper.createdAt)
+        if !date.isEmpty { rows.append(.text("Uploaded", date)) }
+        rows.append(.text("Views", whGroupedInt(wallpaper.views)))
+        rows.append(.text("Favorites", whGroupedInt(wallpaper.favorites)))
+        if !wallpaper.source.isEmpty { rows.append(.text("Source", wallpaper.source)) }
+        if !wallpaper.colors.isEmpty { rows.append(.colors("Colors", wallpaper.colors)) }
+        return rows
+    }
+
+    private func layout(width: CGFloat) -> WHMetaLayout {
+        let facts = self.facts
+        let rows = max(1, (facts.count + 1) / 2)
+        let factH = topPad + headH + CGFloat(rows) * rowH
+        let uploaderTop = factH + 24
+        let contentTop = uploaderTop + headH
+        let tagsTop = contentTop + 40
+        let groupsTop = tagsTop + headH
+        let valueW = max(100, (width - padX * 2 - colGap) / 2)
+
+        let joined = tags.map { $0.name }.joined(separator: ", ")
+        let tagLines = joined.isEmpty ? [] : wrapText(joined, nerdFont("Regular", 11),
+                                                     width - padX * 2, maxLines: 999)
+        let tagH = tagLines.isEmpty ? 20 : CGFloat(tagLines.count) * lineH
+        return WHMetaLayout(facts: facts, valueW: valueW,
+                            uploaderTop: uploaderTop, tagsTop: tagsTop,
+                            tagLines: tagLines, height: groupsTop + tagH + 12)
+    }
+
+    func measure(width: CGFloat) -> CGFloat {
+        guard width > 100 else { return 260 }
+        return layout(width: width).height
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let H = bounds.height
+        let L = layout(width: bounds.width)
+
+        // facts, two per row
+        drawTopLeft("Details", nerdFont("Bold", 12), palette.accent,
+                    x: padX, top: topPad, height: H)
+        let lf = nerdFont("Regular", 11)
+        let vf = nerdFont("Regular", 11)
+        for (i, fact) in L.facts.enumerated() {
+            let col = i % 2
+            let row = i / 2
+            let x = padX + CGFloat(col) * (L.valueW + colGap)
+            let mid = topPad + headH + CGFloat(row) * rowH + rowH / 2
+            switch fact {
+            case .text(let label, let value):
+                drawMidLeft(label, lf, palette.muted, x: x, midTop: mid, height: H)
+                let room = L.valueW - advance(label, vf) - 12
+                let shown = truncate(value, vf, max(20, room))
+                let link = label == "Source" && whExternalURL(value) != nil
+                let vx = x + L.valueW - advance(shown, vf)
+                drawMidLeft(shown, vf, link ? palette.accent : palette.label,
+                            x: vx, midTop: mid, height: H)
+                if link {
+                    palette.accent.withAlphaComponent(0.6).setFill()
+                    NSRect(x: vx, y: H - mid - vf.capHeight / 2 - 2,
+                           width: advance(shown, vf), height: 1).fill()
+                }
+            case .colors(let label, let values):
+                drawMidLeft(label, lf, palette.muted, x: x, midTop: mid, height: H)
+                var sx = x + L.valueW - CGFloat(values.count) * 20 + 6
+                for hex in values {
+                    let swatch = NSRect(x: sx, y: H - mid - 7, width: 14, height: 14)
+                    let path = NSBezierPath(roundedRect: swatch, xRadius: 3, yRadius: 3)
+                    (hexColor(hex) ?? palette.itemBG).setFill()
+                    path.fill()
+                    palette.muted.withAlphaComponent(0.35).setStroke()
+                    path.lineWidth = 1
+                    path.stroke()
+                    sx += 20
+                }
+            }
+        }
+
+        // uploader, text only
+        drawTopLeft("Uploader", nerdFont("Bold", 12), palette.accent,
+                    x: padX, top: L.uploaderTop, height: H)
+        let lineMid = L.uploaderTop + headH + 9
+        if loading {
+            drawMidLeft("Loading…", nerdFont("Regular", 11), palette.muted,
+                        x: padX, midTop: lineMid, height: H)
+        } else if !errorText.isEmpty {
+            drawMidLeft(truncate(errorText, nerdFont("Regular", 11), bounds.width - padX * 2),
+                        nerdFont("Regular", 11), palette.muted,
+                        x: padX, midTop: lineMid, height: H)
+        } else if let u = uploader {
+            let nf = nerdFont("Regular", 12)
+            drawMidLeft(u.username, nf, palette.label, x: padX, midTop: lineMid, height: H)
+            if !u.group.isEmpty {
+                drawMidLeft("· " + u.group, nerdFont("Regular", 10), palette.muted,
+                            x: padX + advance(u.username, nf) + 8,
+                            midTop: lineMid, height: H)
+            }
+        } else {
+            drawMidLeft("Unknown uploader", nerdFont("Regular", 11), palette.muted,
+                        x: padX, midTop: lineMid, height: H)
+        }
+
+        // tags, one comma-separated list
+        drawTopLeft("Tags", nerdFont("Bold", 12), palette.accent,
+                    x: padX, top: L.tagsTop, height: H)
+        let groupsTop = L.tagsTop + headH
+        if loading {
+            drawMidLeft("Loading…", nerdFont("Regular", 11), palette.muted,
+                        x: padX, midTop: groupsTop + 9, height: H)
+        } else if !errorText.isEmpty {
+            drawMidLeft("Tags unavailable.", nerdFont("Regular", 11), palette.muted,
+                        x: padX, midTop: groupsTop + 9, height: H)
+        } else if L.tagLines.isEmpty {
+            drawMidLeft("No tags", nerdFont("Regular", 11), palette.muted,
+                        x: padX, midTop: groupsTop + 9, height: H)
+        } else {
+            let tf = nerdFont("Regular", 11)
+            for (i, line) in L.tagLines.enumerated() {
+                drawMidLeft(line, tf, palette.label, x: padX,
+                            midTop: groupsTop + CGFloat(i) * lineH + lineH / 2, height: H)
+            }
+        }
+    }
+
+    private func sourceRect() -> NSRect? {
+        guard let index = facts.firstIndex(where: {
+            if case .text(let label, _) = $0 { return label == "Source" }
+            return false
+        }), case .text(let label, let value) = facts[index] else { return nil }
+        let L = layout(width: bounds.width)
+        let x = padX + CGFloat(index % 2) * (L.valueW + colGap)
+        let mid = topPad + headH + CGFloat(index / 2) * rowH + rowH / 2
+        let vf = nerdFont("Regular", 11)
+        let room = L.valueW - advance(label, vf) - 12
+        let shown = truncate(value, vf, max(20, room))
+        let w = advance(shown, vf)
+        return NSRect(x: x + L.valueW - w, y: bounds.height - mid - 10,
+                      width: w, height: 20)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if let r = sourceRect(), r.contains(p), let url = whExternalURL(wallpaper.source) {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func resetCursorRects() {
+        if let r = sourceRect(), whExternalURL(wallpaper.source) != nil {
+            addCursorRect(r, cursor: .pointingHand)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.invalidateCursorRects(for: self)
+    }
+}
+
+final class WHInfoCardView: NSView {
+    private(set) var wallpaper: WHWallpaper
+    private let body: WHInfoBodyView
+    private let scroll = NSScrollView()
+    private let scroller = CustomScroller()
+    private let closeButton = ButtonView()
+    private let copyButton = ButtonView()
+    private let retryButton = ButtonView()
+    private var copyToken = 0
+
+    var onClose: (() -> Void)?
+    var onRetry: (() -> Void)?
+
+    init(wallpaper: WHWallpaper) {
+        self.wallpaper = wallpaper
+        self.body = WHInfoBodyView(wallpaper: wallpaper)
+        super.init(frame: NSRect(x: 0, y: 0, width: 620, height: 420))
+        wantsLayer = true
+
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = false
+        scroll.contentView.drawsBackground = false
+        scroll.documentView = body
+        addSubview(scroll)
+        addSubview(scroller)
+        scroller.scrollView = scroll
+
+        closeButton.title = "\u{f00d}"
+        closeButton.secondary = true
+        closeButton.fontSize = 10
+        closeButton.centeredByBounds = true
+        closeButton.onClick = { [weak self] in self?.onClose?() }
+        addSubview(closeButton)
+
+        copyButton.title = "Copy Link"
+        copyButton.secondary = true
+        copyButton.fontSize = 11
+        copyButton.onClick = { [weak self] in self?.copyLink() }
+        addSubview(copyButton)
+
+        retryButton.title = "Retry"
+        retryButton.secondary = true
+        retryButton.fontSize = 11
+        retryButton.isHidden = true
+        retryButton.onClick = { [weak self] in self?.onRetry?() }
+        addSubview(retryButton)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func idealHeight(width: CGFloat = 620) -> CGFloat {
+        let bodyH = body.measure(width: width - 24)
+        return min(760, max(300, 48 + 60 + bodyH))
+    }
+
+    func showLoading() {
+        body.setLoading()
+        retryButton.isHidden = true
+        needsLayout = true
+        needsDisplay = true
+    }
+
+    func apply(_ d: WHDetails) {
+        wallpaper = d.wallpaper
+        body.apply(d)
+        retryButton.isHidden = true
+        needsLayout = true
+        needsDisplay = true
+    }
+
+    func showError(_ text: String) {
+        body.setError(text)
+        retryButton.isHidden = false
+        needsLayout = true
+        needsDisplay = true
+    }
+
+    private func copyLink() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(wallpaper.pageURL, forType: .string)
+        copyToken += 1
+        let token = copyToken
+        copyButton.title = "Copied"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            guard let self, self.copyToken == token else { return }
+            self.copyButton.title = "Copy Link"
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        let headerH: CGFloat = 48
+        let footerH: CGFloat = 60
+        let buttonY: CGFloat = 17
+        let buttonH: CGFloat = 26
+
+        closeButton.frame = NSRect(x: bounds.width - 20 - 22, y: bounds.height - 12 - 22,
+                                   width: 22, height: 22)
+        let copyW: CGFloat = 96
+        copyButton.frame = NSRect(x: (bounds.width - copyW) / 2, y: buttonY,
+                                  width: copyW, height: buttonH)
+        retryButton.frame = NSRect(x: copyButton.frame.maxX + 8, y: buttonY,
+                                   width: 64, height: buttonH)
+
+        let scrollH = max(0, bounds.height - headerH - footerH)
+        scroll.frame = NSRect(x: 12, y: footerH, width: bounds.width - 24, height: scrollH)
+        let bodyW = scroll.frame.width
+        let bodyH = body.measure(width: bodyW)
+        body.frame = NSRect(x: 0, y: 0, width: bodyW, height: max(bodyH, scrollH))
+        scroll.documentView = body
+        scroller.frame = NSRect(x: bounds.width - 16, y: footerH, width: 8, height: scrollH)
+        let maxY = max(0, body.frame.height - scrollH)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: maxY))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        scroller.refresh()
+    }
+
+    private func drawBadge(_ text: String, left: CGFloat, top: CGFloat) -> CGFloat {
+        guard !text.isEmpty else { return left }
+        let f = nerdFont("Bold", 9)
+        let w = advance(text, f) + 16
+        let r = NSRect(x: left, y: bounds.height - top - 18, width: w, height: 18)
+        let path = NSBezierPath(roundedRect: r,
+                                xRadius: windowCornerRadius(5),
+                                yRadius: windowCornerRadius(5))
+        palette.itemBG.withAlphaComponent(0.55).setFill()
+        path.fill()
+        palette.muted.withAlphaComponent(0.35).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+        drawMidCenter(text, f, palette.label, centerX: r.midX,
+                      midTop: top + 9, height: bounds.height)
+        return r.maxX + 6
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let corner = min(windowCornerRadius(12), min(bounds.width, bounds.height) / 2)
+        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                                xRadius: corner, yRadius: corner)
+        palette.barBG.setFill()
+        card.fill()
+        palette.accent.withAlphaComponent(0.55).setStroke()
+        card.lineWidth = 1
+        card.stroke()
+
+        var left = 20.0
+        left = drawBadge(whMetaPurity(wallpaper.purity), left: left, top: 15)
+        _ = drawBadge(whMetaCategory(wallpaper.category), left: left, top: 15)
+
+        palette.muted.withAlphaComponent(0.18).setFill()
+        NSRect(x: 20, y: bounds.height - 48, width: bounds.width - 40, height: 1).fill()
+        NSRect(x: 20, y: 60, width: bounds.width - 40, height: 1).fill()
+    }
+}
+
+final class WHInfoCard: NSObject {
+    private static var current: WHInfoCard?
+    private let window: PickerWindow
+    private let root: WHInfoCardView
+    private let loadDetails: (@escaping (Result<WHDetails, Error>) -> Void) -> Void
+    private var monitors: [Any] = []
+    private var generation = 0
+
+    static func present(from host: NSView,
+                        wallpaper: WHWallpaper,
+                        details: WHDetails?,
+                        error: Error?,
+                        loadDetails: @escaping (@escaping (Result<WHDetails, Error>) -> Void) -> Void) {
+        guard let parent = host.window else { return }
+        current?.close()
+        let c = WHInfoCard(wallpaper: wallpaper, details: details,
+                           error: error, loadDetails: loadDetails)
+        current = c
+        let f = parent.frame
+        var origin = NSPoint(x: f.midX - c.window.frame.width / 2,
+                             y: f.midY - c.window.frame.height / 2)
+        if let scr = NSScreen.main {
+            origin.y = max(scr.visibleFrame.minY + 6,
+                           min(origin.y, scr.visibleFrame.maxY - c.window.frame.height - 6))
+        }
+        c.window.setFrameOrigin(origin)
+        parent.addChildWindow(c.window, ordered: .above)
+        c.show()
+    }
+
+    private init(wallpaper: WHWallpaper, details: WHDetails?, error: Error?,
+                 loadDetails: @escaping (@escaping (Result<WHDetails, Error>) -> Void) -> Void) {
+        root = WHInfoCardView(wallpaper: wallpaper)
+        if let details {
+            root.apply(details)
+        } else if let error {
+            root.showError(whInfoMessage(error))
+        } else {
+            root.showLoading()
+        }
+        let height = root.idealHeight()
+        window = PickerWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: height),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        self.loadDetails = loadDetails
+        super.init()
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.level = .popUpMenu
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        window.contentView = root
+        root.frame = NSRect(x: 0, y: 0, width: 620, height: height)
+
+        root.onClose = { [weak self] in self?.close() }
+        root.onRetry = { [weak self] in self?.load() }
+    }
+
+    private func show() {
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        let local = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] e in
+                guard let self else { return e }
+                if e.type == .keyDown {
+                    if e.keyCode == 53 { self.close(); return nil }
+                    return e
+                }
+                if !self.window.frame.contains(NSEvent.mouseLocation) { self.close() }
+                return e
+            }
+        let global = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in self?.close() }
+        monitors = [local, global].compactMap { $0 }
+    }
+
+    // Only a retry reaches this: the first presentation already has its data
+    // and its final size, so it never grows under the pointer.
+    private func load() {
+        generation += 1
+        let gen = generation
+        root.showLoading()
+        resize()
+        loadDetails { [weak self] result in
+            guard let self, gen == self.generation else { return }
+            switch result {
+            case .success(let d):
+                self.root.apply(d)
+            case .failure(let e):
+                self.root.showError(whInfoMessage(e))
+            }
+            self.resize()
+        }
+    }
+
+    private func resize() {
+        let height = root.idealHeight()
+        var f = window.frame
+        f.size.height = height
+        f.origin.y = f.midY - height / 2
+        if let scr = window.screen ?? NSScreen.main {
+            f.origin.y = max(scr.visibleFrame.minY + 6,
+                             min(f.origin.y, scr.visibleFrame.maxY - height - 6))
+        }
+        window.setFrame(f, display: true)
+        window.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    private func close() {
+        generation += 1
+        for m in monitors { NSEvent.removeMonitor(m) }
+        monitors = []
+        window.parent?.removeChildWindow(window)
+        window.orderOut(nil)
+        WHInfoCard.current = nil
     }
 }
 
@@ -14621,6 +15276,8 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     private let bookmarks = WHBookmarkStore()
 
     private var results: [WHWallpaper] = []
+    private var infoCache: [String: WHDetails] = [:]
+    private var infoToken = 0
     private var selected: Set<String> = []
     private var downloadedIDs: Set<String> = []
     private var activeDownloads: [String: WHFileDownloader] = [:]
@@ -14845,6 +15502,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         grid.onBookmark = { [weak self] w in self?.toggleBookmark(w) }
         grid.onDownload = { [weak self] w in self?.download(w) }
         grid.onToggleSelect = { [weak self] w in self?.toggleSelected(w) }
+        grid.onInfo = { [weak self] w in self?.showInfo(w) }
 
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(visibleChanged),
@@ -14924,6 +15582,10 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     }
 
     private func beginSearch(reset: Bool) {
+        if reset, let id = whPastedID(field.stringValue) {
+            searchByID(id)
+            return
+        }
         guard !config.bookmarkedOnly else { return }
         // Drop the field's selection highlight and hand focus back to the
         // gallery: a keyword left selected reads as unreadable.
@@ -14994,6 +15656,57 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         }
     }
 
+    // A pasted wallhaven.cc/w/<id> is a direct lookup, not a text search.
+    // The response also fills the metadata cache, so right-clicking the one
+    // result shows its uploader and tags without another request.
+    private func searchByID(_ id: String) {
+        searchToken += 1
+        let token = searchToken
+        DispatchQueue.main.async { [weak self] in self?.endSearchEditing() }
+        refreshKeyState()
+        client.apiKey = readSecret("wallhaven")
+        config.bookmarkedOnly = false
+        config.save()
+        results = []
+        selected.removeAll()
+        nextRawPage = 1
+        totalResults = 0
+        hasMore = false
+        isLoadingMore = false
+        isSearching = true
+        searchError = ""
+        grid.thumbs.removeAll()
+        rebuildGrid()
+        needsDisplay = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                let d = try self.client.info(id)
+                DispatchQueue.main.async {
+                    guard token == self.searchToken else { return }
+                    self.infoCache[id] = d
+                    self.results = [d.wallpaper]
+                    self.totalResults = 1
+                    self.hasMore = false
+                    self.isSearching = false
+                    if self.hideNSFW && d.wallpaper.purity.lowercased() == "nsfw" {
+                        self.searchError = "This wallpaper is hidden by Hide NSFW."
+                    }
+                    self.rebuildGrid()
+                    self.scrollToTop()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard token == self.searchToken else { return }
+                    self.isSearching = false
+                    self.searchError = error.localizedDescription
+                    self.rebuildGrid()
+                    self.needsDisplay = true
+                }
+            }
+        }
+    }
+
     private func loadMore() {
         guard !config.bookmarkedOnly, !isSearching, !isLoadingMore, hasMore else { return }
         beginSearch(reset: false)
@@ -15042,10 +15755,12 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
 
     // --- actions ---
 
-    private func toggleBookmark(_ w: WHWallpaper) {
-        bookmarks.toggle(w)
+    @discardableResult
+    private func toggleBookmark(_ w: WHWallpaper) -> Bool {
+        let on = bookmarks.toggle(w)
         grid.bookmarkedIDs = Set(bookmarks.all().map { $0.id })
         if config.bookmarkedOnly { rebuildGrid() } else { grid.needsDisplay = true }
+        return on
     }
 
     private func toggleSelected(_ w: WHWallpaper) {
@@ -15067,6 +15782,56 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     private func download(_ w: WHWallpaper) {
         guard activeDownloads[w.id] == nil, !downloadedIDs.contains(w.id) else { return }
         startDownloadAttempt(w, attempt: 1)
+    }
+
+    // Right-click opens the metadata card. The search result already carries
+    // the preview and the facts; /w/<id> adds the uploader and tags, and is
+    // cached for the tab session so a second right-click is free.
+    private func showInfo(_ w: WHWallpaper) {
+        grid.hovered = nil
+        grid.needsDisplay = true
+        client.apiKey = readSecret("wallhaven")
+        infoToken += 1
+        let token = infoToken
+        let present: (WHDetails?, Error?) -> Void = { [weak self] details, error in
+            guard let self, token == self.infoToken else { return }
+            WHInfoCard.present(
+                from: self, wallpaper: w, details: details, error: error,
+                loadDetails: { [weak self] completion in
+                    self?.loadInfo(w, completion: completion)
+                })
+        }
+        if let cached = infoCache[w.id] {
+            present(cached, nil)
+            return
+        }
+        // Fetch first, then open at the final size. The card used to open
+        // from the loading state and grow when the tags arrived, which read
+        // as a two-step open under the pointer.
+        loadInfo(w) { result in
+            switch result {
+            case .success(let d): present(d, nil)
+            case .failure(let e): present(nil, e)
+            }
+        }
+    }
+
+    private func loadInfo(_ w: WHWallpaper,
+                          completion: @escaping (Result<WHDetails, Error>) -> Void) {
+        if let d = infoCache[w.id] { completion(.success(d)); return }
+        let id = w.id
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                let d = try self.client.info(id)
+                DispatchQueue.main.async {
+                    self.infoCache[id] = d
+                    completion(.success(d))
+                }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
     }
 
     private func startDownloadAttempt(_ w: WHWallpaper, attempt: Int) {
@@ -16576,6 +17341,18 @@ func whRunSelfTest() -> Int {
     check("filename replaces odd characters",
           !whDownloadFilename("https://evil/a b?c.jpg").contains(" "))
 
+    check("pasted URL yields its id",
+          whPastedID("https://wallhaven.cc/w/13rqy1") == "13rqy1")
+    check("pasted URL without a scheme works",
+          whPastedID("wallhaven.cc/w/13rqy1") == "13rqy1")
+    check("pasted URL with www and a query works",
+          whPastedID("https://www.wallhaven.cc/w/13rqy1/?x=1") == "13rqy1")
+    check("an ordinary query is not an id", whPastedID("winter snow") == nil)
+    check("source accepts an https link",
+          whExternalURL("https://www.deviantart.com/koy") != nil)
+    check("source rejects a file link",
+          whExternalURL("file:///etc/passwd") == nil)
+
     let fm = FileManager.default
     let tmp = NSTemporaryDirectory() + "wh-selftest-\(ProcessInfo.processInfo.processIdentifier)"
     try? fm.removeItem(atPath: tmp)
@@ -16598,6 +17375,26 @@ func whRunSelfTest() -> Int {
     check("bookmark survives a reload", reloaded.isBookmarked("abc123"))
     check("bookmark toggles off", reloaded.toggle(sample) == false)
     check("bookmark removal persists", !WHBookmarkStore(path: bpath).isBookmarked("abc123"))
+
+    let meta = WHWallpaper(json: [
+        "id": "abc123",
+        "path": "https://w.wallhaven.cc/full/ab/wallhaven-abc123.jpg",
+        "resolution": "6742x3534",
+        "views": NSNumber(value: 1234),
+        "favorites": NSNumber(value: 87),
+        "source": "https://example.com/x",
+        "colors": ["#000000", "#ffffff"],
+        "created_at": "2018-10-31 01:23:10",
+        "file_type": "image/jpeg",
+        "ratio": "1.91",
+        "dimension_x": NSNumber(value: 6742),
+        "dimension_y": NSNumber(value: 3534),
+    ])!
+    check("metadata reads views and favorites", meta.views == 1234 && meta.favorites == 87)
+    check("metadata reads colours", meta.colors.count == 2)
+    check("metadata keeps the source", meta.source == "https://example.com/x")
+    check("metadata formats the date", whMetaDate(meta.createdAt) == "31 Oct 2018")
+    check("metadata formats a grouped count", whGroupedInt(1234) == "1,234")
 
     let anon = WallhavenClient()
     var immediate = 0
@@ -16690,7 +17487,8 @@ if CommandLine.arguments.count >= 4, CommandLine.arguments[1] == "--wallhaven-mu
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-download" {
     let client = WallhavenClient()
     do {
-        let w = try client.info(CommandLine.arguments[2])
+        let info = try client.info(CommandLine.arguments[2])
+        let w = info.wallpaper
         print("resolved \(w.imageURL)")
         let dir = CommandLine.arguments.count >= 4 ? CommandLine.arguments[3] : NSTemporaryDirectory() + "wh-dl"
         var done = false
@@ -17188,6 +17986,60 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wh-icon-debu
     }
     exit(0)
 }
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-meta-shot" {
+    // Off-screen render of the metadata card, for layout review. Uses a
+    // seeded reply so it needs no network and never touches a running
+    // dashboard.
+    app.setActivationPolicy(.accessory)
+    palette = loadPalette()
+    let w = WHWallpaper(json: [
+        "id": "94x38z",
+        "url": "https://wallhaven.cc/w/94x38z",
+        "path": "https://w.wallhaven.cc/full/94/wallhaven-94x38z.jpg",
+        "resolution": "6742x3534",
+        "file_size": NSNumber(value: 5_070_446),
+        "category": "anime",
+        "purity": "sfw",
+        "views": NSNumber(value: 1234),
+        "favorites": NSNumber(value: 87),
+        "source": "https://example.com/the-witcher",
+        "colors": ["#663300", "#996633", "#000000", "#ffcc33", "#cc6633"],
+        "created_at": "2018-10-31 01:23:10",
+        "file_type": "image/jpeg",
+        "ratio": "1.91",
+        "dimension_x": NSNumber(value: 6742),
+        "dimension_y": NSNumber(value: 3534),
+        "thumbs": ["large": "https://th.wallhaven.cc/lg/94/94x38z.jpg"],
+    ])!
+    let tags = [
+        WHTag(id: 7678, name: "The Witcher", alias: "witcher", category: "Games"),
+        WHTag(id: 2686, name: "The Witcher 3: Wild Hunt", alias: "wild hunt", category: "Games"),
+        WHTag(id: 132574, name: "Witcher 3 7th Anniversary", alias: "", category: "Games"),
+        WHTag(id: 64, name: "sunset", alias: "dusk", category: "Nature"),
+        WHTag(id: 65, name: "landscape", alias: "", category: "Nature"),
+        WHTag(id: 66, name: "clouds", alias: "", category: "Nature"),
+        WHTag(id: 241, name: "Sun", alias: "the sun", category: "Space"),
+        WHTag(id: 242, name: "starry sky", alias: "", category: "Space"),
+        WHTag(id: 9001, name: "anime", alias: "Chinese cartoons", category: "Anime & Manga"),
+    ]
+    let uploader = WHUploader(username: "almahun112", group: "User", avatarURL: "")
+    let details = WHDetails(wallpaper: w, uploader: uploader, tags: tags)
+
+    let v = WHInfoCardView(wallpaper: w)
+    v.apply(details)
+    v.frame = NSRect(x: 0, y: 0, width: 620, height: v.idealHeight())
+    let win = NSWindow(contentRect: v.frame, styleMask: .borderless,
+                       backing: .buffered, defer: false)
+    win.contentView = v
+    v.layoutSubtreeIfNeeded()
+    guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { exit(1) }
+    v.cacheDisplay(in: v.bounds, to: rep)
+    guard let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
+    try? png.write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+    print("wrote \(CommandLine.arguments[2])")
+    exit(0)
+}
+
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--wallhaven-shot" {
     // Off-screen render for layout review. Never ordered front, so it cannot
     // steal focus from a running dashboard. Add `options`, `workspaces`,

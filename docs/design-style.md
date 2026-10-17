@@ -226,3 +226,33 @@ below the top of the tab's content area. A `drawMidLeft` title uses
 `midTop: 16`; a `drawTopLeft` title uses `top: 11` (11 + half the cap height
 puts the centre on 16). All are Bold 13 accent. A new tab must put its first
 title on the same 16 pt line.
+
+## The wallpaper metadata card
+
+Right-clicking a Wallpapers result opens a compact, text-only card. It is
+620 pt wide, at most 760 pt tall, and opens at its exact content height: the
+`/w/<id>` response is fetched before the card is drawn, so it never grows or
+re-centres under the pointer. A tag list too long for the card scrolls inside
+it instead.
+
+- **Header, 48 pt.** The purity and category badges sit at the top left
+  (Bold 9, `itemBG` at 0.55, a `muted` border at 0.35, radius 5); the close
+  button is at the top right. There is no title. The hairline sits 10 pt
+  above the first heading.
+- **Body, 20 pt side padding.** `Details` is the Bold 12 accent heading.
+  Facts use two equal columns with a 32 pt gutter and 24 pt rows: label
+  Regular 11 `muted`, value Regular 11 `label`, right-aligned in its column.
+  The colour row draws 14 pt swatches in place of a value.
+- **The source is a link.** A `Source` value that is an http(s) URL draws in
+  `palette.accent` with a 1 pt underline and opens in the browser on click;
+  any other value is ordinary text.
+- **Uploader and tags.** `Uploader` is a Bold 12 accent heading with one
+  line under it: the name in Regular 12 `label`, then `· role` in Regular 10
+  `muted`. `Tags` is the same heading over one wrapped, comma-separated line
+  (Regular 11 `label`, 18 pt line height). There is no avatar and no tag
+  chips.
+- **Footer, 60 pt.** **Copy Link** is the only action: 96 × 26 pt, centred.
+  A **Retry** button appears beside it only when the extra details could not
+  be loaded.
+
+There is no preview image; the card is for the metadata, not the picture.
