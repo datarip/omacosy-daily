@@ -1270,6 +1270,37 @@ func installedApps() -> [AppInfo] {
     return out.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 }
 
+// The app shelf is read once, off the main thread. Reading every
+// Contents/Info.plist in /Applications blocked the modal's first paint; this
+// keeps the window responsive and hands the same list to every caller.
+final class AppCatalog {
+    static let shared = AppCatalog()
+    private(set) var apps: [AppInfo] = []
+    private var loaded = false
+    private var loading = false
+    private var waiters: [([AppInfo]) -> Void] = []
+
+    private init() {}
+
+    func load(_ done: @escaping ([AppInfo]) -> Void) {
+        if loaded { done(apps); return }
+        waiters.append(done)
+        guard !loading else { return }
+        loading = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let list = installedApps()
+            DispatchQueue.main.async {
+                self.apps = list
+                self.loaded = true
+                self.loading = false
+                let callbacks = self.waiters
+                self.waiters.removeAll()
+                for callback in callbacks { callback(list) }
+            }
+        }
+    }
+}
+
 func numericAsc(_ a: String, _ b: String) -> Bool {
     a.compare(b, options: .numeric) == .orderedAscending
 }
@@ -1483,15 +1514,49 @@ final class AppListView: NSView {
     var onPick: ((String) -> Void)?
     var selected: Int = 0
     let rowH: CGFloat = 30
+    // Icons arrive per visible row on a background queue. The old draw asked
+    // LaunchServices for every app in the list before the picker could paint,
+    // which is where the spinning wheel came from.
+    private var icons: [String: NSImage] = [:]
+    private var pendingIcons: Set<String> = []
 
     private func rowRect(_ i: Int) -> NSRect {
         let top = CGFloat(i) * rowH
         return NSRect(x: 0, y: bounds.height - top - rowH, width: bounds.width, height: rowH)
     }
 
+    private func invalidateRow(_ id: String) {
+        guard let i = apps.firstIndex(where: { $0.bundleID == id }) else { return }
+        setNeedsDisplay(rowRect(i))
+    }
+
+    private func queueIcon(_ app: AppInfo) {
+        guard icons[app.bundleID] == nil, !pendingIcons.contains(app.bundleID) else { return }
+        if let cached = appIconCache[app.bundleID] {
+            icons[app.bundleID] = cached
+            return
+        }
+        pendingIcons.insert(app.bundleID)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let image = NSWorkspace.shared.icon(forFile: app.path)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.pendingIcons.remove(app.bundleID)
+                self.icons[app.bundleID] = image
+                appIconCache[app.bundleID] = image
+                self.invalidateRow(app.bundleID)
+            }
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
+        // A full-view invalidation (selection, search) can carry the whole
+        // 13k-tall document in dirtyRect; only the viewport should ask for
+        // icons.
+        let visible = enclosingScrollView?.documentVisibleRect ?? bounds
         for (i, a) in apps.enumerated() {
             let r = rowRect(i)
+            guard r.intersects(dirtyRect) else { continue }
             if i == selected, apps.indices.contains(selected) {
                 // the same accent the custom scrollers use, so a chosen row
                 // reads as "the one the arrows are on"
@@ -1501,8 +1566,12 @@ final class AppListView: NSView {
                 palette.itemBG.withAlphaComponent(0.25).setFill()
                 r.fill()
             }
-            if let ic = iconForBundle(a.bundleID) {
-                ic.draw(in: NSRect(x: 6, y: r.midY - 8, width: 16, height: 16))
+            let icon = icons[a.bundleID] ?? appIconCache[a.bundleID]
+            if let icon {
+                icons[a.bundleID] = icon
+                icon.draw(in: NSRect(x: 6, y: r.midY - 8, width: 16, height: 16))
+            } else if r.intersects(visible) {
+                queueIcon(a)
             }
             drawMidLeft(a.name, nerdFont("Regular", 12),
                         i == selected ? palette.barBG : palette.label,
@@ -2294,7 +2363,7 @@ final class AppPicker: NSObject, NSWindowDelegate {
 // expanded: all assigned apps, icons and all, scrollable sideways
 final class ChipStrip: NSView {
     var assigned: [String] = []
-    let allApps: [AppInfo]
+    var allApps: [AppInfo]
     var onRemove: ((String) -> Void)?
     var onAdd: (() -> Void)?
     var onTap: (() -> Void)?
@@ -2376,7 +2445,7 @@ final class ChipStrip: NSView {
 final class WorkspaceRowView: NSView, NSTextFieldDelegate {
     let ws: String
     var assigned: [String]
-    let allApps: [AppInfo]
+    var allApps: [AppInfo]
     var displayName: String? { didSet { needsDisplay = true } }
     var onAssign: ((String) -> Void)?
     var onRemove: ((String) -> Void)?
@@ -2448,6 +2517,17 @@ final class WorkspaceRowView: NSView, NSTextFieldDelegate {
         chipStrip.onTap = { [weak self] in self?.setExpanded(false) }
     }
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    // The launch-time scan lands here: names and chip widths can now use the
+    // real display names instead of their bundle ids.
+    func updateApps(_ apps: [AppInfo]) {
+        allApps = apps
+        chipStrip.allApps = apps
+        computeChips()
+        needsLayout = true
+        needsDisplay = true
+        chipStrip.needsDisplay = true
+    }
 
     private func chipLabel(_ id: String) -> String {
         let name = allApps.first(where: { $0.bundleID == id })?.name ?? id
@@ -2718,8 +2798,21 @@ final class WorkspaceRowView: NSView, NSTextFieldDelegate {
     }
 
     private func showMenu() {
-        AppPicker.present(apps: allApps, near: addButton, in: self) { [weak self] bundle in
-            self?.onAssign?(bundle)
+        func present(_ apps: [AppInfo]) {
+            AppPicker.present(apps: apps, near: addButton, in: self) { [weak self] bundle in
+                self?.onAssign?(bundle)
+            }
+        }
+        guard allApps.isEmpty else { present(allApps); return }
+        // A click in the first moments after launch: the scan is already in
+        // flight, so show the press and open as soon as it lands.
+        addButton.busyTitle = "Loading…"
+        addButton.busy = true
+        AppCatalog.shared.load { [weak self] apps in
+            guard let self else { return }
+            self.addButton.busy = false
+            self.updateApps(apps)
+            present(apps)
         }
     }
 }
@@ -2758,7 +2851,8 @@ final class WorkspacesTabView: NSView, ScrollStepTab {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         screens = screensInfo()
-        allApps = installedApps()
+        // Start the scan at launch, but never block the first paint on it.
+        AppCatalog.shared.load { [weak self] apps in self?.appsLoaded(apps) }
         rules = readWorkspaceRules()
         savedRules = rules
         names = readWorkspaceNames()
@@ -2864,6 +2958,13 @@ final class WorkspacesTabView: NSView, ScrollStepTab {
 
     private func assigned(for ws: String) -> [String] {
         rules.filter { $0.1 == ws }.map { $0.0 }
+    }
+
+    // The scan lands after the rows exist. Update them in place rather than
+    // rebuilding, so an open rename field or expanded chip strip survives.
+    private func appsLoaded(_ apps: [AppInfo]) {
+        allApps = apps
+        for row in rows { row.updateApps(apps) }
     }
 
     private func rebuildRows() {

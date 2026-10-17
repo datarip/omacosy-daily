@@ -113,7 +113,8 @@ instant action still shows a response. Work that is not instant keeps the
 button in its muted `busy` state with a `busyTitle` until the background work
 finishes, then returns it to normal: Save → "Saving…", Apply & Save →
 "Applying…", Export → "Exporting…", Clear Cache → "Flushing…", Install
-Update → "Updating…".
+Update → "Updating…", Add App → "Loading…" while the app catalog finishes its
+first scan.
 
 ## Motion
 
