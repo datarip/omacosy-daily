@@ -15177,16 +15177,18 @@ extension WallpapersTabView: RefreshableTab {}
 
 // --- the logo intro ---------------------------------------------------------
 //
-// The wordmark comes alive when the modal opens: one of thirteen small
+// The wordmark comes alive when the modal opens: one of seventeen small
 // effects plays over the lit cells of the logo, picked at random each open
 // and never repeating the last (LOGO_INTRO in settings.conf pins one;
 // OMACOSY_LOGO_INTRO overrides for a single launch). The vocabulary is a
 // native take on ttfx (terminal text effects, MIT, github.com/omacom/ttfx —
 // by the Omarchy authors, itself a port of terminaltexteffects by
 // ChrisBuilds): laseretch's beam and sparks, sweep and waves' travelling
-// bands, middleout's rings, scattered's pops, print's typewriter, decrypt's
-// scramble, errorcorrect's signal lock, rain's falling drops, crumble's
-// debris, expand's blossom, highlight's flash and colorshift's shimmer.
+// bands, beams' converging lights, middleout's rings, scattered's pops,
+// print's typewriter, decrypt's scramble, errorcorrect's signal lock, rain's
+// falling drops, crumble's debris, expand's blossom, spray's nozzle, slice's
+// arrival, wipe's clean front, highlight's flash and colorshift's shimmer;
+// middleout assembles one centre line, then splits it open vertically.
 // Every effect flares each cell hot on arrival and cools it to its accent
 // shade, and ends on the same crisp wordmark. The grid is sampled from the
 // tinted wordmark at open time, so any future logo animates with no new
@@ -15260,17 +15262,19 @@ struct SplitMix64: RandomNumberGenerator {
 }
 
 enum LogoIntroKind: String, CaseIterable {
-    case laseretch, sweep, middleout, scattered, print, decrypt, rain, waves, highlight, colorshift, errorcorrect, crumble, expand
+    case laseretch, sweep, middleout, scattered, print, decrypt, rain, waves, highlight, colorshift, errorcorrect, crumble, expand, beams, slice, wipe, spray
 
     // per-kind pacing: seconds for the whole reveal, the flare's cool-down,
     // and the window a cell spends animating in before its reveal moment
     var target: TimeInterval {
         switch self {
-        case .highlight, .colorshift: return 0.15
+        case .highlight, .colorshift, .slice: return 0.15
+        case .middleout: return 0.10
         case .expand: return 0.3
-        case .print, .errorcorrect: return 0.7
+        case .print, .errorcorrect, .spray, .wipe: return 0.7
         case .scattered: return 0.8
-        case .sweep, .middleout, .decrypt: return 0.9
+        case .sweep, .decrypt: return 0.9
+        case .beams: return 0.95
         default: return 1.0
         }
     }
@@ -15280,17 +15284,20 @@ enum LogoIntroKind: String, CaseIterable {
         case .errorcorrect: return 0.65
         case .highlight: return 0.45
         case .laseretch: return 0.26
-        case .print: return 0.12
-        case .sweep, .middleout: return 0.18
+        case .beams: return 0.22
+        case .middleout: return 0.20
+        case .sweep, .slice: return 0.18
+        case .print, .wipe: return 0.12
         default: return 0.15
         }
     }
     var lead: TimeInterval {
         switch self {
         case .decrypt: return 0.30
-        case .rain: return 0.35
-        case .crumble: return 0.40
         case .expand: return 0.32
+        case .rain: return 0.35
+        case .crumble, .slice, .spray: return 0.40
+        case .middleout: return 0.72
         default: return 0
         }
     }
@@ -15363,15 +15370,21 @@ final class LogoIntroEffect {
                 Double(c.col) + 4.0 * sin(Double(c.row) / Double(grid.rows) * Double.pi * 1.2)
             }
             order = (0..<count).sorted { wave(list[$0]) < wave(list[$1]) }
-        case .middleout:
-            // rings growing from the centre, with an organic edge
-            let cx = Double(grid.cols - 1) / 2, cy = Double(grid.rows - 1) / 2
-            let keys = (0..<count).map { i -> Double in
-                let c = list[i]
-                let dx = Double(c.col) - cx, dy = Double(c.row) - cy
-                return dx * dx + dy * dy + Double(rng.next() % 1000) / 1000 * 3
+        case .beams:
+            // two beams sweep in from opposite ends of the diagonal and meet
+            // in the middle; a cell appears when the first beam reaches it
+            let span = max(1, Double(grid.cols - 1) + 0.6 * Double(grid.rows - 1))
+            let key = { (c: LogoCell) -> Double in
+                min((Double(c.col) + 0.6 * Double(c.row)) / span, 1 - (Double(c.col) + 0.6 * Double(c.row)) / span)
             }
-            order = (0..<count).sorted { keys[$0] < keys[$1] }
+            order = (0..<count).sorted { key(list[$0]) < key(list[$1]) }
+        case .wipe:
+            // a clean left-to-right front
+            order = (0..<count).sorted { list[$0].col < list[$1].col }
+        case .middleout:
+            // every cell lands together; the motion lives in the lead, which
+            // first gathers them into one centre line, then splits it open
+            order = Array(0..<count).shuffled(using: &rng)
         case .print, .decrypt, .errorcorrect:
             // top-left to bottom-right, the way one reads; decrypt's identity
             // is the scramble each cell runs before it resolves, and
@@ -15379,7 +15392,7 @@ final class LogoIntroEffect {
             order = (0..<count).sorted {
                 list[$0].row != list[$1].row ? list[$0].row > list[$1].row : list[$0].col < list[$1].col
             }
-        case .scattered, .rain, .crumble, .expand, .highlight, .colorshift:
+        case .scattered, .rain, .crumble, .expand, .highlight, .colorshift, .slice, .spray:
             // no spatial order at all: they arrive from everywhere, or the
             // whole wordmark arrives together
             order = Array(0..<count).shuffled(using: &rng)
@@ -15554,6 +15567,49 @@ final class LogoIntroView: NSView {
                         let dy = (cy - r.midY) * CGFloat(1 - ease)
                         cell.color.withAlphaComponent(cell.coverage * CGFloat(0.3 + 0.7 * ease)).setFill()
                         r.offsetBy(dx: dx, dy: dy).fill()
+                    case .middleout:
+                        // phase one: every cell leaves the centre point and
+                        // gathers into a single white line on the middle row;
+                        // phase two: the line splits open vertically into the
+                        // wordmark while the colours settle
+                        let local = min(1, max(0, (elapsed - (rt - effect.lead)) / effect.lead))
+                        let r = cellRect(cell)
+                        let centre = NSPoint(x: bounds.midX, y: bounds.midY)
+                        let midRow = NSPoint(x: r.midX, y: bounds.midY)
+                        let split = CGFloat(0.42)   // share of the lead spent forming the line
+                        var at = centre
+                        var white: CGFloat = 0.55
+                        if local > split {
+                            let q = CGFloat(min(1, (local - split) / (1 - split)))
+                            let ease = 0.5 - 0.5 * cos(q * .pi)
+                            at = NSPoint(x: midRow.x, y: midRow.y + (r.midY - midRow.y) * ease)
+                            white = 0.55 * (1 - ease)
+                        } else {
+                            let q = CGFloat(local / split)
+                            let ease = 0.5 - 0.5 * cos(q * .pi)
+                            at = NSPoint(x: centre.x + (midRow.x - centre.x) * ease, y: centre.y)
+                        }
+                        mixColor(cell.color, .white, white)
+                            .withAlphaComponent(cell.coverage).setFill()
+                        NSRect(x: at.x - r.width / 2, y: at.y - r.height / 2,
+                               width: r.width, height: r.height).fill()
+                    case .slice:
+                        // the two halves slide in from opposite sides
+                        let p = min(1, max(0, (elapsed - (rt - effect.lead)) / effect.lead))
+                        let left = Double(cell.col) < Double(grid.cols - 1) / 2
+                        let rem = CGFloat(bounds.width / 2) * (1 - p) * (1 - p)
+                        cell.color.withAlphaComponent(cell.coverage).setFill()
+                        cellRect(cell).offsetBy(dx: left ? -rem : rem, dy: 0).fill()
+                    case .spray:
+                        // cells fly out of a single nozzle at varying rates
+                        let p = min(1, max(0, (elapsed - (rt - effect.lead)) / effect.lead))
+                        let ease = CGFloat(1 - (1 - p) * (1 - p))
+                        let r = cellRect(cell)
+                        let nx = bounds.minX + bounds.width / 2
+                        let ny = bounds.minY
+                        cell.color.withAlphaComponent(cell.coverage * CGFloat(0.25 + 0.75 * ease)).setFill()
+                        r.offsetBy(dx: (nx - r.midX) * (1 - ease),
+                                   dy: (ny - r.midY) * (1 - ease)).fill()
                     case .decrypt:
                         // the cell scrambles through the shades until its
                         // number comes up; some ticks blank for the glitch
@@ -15602,7 +15658,8 @@ final class LogoIntroView: NSView {
                                    : mixColor(cell.color, .black, 0.55 * -level)
             }
             let heat = CGFloat(max(0, 1 - (elapsed - rt) / effect.settle))
-            if heat > 0.01 { color = mixColor(cell.color, .white, 0.7 * heat) }
+            let flare: CGFloat = effect.kind == .beams ? 0.9 : 0.7
+            if heat > 0.01 { color = mixColor(cell.color, .white, flare * heat) }
             color.withAlphaComponent(cell.coverage).setFill()
             cellRect(cell).fill()
         }

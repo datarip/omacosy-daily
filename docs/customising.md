@@ -236,7 +236,8 @@ next install applies it again, also after an uninstall.
 `LOGO_INTRO` in `settings.conf` names the effect the `Super+,` dashboard
 plays over its wordmark when it opens: `laseretch`, `sweep`, `waves`,
 `middleout`, `scattered`, `print`, `decrypt`, `errorcorrect`, `rain`,
-`crumble`, `expand`, `highlight` or `colorshift`. Empty or `random` picks a
+`crumble`, `expand`, `highlight`, `colorshift`, `beams`, `slice`, `wipe` or
+`spray`. Empty or `random` picks a
 different one each open, never repeating the last — the same rotation idea
 as omarchy.us, whose effect engine, ttfx (MIT), the vocabulary is a native
 take on. Reduce Motion (System Settings → Accessibility → Display) skips
