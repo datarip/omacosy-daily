@@ -72,6 +72,58 @@ func legible(_ c: C, on bg: C, ratio: Double) -> C {
     }
     return up ? C(r: 1, g: 1, b: 1) : C(r: 0, g: 0, b: 0)
 }
+func distance(_ a: C, _ b: C) -> Double {
+    let x = toOK(a), y = toOK(b)
+    let xa = x.C * cos(x.h * .pi / 180), xb = x.C * sin(x.h * .pi / 180)
+    let ya = y.C * cos(y.h * .pi / 180), yb = y.C * sin(y.h * .pi / 180)
+    return sqrt(pow(x.L - y.L, 2) + pow(xa - ya, 2) + pow(xb - yb, 2))
+}
+// The operator role: kept clear of the variable foreground and the number
+// colour, legible on the background. Same rule as themecore's
+// ColorMath.syntaxOperator, so the terminal and the editor exports agree.
+func syntaxOperator(_ ansi: [C], background: C) -> C {
+    guard ansi.count == 16 else { return ansi.last ?? C(r: 1, g: 1, b: 1) }
+    let seed = ansi[12], fg = ansi[7]
+    let red = ansi[1]
+    // `lightened(red, 15)` with the same integer byte rounding as themecore.
+    func lift(_ v: Double) -> Double {
+        let byte = (v * 255).rounded()
+        return (byte + (255 - byte) * 0.15).rounded() / 255
+    }
+    let number = C(r: lift(red.r), g: lift(red.g), b: lift(red.b))
+    func minDistance(_ c: C, _ anchors: [C]) -> Double {
+        anchors.map { distance(c, $0) }.min() ?? 0
+    }
+    if minDistance(seed, [fg, number]) >= 0.12 && contrast(seed, background) >= 4.5 {
+        return seed
+    }
+    let anchors = [fg, number, ansi[2], ansi[3], ansi[4], ansi[5], ansi[6]]
+    let o = toOK(seed)
+    var best = seed, bestScore = -1.0, bestGap = Double.greatestFiniteMagnitude
+    for dL in [0.0, 0.05, -0.05, 0.10, -0.10, 0.15, -0.15] {
+        let L = o.L + dL
+        guard L >= 0.25, L <= 0.92 else { continue }
+        for step in stride(from: 0.0, to: 360.0, by: 5.0) {
+            let hue = (o.h + step).truncatingRemainder(dividingBy: 360)
+            // Score the 8-bit colour that would actually be written, so this
+            // picks the same winner as themecore's hex-based search.
+            let raw = fit(L, o.C, hue)
+            let c = C(r: (min(1, max(0, raw.r)) * 255).rounded() / 255,
+                      g: (min(1, max(0, raw.g)) * 255).rounded() / 255,
+                      b: (min(1, max(0, raw.b)) * 255).rounded() / 255)
+            guard contrast(c, background) >= 4.5 else { continue }
+            let score = minDistance(c, anchors)
+            let gap = min(step, 360 - step)
+            if score > bestScore + 0.0001
+                || (abs(score - bestScore) <= 0.0001 && gap < bestGap) {
+                best = c
+                bestScore = score
+                bestGap = gap
+            }
+        }
+    }
+    return best
+}
 
 func read(_ dir: String) -> [String: C] {
     let text = (try? String(contentsOfFile: dir + "/sketchybar.sh", encoding: .utf8)) ?? ""
@@ -114,6 +166,7 @@ func readColoursToml(_ dir: String) -> [String: C]? {
 }
 
 var bg: C, fg: C, cursor: C, cursorText: C, selBG: C, selFG: C, accent: C, muted: C, peach: C
+var operatorColor: C
 var ansi: [C] = []
 var dark = true
 var swatches: [(String, C)] = []
@@ -131,6 +184,7 @@ if let t = readColoursToml(themeDir), let b = t["background"], let f = t["foregr
     dark = relLum(bg) < 0.2
     for i in 0..<16 { ansi.append(t["color\(i)"] ?? fg) }
     muted = ansi[8]
+    operatorColor = t["operator"] ?? syntaxOperator(ansi, background: bg)
     // peach is a role the prompt uses between red and green; a shipped theme
     // does not name one, so it is the midpoint of its own red and yellow
     let r = toOK(ansi[1]), y = toOK(ansi[3])
@@ -190,12 +244,14 @@ if let t = readColoursToml(themeDir), let b = t["background"], let f = t["foregr
     for h in base { ansi.append(legible(fit(brightL, chroma, harmonised(h)), on: bg, ratio: 4.5)) }
     ansi.append(legible(lab, on: bg, ratio: 10))
     peach = legible(fit(normalL, chroma, harmonised(55)), on: bg, ratio: 4.5)
+    operatorColor = p["OPERATOR"] ?? syntaxOperator(ansi, background: bg)
 }
 
 var env = ["OMACOSY_THEME='\(label)'",
            "OMACOSY_BG='\(bg.hex)'", "OMACOSY_FG='\(fg.hex)'",
            "OMACOSY_CURSOR='\(cursor.hex)'", "OMACOSY_CURSOR_TEXT='\(cursorText.hex)'",
-           "OMACOSY_SEL_BG='\(selBG.hex)'", "OMACOSY_SEL_FG='\(selFG.hex)'"]
+           "OMACOSY_SEL_BG='\(selBG.hex)'", "OMACOSY_SEL_FG='\(selFG.hex)'",
+           "OMACOSY_OPERATOR='\(operatorColor.hex)'"]
 for (i, c) in ansi.enumerated() {
     env.append("OMACOSY_\(names[i])='\(c.hex)'")
     env.append("OMACOSY_P\(i)='\(c.hex)'")

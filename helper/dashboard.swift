@@ -1010,7 +1010,7 @@ final class OptionsDocView: NSView {
                                    width: sz.width, height: sz.height)
             }
             if let slider = row.slider {
-                let w: CGFloat = 220
+                let w: CGFloat = 176
                 slider.frame = NSRect(x: bounds.width - w, y: bounds.height - (top + rowH / 2) - 7,
                                       width: w, height: 14)
             }
@@ -6982,6 +6982,10 @@ final class PaletteModel {
     private(set) var method = "magic"
     private(set) var mode = "auto"
     private(set) var resolvedMode = "dark"
+    // classic | grouped | neighboring | expressive
+    private(set) var syntax = "classic"
+    // token -> hex for the mock terminal, from `palette syntax`
+    private(set) var syntaxColors: [String: String] = [:]
     private(set) var strips: [String: [String]] = [:]
     private(set) var histogram: [Int] = []
     private(set) var shades: [String: String] = [:]
@@ -7021,6 +7025,7 @@ final class PaletteModel {
         var method: String
         var mode: String
         var resolvedMode: String
+        var syntax: String
         var sourceName: String?
         var appOverrides: [String: [String: String]]
         var toolOpacity: Int?
@@ -7093,6 +7098,16 @@ final class PaletteModel {
         ("bright_fg", "Bright Foreground"),
         ("orange", "Orange"),
         ("brown", "Brown"),
+        ("operator", "Operator"),
+        ("syntax_keyword", "Keyword"),
+        ("syntax_function", "Function"),
+        ("syntax_string", "String"),
+        ("syntax_number", "Number"),
+        ("syntax_type", "Type"),
+        ("syntax_variable", "Variable"),
+        ("syntax_property", "Property"),
+        ("syntax_comment", "Comment"),
+        ("syntax_punctuation", "Punctuation"),
     ]
 
     func pinnedShadeCount() -> Int {
@@ -7117,6 +7132,7 @@ final class PaletteModel {
     private(set) var modeGroups: [(label: String, modes: [(value: String, label: String)])] = []
     private(set) var paletteGeneration = 0
     private var renderGeneration = 0
+    private var syntaxLoadGeneration = 0
     private var renderWork: DispatchWorkItem?
     private var recentWork: DispatchWorkItem?
     private var stripGeneration = 0
@@ -7182,6 +7198,10 @@ final class PaletteModel {
         method = (pal["method"] as? String) ?? "magic"
         mode = (pal["mode"] as? String) ?? "auto"
         resolvedMode = (pal["resolvedMode"] as? String) ?? "dark"
+        syntax = (pal["syntax"] as? String) ?? "classic"
+        if !["classic", "grouped", "neighboring", "expressive"].contains(syntax) {
+            syntax = "classic"
+        }
         adjustments = EditorAdjustments()
         if let adj = pal["adjustments"] as? [String: Any] {
             for f in EditorAdjustments.fields {
@@ -7283,8 +7303,9 @@ final class PaletteModel {
     private func snapshot() -> HistoryEntry {
         HistoryEntry(baseColors: baseColors, extendedHex: extendedHex,
                      adjustments: adjustments, curve: curve, method: method,
-                     mode: mode, resolvedMode: resolvedMode, sourceName: sourceName,
-                     appOverrides: appOverrides, toolOpacity: toolOpacity)
+                     mode: mode, resolvedMode: resolvedMode, syntax: syntax,
+                     sourceName: sourceName, appOverrides: appOverrides,
+                     toolOpacity: toolOpacity)
     }
 
     private func pushHistory(_ key: String?) {
@@ -7323,6 +7344,7 @@ final class PaletteModel {
         method = e.method
         mode = e.mode
         resolvedMode = e.resolvedMode
+        syntax = e.syntax
         sourceName = e.sourceName
         appOverrides = e.appOverrides
         toolOpacity = e.toolOpacity
@@ -7511,6 +7533,28 @@ final class PaletteModel {
                 let role = String(key.dropFirst(3))
                 return cleanHex(extendedHex[key] ?? "") ?? derivedUIRole(role)
             }
+            if key == "operator" {
+                return extendedHex[key] ?? syntaxColors["operator"]
+                    ?? shades["operator"]
+                    ?? (baseColors.indices.contains(12) ? baseColors[12] : "#000000")
+            }
+            if key.hasPrefix("syntax_") {
+                let role = String(key.dropFirst(7))
+                let slot: Int
+                switch role {
+                case "keyword": slot = 13
+                case "function": slot = 4
+                case "string": slot = 2
+                case "number": slot = 1
+                case "type": slot = 3
+                case "variable": slot = 7
+                case "property": slot = 6
+                case "comment": slot = 8
+                default: slot = 12
+                }
+                return extendedHex[key] ?? syntaxColors[role]
+                    ?? (baseColors.indices.contains(slot) ? baseColors[slot] : "#000000")
+            }
             return extendedHex[key] ?? shades[key] ?? defaultExtended(baseColors, accent: nil)[key]
         case .override(let app, let key):
             if let ov = appOverrides[app]?[key] { return ov }
@@ -7680,6 +7724,7 @@ final class PaletteModel {
         // Aether's orange is the red slot lightened 15%; its accent is the blue
         // slot. These are the roles the ported templates bind to.
         case "orange": return lightenedHex(slot(1), percent: 15)
+        case "operator": return shades["operator"] ?? slot(12)
         case "lighter_bg": return mixHex(slot(0), "#ffffff", 10)
         case "light_fg": return lightenedHex(slot(7, "#ffffff"), percent: 15)
         case "bright_fg": return lightenedHex(slot(7, "#ffffff"), percent: 25)
@@ -7731,6 +7776,53 @@ final class PaletteModel {
         toolOpacity = value
         edited()
         update()
+    }
+
+    func setSyntaxVariety(_ value: String) {
+        let allowed = ["classic", "grouped", "neighboring", "expressive"]
+        guard allowed.contains(value), syntax != value else { return }
+        pushHistory(nil)
+        syntax = value
+        edited()
+        update()
+        loadSyntax(finalColors)
+    }
+
+    // The token map the mock terminal draws with. It follows the rendered
+    // palette and the syntax variety, and is the same map the exporters use.
+    private func loadSyntax(_ colors: [String]) {
+        guard colors.count == 16 else { return }
+        syntaxLoadGeneration += 1
+        let generation = syntaxLoadGeneration
+        let csv = colors.joined(separator: ",")
+        let variety = syntax
+        var args = "palette syntax --colors \(shellQuote(csv)) --variety \(variety)"
+        if let pin = extendedHex["operator"], !pin.isEmpty {
+            args += " --operator \(shellQuote(pin))"
+        }
+        var pins: [String: String] = [:]
+        for (key, value) in extendedHex where key.hasPrefix("syntax_") {
+            pins[String(key.dropFirst(7))] = value
+        }
+        if !pins.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: pins, options: [.sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            args += " --syntax-json \(shellQuote(json))"
+        }
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            let (code, out) = self.themecore("\(args) --json")
+            guard code == 0, let data = out.data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: String]
+            else { return }
+            DispatchQueue.main.async {
+                // A later palette/variety change wins even if this process
+                // finishes last.
+                guard self.syntaxLoadGeneration == generation else { return }
+                self.syntaxColors = obj
+                self.update()
+            }
+        }
     }
 
     @discardableResult
@@ -7847,6 +7939,7 @@ final class PaletteModel {
                 self.update()
                 self.loadShades(final)
                 self.loadRoles(final, accent: self.finalExtended["accent"])
+                self.loadSyntax(final)
             }
         }
     }
@@ -7859,8 +7952,17 @@ final class PaletteModel {
             guard let self else { return }
             let (code, out) = self.themecore("palette shades --colors \(shellQuote(csv)) --json")
             guard code == 0, let data = out.data(using: .utf8),
-                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: String]
+                  var obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: String]
             else { return }
+            // The operator is Omacosy's own syntax role, not one of Aether's
+            // shades, but the swatch and the template overrides read it from
+            // the same dictionary.
+            let (ocode, oout) = self.themecore("palette operator --colors \(shellQuote(csv)) --json")
+            if ocode == 0, let odata = oout.data(using: .utf8),
+               let oobj = (try? JSONSerialization.jsonObject(with: odata)) as? [String: String],
+               let op = oobj["operator"] {
+                obj["operator"] = op
+            }
             DispatchQueue.main.async {
                 self.shades = obj
                 self.update()
@@ -8853,55 +8955,186 @@ final class SemanticSectionView: NSView {
     struct Group {
         let title: String
         let cards: [Card]
+        let variantCards: [Card]
+        let fullWidth: Bool
+
+        init(title: String, cards: [Card], variantCards: [Card] = [],
+             fullWidth: Bool = false) {
+            self.title = title
+            self.cards = cards
+            self.variantCards = variantCards
+            self.fullWidth = fullWidth
+        }
     }
 
-    var groups: [Group] = [] { didSet { needsDisplay = true } }
+    var groups: [Group] = [] { didSet { needsDisplay = true; needsLayout = true } }
     var editTarget: PaletteModel.EditTarget? { didSet { needsDisplay = true } }
     // Keys whose value is an explicit pin (a shade or the UI Background), so
     // the "Reset N pinned" count has something visible to point at.
     var pinnedKeys: Set<String> = [] { didSet { needsDisplay = true } }
     var onEdit: ((PaletteModel.EditTarget) -> Void)?
+    var syntaxVariety = "classic" { didSet { varietyButton.title = Self.varietyTitle(syntaxVariety) } }
+    var onVariety: ((String) -> Void)?
+
+    private let varietyButton = PopupButtonView()
+    private static func varietyTitle(_ value: String) -> String {
+        switch value {
+        case "grouped": return "Variety: Grouped"
+        case "neighboring": return "Variety: Neighboring"
+        case "expressive": return "Variety: Expressive"
+        default: return "Variety: Classic"
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        varietyButton.isHidden = true
+        varietyButton.onClick = { [weak self] in self?.showVarietyPicker() }
+        addSubview(varietyButton)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    private func showVarietyPicker() {
+        let rows = [
+            MethodPicker.Row(header: nil, value: "classic",
+                             label: "Classic — Shipped"),
+            MethodPicker.Row(header: nil, value: "grouped",
+                             label: "Grouped — One colour"),
+            MethodPicker.Row(header: nil, value: "neighboring",
+                             label: "Neighboring — Close"),
+            MethodPicker.Row(header: nil, value: "expressive",
+                             label: "Expressive — Wider"),
+        ]
+        MethodPicker.present(from: varietyButton, rows: rows, strips: [:],
+                             currentMethod: syntaxVariety, title: "Syntax Variety",
+                             liveApply: true) { [weak self] value in
+            self?.onVariety?(value)
+        }
+    }
 
     static let groupH: CGFloat = 86
     static let rowGap: CGFloat = 8
+    // One extra read-only row for the derived variants under the base
+    // swatches (card + label).
+    static let variantRowH: CGFloat = 50
 
-    static func height() -> CGFloat { groupH * 3 + rowGap * 2 }
+    // Rows are counted the same way `boxes()` places them, so a full-width
+    // group gets its own row and the section's height always covers it.
+    static func rowCount(_ groups: [Group]) -> Int {
+        var rows = 0
+        var halfRow = false
+        for group in groups {
+            if group.fullWidth {
+                if halfRow { rows += 1; halfRow = false }
+                rows += 1
+            } else if halfRow {
+                rows += 1
+                halfRow = false
+            } else {
+                halfRow = true
+            }
+        }
+        if halfRow { rows += 1 }
+        return max(1, rows)
+    }
 
-    private func boxes() -> [(group: Group, box: NSRect, cards: [NSRect])] {
+    static func height(for groups: [Group]) -> CGFloat {
+        let rows = rowCount(groups)
+        let extras = groups.reduce(CGFloat(0)) {
+            $0 + ($1.variantCards.isEmpty ? 0 : Self.variantRowH)
+        }
+        return groupH * CGFloat(rows) + rowGap * CGFloat(rows - 1) + extras
+    }
+
+    private func boxes() -> [(group: Group, box: NSRect, cards: [NSRect],
+                              variants: [NSRect])] {
         guard !groups.isEmpty, bounds.width > 0 else { return [] }
         let colGap: CGFloat = 8
         let colW = (bounds.width - colGap) / 2
-        var out: [(Group, NSRect, [NSRect])] = []
-        for (i, group) in groups.enumerated() {
-            let col = i % 2, row = i / 2
-            let x = CGFloat(col) * (colW + colGap)
-            let top = CGFloat(row) * (Self.groupH + Self.rowGap)
-            let box = NSRect(x: x, y: bounds.height - top - Self.groupH,
-                             width: colW, height: Self.groupH)
+        var out: [(Group, NSRect, [NSRect], [NSRect])] = []
+        var row = 0, col = 0
+        var extra: CGFloat = 0
+        for group in groups {
+            // A full-width group starts on a fresh row, even after a lone
+            // half-width card.
+            if group.fullWidth && col != 0 { row += 1; col = 0 }
+            let x = group.fullWidth ? 0 : CGFloat(col) * (colW + colGap)
+            let width = group.fullWidth ? bounds.width : colW
+            let groupHeight = Self.groupH + (group.variantCards.isEmpty ? 0 : Self.variantRowH)
+            let top = CGFloat(row) * (Self.groupH + Self.rowGap) + extra
+            let box = NSRect(x: x, y: bounds.height - top - groupHeight,
+                             width: width, height: groupHeight)
             let padX: CGFloat = 10
             let n = max(1, group.cards.count)
             let gap: CGFloat = 5
-            let cardW = (box.width - padX * 2 - CGFloat(n - 1) * gap) / CGFloat(n)
+            let naturalW = (box.width - padX * 2 - CGFloat(n - 1) * gap) / CGFloat(n)
+            // Syntax swatches stay small so more roles fit on the row later.
+            let cardW = (group.fullWidth || n == 1) ? min(naturalW, 110) : naturalW
             var rects: [NSRect] = []
+            // The base cards stay 30 pt below the group top; a taller group
+            // grows downward to fit the variant row.
+            let cardTop = box.maxY - 30
             for j in 0..<group.cards.count {
                 let cx = box.minX + padX + CGFloat(j) * (cardW + gap)
-                rects.append(NSRect(x: cx, y: box.minY + 22, width: cardW, height: 34))
+                rects.append(NSRect(x: cx, y: cardTop - 34, width: cardW, height: 34))
             }
-            out.append((group, box, rects))
+            var variantRects: [NSRect] = []
+            if !group.variantCards.isEmpty {
+                let vn = max(1, group.variantCards.count)
+                let vGap: CGFloat = 5
+                let vW = min((box.width - padX * 2 - CGFloat(vn - 1) * vGap) / CGFloat(vn), 130)
+                let vTop = cardTop - 58
+                for j in 0..<group.variantCards.count {
+                    let cx = box.minX + padX + CGFloat(j) * (vW + vGap)
+                    variantRects.append(NSRect(x: cx, y: vTop - 24, width: vW, height: 24))
+                }
+                extra += Self.variantRowH
+            }
+            out.append((group, box, rects, variantRects))
+            if group.fullWidth {
+                row += 1
+                col = 0
+            } else {
+                col += 1
+                if col == 2 { row += 1; col = 0 }
+            }
         }
         return out
     }
 
+    override func layout() {
+        super.layout()
+        guard bounds.width > 0,
+              let box = boxes().first(where: { $0.group.title == "Syntax" })?.box else {
+            varietyButton.isHidden = true
+            return
+        }
+        // In the group's header row, beside the SYNTAX title and above the
+        // cards: the same 20 pt trigger height the Method/Presets pickers use.
+        let w: CGFloat = 220
+        varietyButton.isHidden = false
+        varietyButton.frame = NSRect(x: box.maxX - 10 - w, y: box.maxY - 26,
+                                     width: w, height: 20)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        for (group, box, rects) in boxes() {
+        for (group, box, rects, variantRects) in boxes() {
             let boxPath = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
             palette.itemBG.withAlphaComponent(0.22).setFill()
             boxPath.fill()
-            palette.muted.withAlphaComponent(0.15).setStroke()
+            // The full-width Syntax row has a long bottom edge; keep it
+            // quieter than the half-width groups so it does not read as a
+            // rule under the swatch labels.
+            palette.muted.withAlphaComponent(group.fullWidth ? 0.08 : 0.15).setStroke()
             boxPath.lineWidth = 1
             boxPath.stroke()
             drawTopLeft(group.title.uppercased(), nerdFont("Bold", 9), palette.muted,
                         x: box.minX + 10, top: bounds.height - box.maxY + 8, height: bounds.height)
+            if group.title == "Syntax" {
+                drawTopLeft("Variants follow the dropdown.", nerdFont("Regular", 9), palette.muted,
+                            x: box.minX + 62, top: bounds.height - box.maxY + 9,
+                            height: bounds.height)
+            }
             for (j, card) in group.cards.enumerated() {
                 let r = rects[j]
                 let path = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(4), yRadius: windowCornerRadius(4))
@@ -8909,7 +9142,7 @@ final class SemanticSectionView: NSView {
                 path.fill()
                 let light = relativeLuminance(nsColor(fromHex: card.hex)) > 0.5
                 let main: NSColor = light ? .black : .white
-                drawMidLeft(card.hex, nerdFont("Regular", 8), main.withAlphaComponent(0.62),
+                drawMidLeft(card.hex, nerdFont("Regular", 8), main.withAlphaComponent(0.85),
                             x: r.minX + 5, midTop: bounds.height - r.maxY + r.height - 9,
                             height: bounds.height)
                 drawMidCenter(card.label, nerdFont("Regular", 9), palette.label.withAlphaComponent(0.72),
@@ -8944,12 +9177,28 @@ final class SemanticSectionView: NSView {
                     }
                 }
             }
+            for (j, card) in group.variantCards.enumerated() {
+                let r = variantRects[j]
+                let path = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(3),
+                                        yRadius: windowCornerRadius(3))
+                nsColor(fromHex: card.hex).setFill()
+                path.fill()
+                let light = relativeLuminance(nsColor(fromHex: card.hex)) > 0.5
+                let main: NSColor = light ? .black : .white
+                drawMidLeft(card.hex, nerdFont("Regular", 7), main.withAlphaComponent(0.85),
+                            x: r.minX + 4, midTop: bounds.height - r.maxY + r.height - 8,
+                            height: bounds.height)
+                drawMidCenter(card.label, nerdFont("Regular", 8),
+                              palette.label.withAlphaComponent(0.72),
+                              centerX: r.midX, midTop: bounds.height - r.minY + 4,
+                              height: bounds.height)
+            }
         }
     }
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        for (group, _, rects) in boxes() {
+        for (group, _, rects, _) in boxes() {
             for (j, card) in group.cards.enumerated() {
                 guard rects[j].contains(p) else { continue }
                 if let key = card.key { onEdit?(.extended(key)); return }
@@ -10607,8 +10856,8 @@ final class PreviewPaneView: NSView {
 
     // The window floats over the desktop, stored normalised to the screen rect
     // so it keeps its place when the pane is resized.
-    private var termOrigin = NSPoint(x: 0.17, y: 0.19)
-    private var termSize = NSSize(width: 0.66, height: 0.62)
+    private var termOrigin = NSPoint(x: 0.16, y: 0.14)
+    private var termSize = NSSize(width: 0.68, height: 0.70)
     private var dragging = false
     private var dragStart = NSPoint.zero
     private var dragOrigin = NSPoint.zero
@@ -10625,20 +10874,53 @@ final class PreviewPaneView: NSView {
                height: screen.height * termSize.height)
     }
 
-    // The plan's fixed syntax map: keyword 5, string 2, comment 8, function 4,
-    // number 3, type 6, plain 7.
-    private enum Token { case kw, str, cmt, fn, num, type, fg }
+    // The mock terminal reads the same token map the exporters use, so the
+    // Syntax Variety control is visible here too.
+    private enum Token { case kw, str, strEsc, cmt, cmtDoc, attr, fn, fnBuiltin,
+                              num, boolean, type, typeBuiltin, property, punct, op, fg }
 
-    private func tokenColor(_ t: Token, _ c: [NSColor]) -> NSColor {
-        func pick(_ i: Int) -> NSColor { c.indices.contains(i) ? c[i] : .white }
+    private func tokenColor(_ t: Token, _ c: [NSColor], syntax: [String: String]) -> NSColor {
+        func pick(_ key: String, _ slot: Int) -> NSColor {
+            if let hex = syntax[key] { return nsColor(fromHex: hex) }
+            return c.indices.contains(slot) ? c[slot] : .white
+        }
         switch t {
-        case .fg: return pick(7)
-        case .kw: return pick(5)
-        case .str: return pick(2)
-        case .cmt: return pick(8)
-        case .fn: return pick(4)
-        case .num: return pick(3)
-        case .type: return pick(6)
+        case .fg: return pick("variable", 7)
+        case .kw: return pick("keyword", 13)
+        case .str: return pick("string", 2)
+        case .strEsc: return pick("string.escape", 13)
+        case .cmt: return pick("comment", 8)
+        case .cmtDoc: return pick("comment.doc", 8)
+        case .attr: return pick("attribute", 13)
+        case .fn: return pick("function", 4)
+        case .fnBuiltin: return pick("function.builtin", 6)
+        case .num: return pick("number", 1)
+        case .boolean: return pick("boolean", 1)
+        case .type: return pick("type", 3)
+        case .typeBuiltin: return pick("type.builtin", 7)
+        case .property: return pick("property", 6)
+        case .punct: return pick("punctuation", 8)
+        case .op: return pick("operator", 12)
+        }
+    }
+
+    // Split + - * / < > out of the plain runs, so the sample shows the
+    // operator role without every language needing a hand-written token map.
+    private func operatorSegments(_ line: [(String, Token)]) -> [(String, Token)] {
+        line.flatMap { seg -> [(String, Token)] in
+            guard seg.1 == .fg else { return [seg] }
+            var out: [(String, Token)] = []
+            var plain = ""
+            for ch in seg.0 {
+                if "+-*/<>=!&|".contains(ch) {
+                    if !plain.isEmpty { out.append((plain, .fg)); plain = "" }
+                    out.append((String(ch), .op))
+                } else {
+                    plain.append(ch)
+                }
+            }
+            if !plain.isEmpty { out.append((plain, .fg)) }
+            return out
         }
     }
 
@@ -10647,57 +10929,57 @@ final class PreviewPaneView: NSView {
         let name = (String(Self.fileNames[max(0, min(Self.fileNames.count - 1, lang))].dropLast(2)), Token.fn)
         switch lang {
         case 0: return [ // C
-            [("// fibonacci", .cmt)],
-            [("char *", .type), ("name", .fg), (" = ", .fg), ("\"" + name.0 + "\"", .str), (";", .fg)],
-            [("int ", .type), (name.0, .fn), ("(int n) {", .fg)],
-            [("  ", .fg), ("if", .kw), (" (n < ", .fg), ("2", .num), (") ", .fg), ("return", .kw), (" n;", .fg)],
-            [("  ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(n-", .fg), ("1", .num),
-             (") + ", .fg), (name.0, .fn), ("(n-", .fg), ("2", .num), (");", .fg)],
-            [("}", .fg)],
+            [("/** fibonacci */", .cmtDoc)],
+            [("int ", .typeBuiltin), (name.0, .fn), ("(", .punct), ("int", .typeBuiltin), (" n", .fg), (") {", .punct)],
+            [("  ", .fg), ("if", .kw), (" ", .fg), ("(", .punct), ("n", .fg), (" ", .fg), ("<", .op), (" ", .fg), ("2", .num), (") ", .punct), ("return", .kw), (" n", .fg), (";", .punct)],
+            [("  ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(", .punct), ("n", .fg), (" - ", .fg), ("1", .num), (") ", .punct), ("+", .op), (" ", .fg), (name.0, .fn), ("(", .punct), ("n", .fg), (" - ", .fg), ("2", .num), (");", .punct)],
+            [("  ", .fg), ("bool", .typeBuiltin), (" ok", .fg), (" = ", .fg), ("true", .boolean), (";", .punct)],
+            [("  ", .fg), ("printf", .fnBuiltin), ("(", .punct), ("\"%d", .str), ("\\n", .strEsc), ("\", ", .str), (name.0, .fn), ("(", .punct), ("8", .num), ("));", .punct)],
+            [("}", .punct)],
         ]
         case 1: return [ // JavaScript
-            [("// fibonacci", .cmt)],
-            [("const", .kw), (" name = ", .fg), ("\"" + name.0 + "\"", .str), (";", .fg)],
-            [("function", .kw), (" ", .fg), (name.0, .fn), ("(n) {", .fg)],
-            [("  ", .fg), ("if", .kw), (" (n < ", .fg), ("2", .num), (") ", .fg), ("return", .kw), (" n;", .fg)],
-            [("  ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(n - ", .fg), ("1", .num),
-             (") + ", .fg), (name.0, .fn), ("(n - ", .fg), ("2", .num), (");", .fg)],
-            [("}", .fg)],
+            [("/** fibonacci */", .cmtDoc)],
+            [("function", .kw), (" ", .fg), (name.0, .fn), ("(", .punct), ("n", .fg), (") {", .punct)],
+            [("  ", .fg), ("if", .kw), (" ", .fg), ("(", .punct), ("n", .fg), (" ", .fg), ("<", .op), (" ", .fg), ("2", .num), (") ", .punct), ("return", .kw), (" n", .fg), (";", .punct)],
+            [("  ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(", .punct), ("n", .fg), (" - ", .fg), ("1", .num), (") ", .punct), ("+", .op), (" ", .fg), (name.0, .fn), ("(", .punct), ("n", .fg), (" - ", .fg), ("2", .num), (");", .punct)],
+            [("  ", .fg), ("const", .kw), (" ok", .fg), (" = ", .fg), ("true", .boolean), (";", .punct)],
+            [("  ", .fg), ("console", .property), (".", .punct), ("log", .fnBuiltin), ("(", .punct), ("\"%d", .str), ("\\n", .strEsc), ("\", ", .str), ("ok", .fg), (");", .punct)],
+            [("}", .punct)],
         ]
         case 2: return [ // Python
-            [("# fibonacci", .cmt)],
-            [("name", .fg), (" = ", .fg), ("\"" + name.0 + "\"", .str)],
-            [("def", .kw), (" ", .fg), (name.0, .fn), ("(n):", .fg)],
-            [("    ", .fg), ("if", .kw), (" n < ", .fg), ("2", .num), (": ", .fg), ("return", .kw), (" n", .fg)],
-            [("    ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(n - ", .fg), ("1", .num),
-             (") + ", .fg), (name.0, .fn), ("(n - ", .fg), ("2", .num), (")", .fg)],
+            [("\"\"\"fibonacci\"\"\"", .cmtDoc)],
+            [("def", .kw), (" ", .fg), (name.0, .fn), ("(", .punct), ("n", .fg), ("):", .punct)],
+            [("    ", .fg), ("if", .kw), (" n ", .fg), ("<", .op), (" ", .fg), ("2", .num), (": ", .punct), ("return", .kw), (" n", .fg)],
+            [("    ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(", .punct), ("n", .fg), (" - ", .fg), ("1", .num), (") ", .punct), ("+", .op), (" ", .fg), (name.0, .fn), ("(", .punct), ("n", .fg), (" - ", .fg), ("2", .num), (")", .punct)],
+            [("    ", .fg), ("ok", .fg), (" = ", .fg), ("True", .boolean)],
+            [("    ", .fg), ("print", .fnBuiltin), ("(", .punct), (name.0, .fn), ("(", .punct), ("8", .num), ("))", .punct)],
         ]
         case 3: return [ // Rust
-            [("// fibonacci", .cmt)],
-            [("let", .kw), (" name = ", .fg), ("\"" + name.0 + "\"", .str), (";", .fg)],
-            [("fn", .kw), (" ", .fg), (name.0, .fn), ("(n: ", .fg), ("u32", .type), (") -> ", .fg), ("u32", .type), (" {", .fg)],
-            [("    ", .fg), ("if", .kw), (" n < ", .fg), ("2", .num), (" { n } ", .fg), ("else", .kw), (" {", .fg)],
-            [("        ", .fg), (name.0, .fn), ("(n - ", .fg), ("1", .num),
-             (") + ", .fg), (name.0, .fn), ("(n - ", .fg), ("2", .num), (")", .fg)],
-            [("    }", .fg)],
+            [("/// fibonacci", .cmtDoc)],
+            [("fn", .kw), (" ", .fg), (name.0, .fn), ("(", .punct), ("n: ", .fg), ("u32", .typeBuiltin), (")", .punct), (" -> ", .fg), ("u32", .typeBuiltin), (" {", .punct)],
+            [("    ", .fg), ("if", .kw), (" n ", .fg), ("<", .op), (" ", .fg), ("2", .num), (" { ", .punct), ("return", .kw), (" n; ", .fg), ("}", .punct)],
+            [("    ", .fg), (name.0, .fn), ("(", .punct), ("n", .fg), (" - ", .fg), ("1", .num), (") ", .punct), ("+", .op), (" ", .fg), (name.0, .fn), ("(", .punct), ("n", .fg), (" - ", .fg), ("2", .num), (")", .punct)],
+            [("    ", .fg), ("let", .kw), (" ok", .fg), (" = ", .fg), ("true", .boolean), (";", .punct)],
+            [("    ", .fg), ("println!", .fnBuiltin), ("(", .punct), ("\"{}\"", .str), (", ", .fg), (name.0, .fn), ("(", .punct), ("8", .num), ("));", .punct)],
+            [("}", .punct)],
         ]
         case 4: return [ // Go
-            [("// fibonacci", .cmt)],
-            [("name", .fg), (" := ", .fg), ("\"" + name.0 + "\"", .str)],
-            [("func", .kw), (" ", .fg), (name.0, .fn), ("(n ", .fg), ("int", .type), (") ", .fg), ("int", .type), (" {", .fg)],
-            [("    ", .fg), ("if", .kw), (" n < ", .fg), ("2", .num), (" { ", .fg), ("return", .kw), (" n }", .fg)],
-            [("    ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(n-", .fg), ("1", .num),
-             (") + ", .fg), (name.0, .fn), ("(n-", .fg), ("2", .num), (")", .fg)],
-            [("}", .fg)],
+            [("// fibonacci", .cmtDoc)],
+            [("func", .kw), (" ", .fg), (name.0, .fn), ("(", .punct), ("n ", .fg), ("int", .typeBuiltin), (") ", .punct), ("int", .typeBuiltin), (" {", .punct)],
+            [("    ", .fg), ("if", .kw), (" n ", .fg), ("<", .op), (" ", .fg), ("2", .num), (" { ", .punct), ("return", .kw), (" n ", .fg), ("}", .punct)],
+            [("    ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(", .punct), ("n-", .fg), ("1", .num), (") ", .punct), ("+", .op), (" ", .fg), (name.0, .fn), ("(", .punct), ("n-", .fg), ("2", .num), (")", .punct)],
+            [("    ", .fg), ("ok", .fg), (" := ", .op), ("true", .boolean)],
+            [("    ", .fg), ("fmt", .property), (".", .punct), ("Println", .fnBuiltin), ("(", .punct), (name.0, .fn), ("(", .punct), ("8", .num), ("))", .punct)],
+            [("}", .punct)],
         ]
         default: return [ // Java
-            [("// fibonacci", .cmt)],
-            [("String", .type), (" name = ", .fg), ("\"" + name.0 + "\"", .str), (";", .fg)],
-            [("int ", .type), (name.0, .fn), ("(int n) {", .fg)],
-            [("    ", .fg), ("if", .kw), (" (n < ", .fg), ("2", .num), (") ", .fg), ("return", .kw), (" n;", .fg)],
-            [("    ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(n-", .fg), ("1", .num),
-             (") + ", .fg), (name.0, .fn), ("(n-", .fg), ("2", .num), (");", .fg)],
-            [("}", .fg)],
+            [("/** fibonacci */", .cmtDoc)],
+            [("int ", .typeBuiltin), (name.0, .fn), ("(", .punct), ("int", .typeBuiltin), (" n", .fg), (") {", .punct)],
+            [("    ", .fg), ("if", .kw), (" ", .fg), ("(", .punct), ("n", .fg), (" ", .fg), ("<", .op), (" ", .fg), ("2", .num), (") ", .punct), ("return", .kw), (" n", .fg), (";", .punct)],
+            [("    ", .fg), ("return", .kw), (" ", .fg), (name.0, .fn), ("(", .punct), ("n", .fg), (" - ", .fg), ("1", .num), (") ", .punct), ("+", .op), (" ", .fg), (name.0, .fn), ("(", .punct), ("n", .fg), (" - ", .fg), ("2", .num), (");", .punct)],
+            [("    ", .fg), ("boolean", .typeBuiltin), (" ok", .fg), (" = ", .fg), ("true", .boolean), (";", .punct)],
+            [("    ", .fg), ("System", .typeBuiltin), (".", .punct), ("out", .property), (".", .punct), ("println", .fnBuiltin), ("(", .punct), (name.0, .fn), ("(", .punct), ("8", .num), ("));", .punct)],
+            [("}", .punct)],
         ]
         }
     }
@@ -10766,7 +11048,16 @@ final class PreviewPaneView: NSView {
                       (" ", cols[7]), ("\u{e0b0} main", cols[3])])
             drawLine([("\u{f0da} ", cols[2]), ("bat ", cols[7]),
                       (Self.fileNames[selectedLanguage], cols[7])])
-            drawLine([("# syntax preview, live from the palette", cols[8])])
+            // A compact legend for the token families and their neighbouring
+            // variants: the Syntax Variety control changes this line.
+            let legend: [(String, Token)] = [
+                ("@bench ", .attr), ("fn ", .kw), ("parse", .fn), ("(", .punct),
+                ("\"x", .str), ("\\n", .strEsc), ("\", ", .str),
+                ("42", .num), (")", .punct), (" -> ", .op), ("true", .boolean),
+            ]
+            drawLine(legend.map {
+                ($0.0, tokenColor($0.1, cols, syntax: model.syntaxColors))
+            })
             y -= 4
         }
 
@@ -10789,7 +11080,9 @@ final class PreviewPaneView: NSView {
             }
             y -= 22
             for line in sample(selectedLanguage) {
-                drawLine(line.map { ($0.0, tokenColor($0.1, cols)) })
+                drawLine(operatorSegments(line).map {
+                    ($0.0, tokenColor($0.1, cols, syntax: model.syntaxColors))
+                })
             }
         }
     }
@@ -11153,6 +11446,7 @@ final class PaletteCanvasView: NSView {
         doc.colorCards.onToggleLock = { [weak self] i in self?.model?.toggleLock(i) }
         doc.colorCards.onToggleSelect = { [weak self] i in self?.model?.toggleSelect(i) }
         doc.semantic.onEdit = { [weak self] target in self?.model?.selectForEdit(target) }
+        doc.semantic.onVariety = { [weak self] value in self?.model?.setSyntaxVariety(value) }
         doc.template.onSelectApp = { [weak self] i in self?.model?.selectTemplateApp(i) }
         doc.template.onEdit = { [weak self] app, key in
             self?.model?.selectForEdit(.override(app, key))
@@ -11181,6 +11475,12 @@ final class PaletteCanvasView: NSView {
             // a pinned shade shows its pin; otherwise the derived value
             model.extendedHex[key] ?? model.shades[key] ?? base(fallback)
         }
+        // The syntax base roles live in their own map: `loadShades` replaces
+        // the Aether dictionary wholesale, so they must not share it.
+        func syntaxShade(_ role: String, _ fallback: Int) -> String {
+            let pin = role == "operator" ? "operator" : "syntax_\(role)"
+            return model.extendedHex[pin] ?? model.syntaxColors[role] ?? base(fallback)
+        }
         func ext(_ key: String) -> String {
             model.finalExtended[key] ?? model.extendedHex[key] ?? "#000000"
         }
@@ -11189,6 +11489,19 @@ final class PaletteCanvasView: NSView {
         func uiHex(_ role: String) -> String {
             cleanHex(model.extendedHex["ui_\(role)"] ?? "") ?? model.derivedUIRole(role)
         }
+        // Read-only variants: the row that visibly follows the Syntax Variety
+        // dropdown. The base swatches above stay the tunable families.
+        func syntaxVariant(_ key: String, _ fallback: Int) -> String {
+            model.syntaxColors[key] ?? base(fallback)
+        }
+        let variantCards: [SemanticSectionView.Card] = [
+            .init(label: "String/Escape", hex: syntaxVariant("string.escape", 2)),
+            .init(label: "Function/Builtin", hex: syntaxVariant("function.builtin", 4)),
+            .init(label: "Type/Builtin", hex: syntaxVariant("type.builtin", 3)),
+            .init(label: "Number/Boolean", hex: syntaxVariant("boolean", 1)),
+            .init(label: "Comment/Doc", hex: syntaxVariant("comment.doc", 8)),
+            .init(label: "Punctuation/Bracket", hex: syntaxVariant("punctuation.bracket", 8)),
+        ]
         doc.semantic.groups = [
             SemanticSectionView.Group(title: "Background", cards: [
                 .init(label: "Darker", hex: shade("darker_bg", 0), key: "darker_bg"),
@@ -11226,6 +11539,20 @@ final class PaletteCanvasView: NSView {
                 .init(label: "Green", hex: uiHex("green"), key: "ui_green"),
                 .init(label: "Yellow", hex: uiHex("yellow"), key: "ui_yellow"),
             ]),
+            // A full-width row of its own: the operator today, with room for
+            // more syntax roles beside it later.
+            SemanticSectionView.Group(title: "Syntax", cards: [
+                .init(label: "Operator", hex: syntaxShade("operator", 12), key: "operator"),
+                .init(label: "Keyword", hex: syntaxShade("keyword", 13), key: "syntax_keyword"),
+                .init(label: "Function", hex: syntaxShade("function", 4), key: "syntax_function"),
+                .init(label: "String", hex: syntaxShade("string", 2), key: "syntax_string"),
+                .init(label: "Number", hex: syntaxShade("number", 1), key: "syntax_number"),
+                .init(label: "Type", hex: syntaxShade("type", 3), key: "syntax_type"),
+                .init(label: "Variable", hex: syntaxShade("variable", 7), key: "syntax_variable"),
+                .init(label: "Property", hex: syntaxShade("property", 6), key: "syntax_property"),
+                .init(label: "Comment", hex: syntaxShade("comment", 8), key: "syntax_comment"),
+                .init(label: "Punctuation", hex: syntaxShade("punctuation", 8), key: "syntax_punctuation"),
+            ], variantCards: variantCards, fullWidth: true),
         ]
         var pinnedKeys: Set<String> = []
         for slot in PaletteModel.shadeKeys where model.extendedHex[slot.key] != nil {
@@ -11236,6 +11563,7 @@ final class PaletteCanvasView: NSView {
         }
         doc.semantic.pinnedKeys = pinnedKeys
         doc.semantic.editTarget = model.editTarget
+        doc.semantic.syntaxVariety = model.syntax
         doc.pinnedCount = model.pinnedShadeCount()
         doc.onResetPins = { [weak self] in self?.model?.clearShadePins() }
 
@@ -11370,7 +11698,7 @@ final class PaletteCanvasDoc: NSView {
         h += PaletteCardsView.height(for: 16)
         h += 36                                             // spaced hint line
         h += 24                                             // "Semantic Colors"
-        h += SemanticSectionView.height()
+        h += SemanticSectionView.height(for: semantic.groups)
         if templateHeight > 0 { h += 24 + templateHeight }
         h += 12
         return h
@@ -11391,8 +11719,9 @@ final class PaletteCanvasDoc: NSView {
         top += 36
         semanticTop = top
         top += 24
-        semantic.frame = rect(top: top, h: SemanticSectionView.height(), x: insetL, w: contentW)
-        top += SemanticSectionView.height()
+        let semanticH = SemanticSectionView.height(for: semantic.groups)
+        semantic.frame = rect(top: top, h: semanticH, x: insetL, w: contentW)
+        top += semanticH
         if templateHeight > 0 {
             templateTop = top + 24
             template.frame = rect(top: templateTop, h: templateHeight, x: insetL, w: contentW)
@@ -12366,6 +12695,7 @@ final class ThemeEditor {
         var extended: [String: String] = [:]
         for (key, hex) in model.extendedHex { extended[key] = hex }
         return ["method": model.method, "mode": model.mode, "resolvedMode": model.resolvedMode,
+                "syntax": model.syntax,
                 "colors": model.baseColors, "extended": extended,
                 "locked": model.locked.sorted(),
                 "adjustments": model.adjustments.values, "curve": model.curve]
@@ -18164,6 +18494,38 @@ func paletteAccentSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--palette-accent-selftest") {
     exit(paletteAccentSelfTest() == 0 ? 0 : 1)
+}
+
+// The semantic grid has one full-width row now (Syntax). Its row count and
+// height must agree, or the last row draws over Template Override again.
+func syntaxLayoutSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    func group(_ title: String, variants: Bool = false,
+               full: Bool = false) -> SemanticSectionView.Group {
+        .init(title: title,
+              cards: [.init(label: "Operator", hex: "#ffffff", key: "operator")],
+              variantCards: variants ? [.init(label: "Escape", hex: "#ffffff")] : [],
+              fullWidth: full)
+    }
+    let groups = [group("Background"), group("Foreground"), group("Accent"),
+                  group("Terminal"), group("Omacosy"), group("Ring & Status"),
+                  group("Syntax", variants: true, full: true)]
+    check("seven groups make four rows", SemanticSectionView.rowCount(groups) == 4)
+    check("height covers the variant row",
+          SemanticSectionView.height(for: groups) == 4 * 86 + 3 * 8 + 50)
+    check("a full-width group starts its own row",
+          SemanticSectionView.rowCount([group("Syntax", full: true), group("Omacosy")]) == 2)
+    print(failures == 0 ? "syntax layout selftest: all checks passed"
+                        : "syntax layout selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--syntax-layout-selftest") {
+    exit(syntaxLayoutSelfTest() == 0 ? 0 : 1)
 }
 
 // A Magic draft takes its 16 colours from term-palette's ANSI set, whose slot 0

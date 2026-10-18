@@ -13,10 +13,12 @@
 //   omacosy-themecore modes [--json]
 //   omacosy-themecore template apps [--json]
 //   omacosy-themecore template vars --colors CSV [extended flags] [--light]
-//                                        [--overrides JSON] [--recompute] [--json]
+//                                        [--overrides JSON] [--recompute] [--syntax]
+//                                        [--syntax-variety ID] [--json]
 //   omacosy-themecore template render --colors CSV (--file PATH|--text STRING)
 //                                        [--out FILE] [extended flags] [--light]
-//                                        [--overrides JSON] [--recompute] [--json]
+//                                        [--overrides JSON] [--recompute]
+//                                        [--syntax-variety ID] [--json]
 //   omacosy-themecore theme list [--json]
 //   omacosy-themecore theme show <id>
 //   omacosy-themecore theme save [<file>|-] [--id ID] [--name NAME] [--replace]
@@ -39,6 +41,8 @@
 //   omacosy-themecore palette magic <image> [--roles] [--no-cache] [--json]
 //   omacosy-themecore palette roles --colors CSV [--accent HEX] [--json]
 //   omacosy-themecore palette roles --image PATH [--mode ID] [--light] [--json]
+//   omacosy-themecore palette operator --colors CSV [--json]
+//   omacosy-themecore palette syntax --colors CSV [--variety ID] [--operator HEX] [--syntax-json JSON] [--json]
 //   omacosy-themecore palette render --colors CSV [--accent HEX] [--cursor HEX]
 //                                           [--selection-foreground HEX] [--selection-background HEX]
 //                                           [12 adjustment flags] [--curve "x,y;x,y"] [--json]
@@ -148,6 +152,140 @@ enum ColorMath {
     static func oklabDistance(_ a: OKLab, _ b: OKLab) -> Double {
         let dl = a.l - b.l, da = a.a - b.a, db = a.b - b.b
         return (dl * dl + da * da + db * db).squareRoot()
+    }
+
+    // The operator colour: a syntax role that has to read as its own mark
+    // beside the variable and number colours. Start from the palette's
+    // bright-blue slot (what the exported themes used to hard-wire), keep it
+    // when it is already clear of the variable foreground and the number
+    // colour, and otherwise pick the hue that sits furthest from every syntax
+    // role in OKLab while staying legible on the background. Omacosy's own
+    // extension: Aether has no operator role, so this stays outside
+    // BuildVariables/RecomputeDerived's byte-for-byte contract.
+    static func syntaxOperator(colors: [String]) -> String {
+        guard colors.count == 16 else { return "#000000" }
+        let bg = colors[0]
+        let seed = colors[12]
+        let fg = colors[7]
+        // `lightened(colors[1], 15)`, written out so this stays byte-identical
+        // to term-palette.swift's version of the same rule.
+        let red = rgb(fromHex: colors[1])
+        func lift(_ v: Double) -> Double { (v + (255 - v) * 0.15).rounded() }
+        let number = hex(fromRGB: RGB(r: lift(red.r), g: lift(red.g), b: lift(red.b)))
+        func minDistance(_ hex: String, _ anchors: [String]) -> Double {
+            anchors.map { operatorDistance(hex, $0) }.min() ?? 0
+        }
+        // The two roles operators sit between. Most themes should not move.
+        if minDistance(seed, [fg, number]) >= 0.12 && contrastRatio(seed, bg) >= 4.5 {
+            return seed
+        }
+        // It does not. Search the hue wheel at the seed's own chroma and a few
+        // lightness steps, and choose the hue furthest from the whole syntax
+        // set. Ties prefer the hue nearest the seed.
+        let anchors = [fg, number, colors[2], colors[3], colors[4], colors[5], colors[6]]
+        let o = operatorOKLCH(seed)
+        var best = seed
+        var bestScore = -1.0
+        var bestGap = Double.greatestFiniteMagnitude
+        let lightnesses = [o.L, o.L + 0.05, o.L - 0.05, o.L + 0.10, o.L - 0.10,
+                           o.L + 0.15, o.L - 0.15]
+        for lightness in lightnesses where lightness >= 0.25 && lightness <= 0.92 {
+            for step in stride(from: 0.0, to: 360.0, by: 5.0) {
+                let hue = (o.h + step).truncatingRemainder(dividingBy: 360)
+                guard let hex = operatorFit(lightness, o.C, hue) else { continue }
+                guard contrastRatio(hex, bg) >= 4.5 else { continue }
+                let score = minDistance(hex, anchors)
+                let gap = min(step, 360 - step)
+                if score > bestScore + 0.0001
+                    || (abs(score - bestScore) <= 0.0001 && gap < bestGap) {
+                    best = hex
+                    bestScore = score
+                    bestGap = gap
+                }
+            }
+        }
+        return best
+    }
+
+    // The operator role uses the canonical OKLab constants, the same ones as
+    // term-palette.swift, so the terminal and the editor exports agree. The
+    // rest of ColorMath stays on Aether's M1 matrix for fixture parity.
+    private static func operatorOKLCH(_ hex: String) -> (L: Double, C: Double, h: Double) {
+        let c = rgb(fromHex: hex)
+        let r = srgbToLinear(c.r / 255), g = srgbToLinear(c.g / 255), b = srgbToLinear(c.b / 255)
+        let l = cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+        let m = cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+        let s = cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+        let L = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s
+        let A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
+        let B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+        var h = atan2(B, A) * 180 / .pi
+        if h < 0 { h += 360 }
+        return (L, (A * A + B * B).squareRoot(), h)
+    }
+
+    private static func operatorDistance(_ a: String, _ b: String) -> Double {
+        let x = operatorOKLCH(a), y = operatorOKLCH(b)
+        let xa = x.C * cos(x.h * .pi / 180), xb = x.C * sin(x.h * .pi / 180)
+        let ya = y.C * cos(y.h * .pi / 180), yb = y.C * sin(y.h * .pi / 180)
+        let dl = x.L - y.L, da = xa - ya, db = xb - yb
+        return (dl * dl + da * da + db * db).squareRoot()
+    }
+
+    private static func operatorHex(_ L: Double, _ C: Double, _ h: Double) -> String? {
+        let A = C * cos(h * .pi / 180), B = C * sin(h * .pi / 180)
+        let l_ = L + 0.3963377774 * A + 0.2158037573 * B
+        let m_ = L - 0.1055613458 * A - 0.0638541728 * B
+        let s_ = L - 0.0894841775 * A - 1.2914855480 * B
+        let l = pow(l_, 3), m = pow(m_, 3), s = pow(s_, 3)
+        let r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s
+        let g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s
+        let b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
+        let e = 0.001
+        guard r >= -e, r <= 1 + e, g >= -e, g <= 1 + e, b >= -e, b <= 1 + e else { return nil }
+        func gam(_ v: Double) -> Double {
+            v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1 / 2.4) - 0.055
+        }
+        let R = clampByte(gam(min(1, max(0, r))) * 255)
+        let G = clampByte(gam(min(1, max(0, g))) * 255)
+        let Bb = clampByte(gam(min(1, max(0, b))) * 255)
+        return String(format: "#%02x%02x%02x", R, G, Bb)
+    }
+
+    private static func operatorFit(_ L: Double, _ C: Double, _ h: Double) -> String? {
+        var c = C
+        while c > 0 {
+            if let hex = operatorHex(L, c, h) { return hex }
+            c -= 0.005
+        }
+        return operatorHex(L, 0, h)
+    }
+
+    // A syntax variant: a bounded hue/lightness/chroma shift from its family's
+    // base colour, kept legible on the terminal background.
+    static func variant(_ hex: String, hue: Double, light: Double,
+                        chroma: Double, on bg: String, ratio: Double = 4.5) -> String {
+        let o = operatorOKLCH(hex)
+        let L = min(0.95, max(0.10, o.L + light))
+        let C = max(0, o.C * chroma)
+        var h = (o.h + hue).truncatingRemainder(dividingBy: 360)
+        if h < 0 { h += 360 }
+        let shifted = operatorFit(L, C, h) ?? hex
+        return ensureContrast(shifted, on: bg, ratio: ratio)
+    }
+
+    // Push a colour toward white or black until it reads on the background.
+    static func ensureContrast(_ hex: String, on bg: String, ratio: Double) -> String {
+        if contrastRatio(hex, bg) >= ratio { return hex }
+        let o = operatorOKLCH(hex)
+        let up = relativeLuminance(bg) < 0.45
+        var L = o.L
+        for _ in 0..<100 {
+            L += up ? 0.01 : -0.01
+            if L <= 0.02 || L >= 0.98 { break }
+            if let c = operatorFit(L, o.C, o.h), contrastRatio(c, bg) >= ratio { return c }
+        }
+        return up ? "#ffffff" : "#000000"
     }
 
     // MARK: RGB / hex
@@ -651,7 +789,9 @@ extension Palette16 {
                          cursor: one(extended.cursor),
                          selectionForeground: one(extended.selectionForeground),
                          selectionBackground: one(extended.selectionBackground),
-                         ui: extended.ui))
+                         ui: extended.ui,
+                         operatorPin: extended.operatorPin,
+                         syntax: extended.syntax))
     }
 }
 
@@ -4759,6 +4899,13 @@ struct Extended {
     // materialise and read by NO terminal writer, so recolouring Omacosy's own
     // chrome never moves the palette the terminal tools use. Unset = derive.
     var ui: [String: String] = [:]
+    // An explicit operator colour, pinned by the Theme Studio's Operator
+    // swatch. Unset = derive the syntax role from the palette.
+    var operatorPin: String? = nil
+    // The other base syntax roles, pinned by the Syntax row's swatches:
+    // keyword, function, string, number, type, variable, property, comment,
+    // punctuation. Unset = the role's palette slot.
+    var syntax: [String: String] = [:]
 
     // Engine rule: when absent, these derive from the palette.
     static func defaults(for colors: [String]) -> Extended {
@@ -4789,6 +4936,10 @@ struct Palette16 {
     var locked: [Int] = []
     var adjustments = Adjustments()
     var curve: [[Double]] = []
+    // How variants within a syntax family are coloured: classic (the shipped
+    // bindings), grouped (one colour per family), neighboring (close shades)
+    // or expressive (wider shades).
+    var syntax = "classic"
 }
 
 struct Theme {
@@ -5038,6 +5189,10 @@ extension Theme {
         guard ["dark", "light"].contains(resolvedMode) else {
             try bad("\"palette.resolvedMode\" must be dark or light (got \"\(resolvedMode)\")")
         }
+        let syntax = JSONField.string(paletteObj["syntax"]) ?? "classic"
+        guard ["classic", "grouped", "neighboring", "expressive"].contains(syntax) else {
+            try bad("\"palette.syntax\" must be classic, grouped, neighboring or expressive (got \"\(syntax)\")")
+        }
 
         var extended = Extended.defaults(for: colors)
         if let extObj = JSONField.dict(paletteObj["extended"]) {
@@ -5052,11 +5207,18 @@ extension Theme {
             extended.cursor = try colour("cursor", extended.cursor)
             extended.selectionForeground = try colour("selection_foreground", extended.selectionForeground)
             extended.selectionBackground = try colour("selection_background", extended.selectionBackground)
+            if let value = extObj["operator"] {
+                guard let s = JSONField.string(value), let hex = normalizedColorHex(s) else {
+                    try bad("\"palette.extended.operator\" is not a hex colour")
+                }
+                extended.operatorPin = hex
+            }
             // Omacosy-UI-only overrides: `ui_<role>`, and the bare
             // `background` (the earlier spelling of `ui_background`).
             for (k, v) in extObj {
                 guard let s = JSONField.string(v), let hex = normalizedColorHex(s) else { continue }
                 if k.hasPrefix("ui_") { extended.ui[String(k.dropFirst(3))] = hex }
+                else if k.hasPrefix("syntax_") { extended.syntax[String(k.dropFirst(7))] = hex }
                 else if k == "background" { extended.ui["background"] = hex }
             }
         } else if paletteObj["extended"] != nil && !(paletteObj["extended"] is NSNull) {
@@ -5224,7 +5386,7 @@ extension Theme {
                      wallpaper: wallpaper,
                      palette: Palette16(method: method, mode: mode, resolvedMode: resolvedMode,
                                            colors: colors, extended: extended, locked: locked,
-                                           adjustments: adjustments, curve: curve),
+                                           adjustments: adjustments, curve: curve, syntax: syntax),
                      appOverrides: appOverrides, toolOpacity: toolOpacity,
                      terminals: terminals, favorite: favorite, raw: top)
     }
@@ -5731,15 +5893,21 @@ extension Theme {
         pal["method"] = palette.method
         pal["mode"] = palette.mode
         pal["resolvedMode"] = palette.resolvedMode
+        pal["syntax"] = palette.syntax
         pal["colors"] = palette.colors
         var ext = JSONField.dict(pal["extended"]) ?? [:]
         ext["accent"] = palette.extended.accent
         ext["cursor"] = palette.extended.cursor
         ext["selection_foreground"] = palette.extended.selectionForeground
         ext["selection_background"] = palette.extended.selectionBackground
+        if let op = palette.extended.operatorPin { ext["operator"] = op }
+        else { ext.removeValue(forKey: "operator") }
         let staleUI = ext.keys.filter { $0.hasPrefix("ui_") || $0 == "background" }
         for k in staleUI { ext.removeValue(forKey: k) }
         for (role, hex) in palette.extended.ui { ext["ui_\(role)"] = hex }
+        let staleSyntax = ext.keys.filter { $0.hasPrefix("syntax_") }
+        for k in staleSyntax { ext.removeValue(forKey: k) }
+        for (role, hex) in palette.extended.syntax { ext["syntax_\(role)"] = hex }
         pal["extended"] = ext
         pal["locked"] = palette.locked
         pal.removeValue(forKey: "lockedColors")
@@ -6076,6 +6244,7 @@ enum Templates {
             .init(key: "red", label: "Red", source: "red"),
             .init(key: "yellow", label: "Yellow", source: "yellow"),
             .init(key: "orange", label: "Orange", source: "orange"),
+            .init(key: "operator", label: "Operator", source: "operator"),
             .init(key: "green", label: "Green", source: "green"),
             .init(key: "cyan", label: "Cyan", source: "cyan"),
             .init(key: "blue", label: "Blue", source: "blue"),
@@ -6166,6 +6335,15 @@ enum Templates {
             TemplateApp(id: "tmux", name: "tmux", roles: [
                 .init(key: "bg", label: "Status Background", source: "bg"),
             ]),
+            // The editor exports. Only the syntax role Omacosy adds is
+            // exposed, so a user can tune an operator per editor without a
+            // second palette model.
+            TemplateApp(id: "zed", name: "Zed", roles: [
+                .init(key: "operator", label: "Operator", source: "operator"),
+            ]),
+            TemplateApp(id: "vscode", name: "VS Code", roles: [
+                .init(key: "operator", label: "Operator", source: "operator"),
+            ]),
         ]
     }()
 }
@@ -6211,10 +6389,325 @@ struct ThemeVariables {
         return vars
     }
 
+    // Omacosy's syntax layer beside Aether's map. Base roles keep their
+    // current palette slots; variants either collapse onto the base
+    // (grouped), take a small bounded shift (neighboring), or a wider one
+    // (expressive). `classic` returns the shipped bindings byte for byte.
+    static func syntaxColors(colors: [String], variety: String,
+                             operatorPin: String?,
+                             pins: [String: String] = [:]) -> [String: String] {
+        guard colors.count == 16 else { return [:] }
+        let number = ColorMath.lightened(colors[1], 15)
+        let darkFG = ColorMath.darkened(colors[7], 75)
+        let operatorHex = operatorPin ?? ColorMath.syntaxOperator(colors: colors)
+        var base: [String: String] = [
+            "operator": operatorHex,
+            "keyword": colors[13],
+            "function": colors[4],
+            "string": colors[2],
+            "number": number,
+            "type": colors[3],
+            "variable": colors[7],
+            "property": colors[6],
+            "comment": colors[8],
+            "punctuation": darkFG,
+            "invalid": colors[1],
+            "invalid.deprecated": colors[3],
+        ]
+        for (role, hex) in pins where base[role] != nil { base[role] = hex }
+        if let operatorPin { base["operator"] = operatorPin }
+        var classic: [String: String] = [
+            "operator": operatorHex,
+            "keyword": colors[13],
+            "keyword.control": colors[13],
+            "keyword.import": colors[4],
+            "storage.modifier": colors[3],
+            "storage.type": colors[3],
+            "function": colors[4],
+            "function.builtin": colors[6],
+            "function.definition": colors[4],
+            "function.method": colors[4],
+            "function.special.definition": colors[4],
+            "function.defaultLibrary": colors[6],
+            "function.decorator": colors[6],
+            "constructor": colors[3],
+            "string": colors[2],
+            "string.escape": colors[13],
+            "string.regex": colors[14],
+            "regexp": colors[14],
+            "string.special": colors[2],
+            "string.special.symbol": colors[6],
+            "string.interpolation": colors[12],
+            "text.literal": colors[2],
+            "number": number,
+            "boolean": number,
+            "constant": colors[11],
+            "constant.builtin": colors[6],
+            "constant.character": colors[2],
+            "constant.character.escape": colors[13],
+            "enum": colors[3],
+            "enumMember": number,
+            "variant": number,
+            "variable": colors[7],
+            "variable.parameter": colors[6],
+            "variable.special": colors[7],
+            "variable.member": colors[6],
+            "variable.readonly": colors[11],
+            "property": colors[6],
+            "parameter": colors[6],
+            "label": colors[3],
+            "type": colors[3],
+            "type.builtin": colors[7],
+            "type.interface": colors[3],
+            "type.super": colors[3],
+            "typeParameter": colors[3],
+            "type.defaultLibrary": colors[7],
+            "class": colors[3],
+            "interface": colors[3],
+            "attribute": colors[3],
+            "tag.attribute": colors[7],
+            "tag": colors[3],
+            "title": colors[4],
+            "embedded": colors[7],
+            "comment": colors[8],
+            "comment.doc": colors[8],
+            "punctuation": darkFG,
+            "punctuation.bracket": darkFG,
+            "punctuation.delimiter": darkFG,
+            "punctuation.list_marker": colors[6],
+            "punctuation.special": colors[12],
+            "link_text": colors[4],
+            "link_uri": colors[6],
+            "emphasis": colors[1],
+            "emphasis.strong": colors[1],
+            "hint": colors[8],
+            "predictive": colors[8],
+            "preproc": colors[6],
+            "primary": colors[7],
+            "namespace": colors[4],
+            "macro": colors[6],
+            "decorator": colors[4],
+            "support": colors[6],
+            "css.property": colors[6],
+            "css.value": colors[7],
+            "css.selector": colors[3],
+            "css.pseudo": colors[6],
+            "css.unit": number,
+            "markdown.heading": colors[4],
+            "markdown.bold": colors[7],
+            "markdown.italic": colors[7],
+            "markdown.link": colors[4],
+            "markdown.code": colors[2],
+            "markdown.quote": colors[8],
+            "markdown.list": colors[6],
+            "diff.inserted": colors[2],
+            "diff.deleted": colors[1],
+            "diff.changed": number,
+            "this": colors[7],
+            "object.key": colors[7],
+            "rust.lifetime": colors[6],
+            "rust.macro": colors[6],
+            "shell.variable": colors[7],
+            "shell.command": colors[4],
+            "shell.builtin": colors[6],
+            "yaml.key": colors[6],
+            "toml.key": colors[6],
+            "toml.table": colors[3],
+            "ini.section": colors[3],
+            "ini.key": colors[6],
+            "make.target": colors[4],
+            "make.variable": colors[7],
+            "go.package": colors[4],
+            "python.self": colors[7],
+            "python.magic": colors[6],
+            "php.variable": colors[7],
+            "c.preprocessor": colors[6],
+            "csharp.attribute": colors[6],
+            "sql.keyword": colors[13],
+            "graphql.type": colors[3],
+            "graphql.field": colors[7],
+            "json.0": number,
+            "json.1": colors[3],
+            "json.2": colors[4],
+            "json.3": colors[13],
+            "json.4": colors[6],
+            "json.5": colors[2],
+            "invalid": colors[1],
+            "invalid.deprecated": colors[3],
+        ]
+        // A pinned base role wins in Classic too; the variant bindings stay
+        // the shipped ones.
+        for role in ["operator", "keyword", "function", "string", "number",
+                     "type", "variable", "property", "comment", "punctuation"] {
+            if let hex = base[role] { classic[role] = hex }
+        }
+        if variety == "classic" { return classic }
+        let roleFor: [String: String] = [
+            "operator": "operator", "keyword": "keyword", "keyword.control": "keyword",
+            "keyword.import": "function", "storage.modifier": "type", "storage.type": "type",
+            "function": "function", "function.builtin": "function",
+            "function.definition": "function", "function.method": "function",
+            "function.special.definition": "function", "function.defaultLibrary": "property",
+            "function.decorator": "property", "constructor": "function",
+            "string": "string", "string.escape": "string", "string.regex": "string",
+            "string.special": "string", "string.special.symbol": "string",
+            "string.interpolation": "string", "text.literal": "string", "regexp": "string",
+            "number": "number", "boolean": "number", "constant": "number",
+            "constant.builtin": "number", "constant.character": "string",
+            "constant.character.escape": "string", "enum": "number", "enumMember": "number",
+            "variant": "number",
+            "variable": "variable", "variable.parameter": "property",
+            "variable.special": "variable", "variable.member": "property",
+            "variable.readonly": "number", "property": "property", "parameter": "property",
+            "label": "type",
+            "type": "type", "type.builtin": "type", "type.interface": "type",
+            "type.super": "type", "typeParameter": "type", "type.defaultLibrary": "variable",
+            "class": "type", "interface": "type",
+            "attribute": "type", "tag.attribute": "variable", "tag": "type",
+            "title": "function", "embedded": "variable",
+            "comment": "comment", "comment.doc": "comment",
+            "punctuation": "punctuation", "punctuation.bracket": "punctuation",
+            "punctuation.delimiter": "punctuation", "punctuation.list_marker": "property",
+            "punctuation.special": "punctuation",
+            "link_text": "function", "link_uri": "property",
+            "emphasis": "keyword", "emphasis.strong": "keyword",
+            "hint": "comment", "predictive": "comment", "preproc": "property",
+            "primary": "variable", "namespace": "function", "macro": "property",
+            "decorator": "function", "support": "property",
+            "css.property": "property", "css.value": "variable", "css.selector": "type",
+            "css.pseudo": "property", "css.unit": "number",
+            "markdown.heading": "title", "markdown.bold": "emphasis.strong",
+            "markdown.italic": "emphasis", "markdown.link": "link_text",
+            "markdown.code": "string", "markdown.quote": "comment",
+            "markdown.list": "punctuation.list_marker",
+            "diff.inserted": "string", "diff.deleted": "invalid", "diff.changed": "number",
+            "this": "variable", "object.key": "variable",
+            "rust.lifetime": "property", "rust.macro": "property",
+            "shell.variable": "variable", "shell.command": "function",
+            "shell.builtin": "property", "yaml.key": "property", "toml.key": "property",
+            "toml.table": "type", "ini.section": "type", "ini.key": "property",
+            "make.target": "function", "make.variable": "variable",
+            "go.package": "function", "python.self": "variable", "python.magic": "property",
+            "php.variable": "variable", "c.preprocessor": "property",
+            "csharp.attribute": "property", "sql.keyword": "keyword",
+            "graphql.type": "type", "graphql.field": "variable",
+            "json.0": "number", "json.1": "type", "json.2": "function",
+            "json.3": "keyword", "json.4": "property", "json.5": "string",
+            "invalid": "invalid", "invalid.deprecated": "invalid.deprecated",
+        ]
+        let offsets: [String: (Double, Double, Double)] = [
+            "string.escape": (10, 0.05, 1.0), "string.regex": (-12, 0.02, 1.0),
+            "string.special": (5, -0.03, 1.0), "string.special.symbol": (-6, 0.06, 1.0),
+            "string.interpolation": (8, 0.03, 1.0), "regexp": (-12, 0.02, 1.0),
+            "function.builtin": (0, 0.06, 1.0), "function.method": (0, -0.03, 1.0),
+            "function.definition": (0, 0.02, 1.0),
+            "function.special.definition": (8, 0.04, 1.0),
+            "function.defaultLibrary": (-6, 0.03, 1.0),
+            "type.builtin": (0, 0.0, 0.7), "type.interface": (10, 0.0, 1.0),
+            "type.super": (0, 0.05, 1.0),
+            "boolean": (15, 0.0, 1.0), "constant": (0, 0.06, 1.0),
+            "constant.builtin": (-10, 0.0, 1.0), "constant.character": (6, 0.03, 1.0),
+            "constant.character.escape": (10, 0.05, 1.0),
+            "enum": (-15, 0.0, 1.0), "enumMember": (-10, 0.03, 1.0),
+            "variable.parameter": (8, 0.02, 1.0), "variable.special": (0, 0.04, 1.0),
+            "variable.readonly": (0, 0.03, 1.0),
+            "comment.doc": (0, 0.06, 1.0),
+            "punctuation.bracket": (0, 0.04, 1.0),
+            "punctuation.delimiter": (0, -0.03, 1.0),
+            "punctuation.list_marker": (8, 0.02, 1.0),
+            "punctuation.special": (10, 0.0, 1.0),
+            "attribute": (8, 0.0, 1.0), "tag.attribute": (8, 0.02, 1.0),
+            "tag": (-8, 0.0, 1.0),
+            "title": (0, 0.04, 1.0), "link_text": (0, 0.04, 1.0),
+            "link_uri": (0, 0.02, 1.0), "emphasis": (0, 0.05, 1.0),
+            "emphasis.strong": (0, -0.04, 1.0), "hint": (0, -0.03, 1.0),
+            "predictive": (0, 0.02, 1.0), "preproc": (8, 0.0, 1.0),
+            "namespace": (8, 0.0, 1.0), "macro": (-8, 0.0, 1.0),
+            "decorator": (10, 0.0, 1.0), "support": (-6, 0.03, 1.0),
+            "markdown.heading": (0, 0.04, 1.0), "markdown.link": (0, 0.04, 1.0),
+            "diff.inserted": (0, 0.03, 1.0), "diff.changed": (8, 0.0, 1.0),
+            "json.0": (10, 0.0, 1.0), "json.1": (-8, 0.0, 1.0),
+            "json.2": (8, 0.0, 1.0), "json.3": (-8, 0.0, 1.0),
+            "json.4": (8, 0.0, 1.0), "json.5": (10, 0.04, 1.0),
+        ]
+        // Expressive is not "neighboring but lighter": it rotates the hue far
+        // enough that a variant reads as its own colour inside the family
+        // (green -> teal, blue -> violet, yellow -> yellow-green) instead of
+        // a tint of the base.
+        let expressiveOffsets: [String: (Double, Double, Double)] = [
+            "string.escape": (40, 0.08, 1.0), "string.regex": (-38, 0.02, 1.1),
+            "string.special": (22, -0.06, 1.0), "string.special.symbol": (-25, 0.08, 1.0),
+            "string.interpolation": (30, 0.04, 1.0), "regexp": (-38, 0.02, 1.1),
+            "function.builtin": (35, 0.08, 1.0), "function.method": (-28, -0.04, 1.0),
+            "function.definition": (0, 0.04, 1.0),
+            "function.special.definition": (28, 0.05, 1.0),
+            "function.defaultLibrary": (-25, 0.04, 1.0), "function.decorator": (30, 0.04, 1.0),
+            "type.builtin": (-32, 0.04, 0.95), "type.interface": (28, 0.0, 1.0),
+            "type.super": (0, 0.10, 1.0),
+            "boolean": (32, 0.0, 1.0), "constant": (0, 0.12, 1.0),
+            "constant.builtin": (-30, 0.02, 1.0), "constant.character": (25, 0.05, 1.0),
+            "constant.character.escape": (40, 0.08, 1.0),
+            "enum": (-32, 0.0, 1.0), "enumMember": (-28, 0.04, 1.0),
+            "variable.parameter": (28, 0.03, 1.0), "variable.special": (0, 0.08, 1.0),
+            "variable.readonly": (20, 0.05, 1.0),
+            "comment.doc": (20, 0.12, 1.0),
+            "punctuation.bracket": (30, 0.08, 1.0),
+            "punctuation.delimiter": (0, -0.08, 1.0),
+            "punctuation.list_marker": (25, 0.03, 1.0),
+            "punctuation.special": (30, 0.0, 1.0),
+            "attribute": (25, 0.0, 1.0), "tag.attribute": (25, 0.04, 1.0),
+            "tag": (-25, 0.0, 1.0),
+            "title": (20, 0.06, 1.0), "link_text": (18, 0.05, 1.0),
+            "link_uri": (0, 0.04, 1.0), "emphasis": (0, 0.10, 1.0),
+            "emphasis.strong": (0, -0.08, 1.0), "hint": (0, -0.06, 1.0),
+            "predictive": (0, 0.04, 1.0), "preproc": (28, 0.0, 1.0),
+            "namespace": (28, 0.0, 1.0), "macro": (-25, 0.0, 1.0),
+            "decorator": (30, 0.0, 1.0), "support": (-20, 0.05, 1.0),
+            "markdown.heading": (20, 0.06, 1.0), "markdown.link": (18, 0.05, 1.0),
+            "diff.inserted": (0, 0.06, 1.0), "diff.changed": (28, 0.0, 1.0),
+            "json.0": (28, 0.0, 1.0), "json.1": (-25, 0.0, 1.0),
+            "json.2": (25, 0.0, 1.0), "json.3": (-25, 0.0, 1.0),
+            "json.4": (25, 0.0, 1.0), "json.5": (30, 0.05, 1.0),
+        ]
+        // Comments and punctuation are allowed to whisper; everything else
+        // has to read on the background.
+        let soft: Set<String> = ["comment", "comment.doc", "hint", "predictive",
+                                 "punctuation", "punctuation.bracket", "punctuation.delimiter",
+                                 "punctuation.list_marker", "punctuation.special"]
+        var out: [String: String] = [:]
+        for (token, role) in roleFor {
+            let seed = base[role] ?? colors[7]
+            if variety == "grouped" || offsets[token] == nil {
+                out[token] = seed
+            } else {
+                let o = (variety == "expressive" ? expressiveOffsets[token] : nil)
+                    ?? offsets[token]!
+                out[token] = ColorMath.variant(seed, hue: o.0, light: o.1, chroma: o.2,
+                                               on: colors[0],
+                                               ratio: soft.contains(token) ? 3.0 : 4.5)
+            }
+        }
+        return out
+    }
+
+    // Omacosy's extension beside Aether's map: one syntax role for operators,
+    // pinned when the theme carries an explicit value and derived otherwise.
+    // Kept out of `build` so `template vars` still matches Aether byte for
+    // byte; the exporters call this explicitly.
+    static func addSyntaxRoles(_ vars: inout [String: String], colors: [String],
+                               extended: Extended, variety: String) {
+        for (key, value) in syntaxColors(colors: colors, variety: variety,
+                                         operatorPin: extended.operatorPin,
+                                         pins: extended.syntax) {
+            vars[key] = value
+        }
+    }
+
     // Aether's RecomputeDerived: after a per-app override replaced a base
     // value, the aliases and derived shades follow it — except the keys the
     // overrides pinned, which keep their own value.
-    static func recomputeDerived(_ vars: inout [String: String], overrides: [String: String]) {
+    static func recomputeDerived(_ vars: inout [String: String], overrides: [String: String],
+                                 variety: String = "classic") {
         func set(_ key: String, _ value: String) {
             if overrides[key] == nil { vars[key] = value }
         }
@@ -6233,15 +6726,31 @@ struct ThemeVariables {
         set("selection", selectionColor(vars, light: vars["theme_type"] == "light"))
         set("mode", vars["theme_type"]!)
         for (i, name) in semanticOrder.enumerated() { set("color\(i)", vars[name]!) }
+        // Omacosy's syntax layer follows a base-colour override too, unless
+        // the caller pinned a token (the pin rides in `overrides`).
+        if vars["operator"] != nil {
+            let colors = semanticOrder.map { vars[$0]! }
+            var pins: [String: String] = [:]
+            for role in ["keyword", "function", "string", "number", "type",
+                         "variable", "property", "comment", "punctuation"] {
+                if let hex = overrides[role] { pins[role] = hex }
+            }
+            for (key, value) in syntaxColors(colors: colors, variety: variety,
+                                             operatorPin: overrides["operator"],
+                                             pins: pins) {
+                set(key, value)
+            }
+        }
     }
 
     // Aether's mergeTemplateVariables: a per-app override map wins over the
     // base, then the derived shades follow it except the pinned keys.
-    static func merged(_ base: [String: String], overrides: [String: String]) -> [String: String] {
+    static func merged(_ base: [String: String], overrides: [String: String],
+                       variety: String = "classic") -> [String: String] {
         guard !overrides.isEmpty else { return base }
         var out = base
         for (key, value) in overrides where !value.isEmpty { out[key] = value }
-        recomputeDerived(&out, overrides: overrides)
+        recomputeDerived(&out, overrides: overrides, variety: variety)
         return out
     }
 
@@ -6368,11 +6877,20 @@ enum Materialise {
     }
 
     // The per-app overrides (and the tool opacity) as shell assignments, the
-    // same file a materialised edition carries. Empty when the record has none.
+    // same file a materialised edition carries. A pinned operator is written
+    // first, so a per-app `operator` override below still wins. Empty when the
+    // record has none.
     static func overridesEnv(_ theme: Theme) -> String {
         var overrides = ""
         if let op = theme.toolOpacity {
             overrides += "OMACOSY_TOOL_OPACITY='\(op)'\n"
+        }
+        if let op = theme.palette.extended.operatorPin {
+            overrides += "OMACOSY_OPERATOR='\(op)'\n"
+        }
+        for role in theme.palette.extended.syntax.keys.sorted() {
+            overrides += "OMACOSY_SYNTAX_\(Templates.sanitize(role))="
+                + "'\(theme.palette.extended.syntax[role]!)'\n"
         }
         for app in theme.appOverrides.keys.sorted() {
             let roles = theme.appOverrides[app]!
@@ -6407,11 +6925,16 @@ enum Materialise {
         parts.append(theme.palette.colors.joined(separator: ","))
         let ext = theme.palette.extended
         var extParts = [ext.accent, ext.cursor, ext.selectionForeground, ext.selectionBackground]
+        if let op = ext.operatorPin { extParts.append("operator=\(op)") }
+        if !ext.syntax.isEmpty {
+            extParts.append(ext.syntax.keys.sorted().map { "syntax_\($0)=\(ext.syntax[$0]!)" }.joined(separator: ";"))
+        }
         if !ext.ui.isEmpty {
             extParts.append(ext.ui.keys.sorted().map { "\($0)=\(ext.ui[$0]!)" }.joined(separator: ";"))
         }
         parts.append(extParts.joined(separator: ","))
         parts.append(theme.palette.resolvedMode)
+        parts.append(theme.palette.syntax)
         let a = theme.palette.adjustments
         parts.append([a.vibrance, a.saturation, a.contrast, a.brightness, a.shadows,
                       a.highlights, a.hueShift, a.temperature, a.tint, a.blackPoint,
@@ -6549,6 +7072,10 @@ enum Materialise {
         try sb.write(to: dir.appendingPathComponent("sketchybar.sh"), atomically: true, encoding: .utf8)
         try bd.write(to: dir.appendingPathComponent("borders.sh"), atomically: true, encoding: .utf8)
         try toml.write(to: dir.appendingPathComponent("colors.toml"), atomically: true, encoding: .utf8)
+        // The terminal writers read this beside colors.toml, so the live
+        // Neovim palette follows the Theme Studio's Syntax Variety.
+        try theme.palette.syntax.write(to: dir.appendingPathComponent("syntax"),
+                                       atomically: true, encoding: .utf8)
 
         // The per-app overrides, shell-sourceable, next to colors.toml. The
         // terminal appliers source it (only when terminal = on) and consult it
@@ -7030,10 +7557,12 @@ func usage() -> Never {
            omacosy-themecore modes [--json]
            omacosy-themecore template apps [--json]
            omacosy-themecore template vars --colors CSV [extended flags] [--light]
-                                           [--overrides JSON] [--recompute] [--json]
+                                           [--overrides JSON] [--recompute] [--syntax]
+                                           [--syntax-variety ID] [--json]
            omacosy-themecore template render --colors CSV (--file PATH|--text STRING)
                                            [--out FILE] [extended flags] [--light]
-                                           [--overrides JSON] [--recompute] [--json]
+                                           [--overrides JSON] [--recompute]
+                                           [--syntax-variety ID] [--json]
            omacosy-themecore theme list [--json]
            omacosy-themecore theme show <id> [--json]
            omacosy-themecore theme save [<file>|-] [--id ID] [--name NAME] [--replace] [--json] [--media-from FILE] [--edited]
@@ -7056,6 +7585,8 @@ func usage() -> Never {
            omacosy-themecore palette magic <image> [--roles] [--no-cache] [--json]
            omacosy-themecore palette roles --colors CSV [--accent HEX] [--json]
            omacosy-themecore palette roles --image PATH [--mode ID] [--light] [--json]
+           omacosy-themecore palette operator --colors CSV [--json]
+           omacosy-themecore palette syntax --colors CSV [--variety ID] [--operator HEX] [--syntax-json JSON] [--json]
            omacosy-themecore palette render --colors CSV [--accent HEX] [--cursor HEX]
                                            [--selection-foreground HEX] [--selection-background HEX]
                                            [12 adjustment flags] [--curve "x,y;x,y"] [--json]
@@ -7202,6 +7733,9 @@ func exportBundle(_ theme: Theme, to path: String, templates: String?) throws ->
     let root = repoTemplatesDir(templates)
     var base = ThemeVariables.build(colors: rendered.colors, extended: rendered.extended,
                                     light: theme.palette.resolvedMode == "light")
+    ThemeVariables.addSyntaxRoles(&base, colors: rendered.colors,
+                                  extended: rendered.extended,
+                                  variety: theme.palette.syntax)
     base["theme_name"] = theme.name
     base["theme_slug"] = theme.id
 
@@ -7210,7 +7744,17 @@ func exportBundle(_ theme: Theme, to path: String, templates: String?) throws ->
         guard let content = try? String(contentsOfFile: file, encoding: .utf8) else {
             throw ThemeError(message: "missing theme template: \(file)")
         }
-        let merged = ThemeVariables.merged(base, overrides: theme.appOverrides[app] ?? [:])
+        var overrides = theme.appOverrides[app] ?? [:]
+        // The theme-wide pin rides as an override so RecomputeDerived keeps
+        // it when a per-app base colour changes; a per-app value still wins.
+        if let pin = rendered.extended.operatorPin, overrides["operator"] == nil {
+            overrides["operator"] = pin
+        }
+        for (role, hex) in rendered.extended.syntax where overrides[role] == nil {
+            overrides[role] = hex
+        }
+        let merged = ThemeVariables.merged(base, overrides: overrides,
+                                          variety: theme.palette.syntax)
         return TemplateEngine.process(content, merged)
     }
 
@@ -7234,7 +7778,7 @@ func exportBundle(_ theme: Theme, to path: String, templates: String?) throws ->
     if let script = termAutoThemeBin() {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: script)
-        proc.arguments = ["export-theme", dir, dir, theme.name]
+        proc.arguments = ["export-theme", dir, dir, theme.name, theme.palette.syntax]
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         do {
@@ -7252,7 +7796,7 @@ func exportBundle(_ theme: Theme, to path: String, templates: String?) throws ->
 }
 
 // The palette + extended colours a template verb renders from.
-func templateExtended(_ colorsRaw: String?) -> (colors: [String], extended: Extended) {
+func templateExtended(_ colorsRaw: String?) -> (colors: [String], extended: Extended, syntax: String) {
     guard let colorsRaw else { fail("--colors is required (#rrggbb,...)") }
     let colors = hexListArgument(colorsRaw)
     guard colors.count == 16 else { fail("--colors needs exactly 16 colours") }
@@ -7261,7 +7805,12 @@ func templateExtended(_ colorsRaw: String?) -> (colors: [String], extended: Exte
     if let v = takeFlag("--cursor") { extended.cursor = normalizedHex(v) }
     if let v = takeFlag("--selection-foreground") { extended.selectionForeground = normalizedHex(v) }
     if let v = takeFlag("--selection-background") { extended.selectionBackground = normalizedHex(v) }
-    return (colors, extended)
+    if let v = takeFlag("--operator") { extended.operatorPin = normalizedHex(v) }
+    let syntax = takeFlag("--syntax-variety") ?? "classic"
+    guard ["classic", "grouped", "neighboring", "expressive"].contains(syntax) else {
+        fail("--syntax-variety must be classic, grouped, neighboring or expressive")
+    }
+    return (colors, extended, syntax)
 }
 
 func intListArgument(_ raw: String) -> [Int] {
@@ -7586,12 +8135,24 @@ case "template":
     case "vars":
         let extended = templateExtended(takeFlag("--colors"))
         let light = takeBool("--light")
-        let overrides = takeFlag("--overrides").map { jsonStringMap($0, label: "--overrides") } ?? [:]
+        let includeSyntax = takeBool("--syntax")
+        var overrides = takeFlag("--overrides").map { jsonStringMap($0, label: "--overrides") } ?? [:]
         let recompute = takeBool("--recompute")
         noExtraArguments()
         var vars = ThemeVariables.build(colors: extended.colors, extended: extended.extended, light: light)
+        if includeSyntax {
+            ThemeVariables.addSyntaxRoles(&vars, colors: extended.colors,
+                                          extended: extended.extended,
+                                          variety: extended.syntax)
+        }
+        if let pin = extended.extended.operatorPin, overrides["operator"] == nil {
+            overrides["operator"] = pin
+        }
         for (key, value) in overrides where !value.isEmpty { vars[key] = value }
-        if recompute { ThemeVariables.recomputeDerived(&vars, overrides: overrides) }
+        if recompute {
+            ThemeVariables.recomputeDerived(&vars, overrides: overrides,
+                                            variety: extended.syntax)
+        }
         if jsonOut { printJSON(vars) }
         for key in vars.keys.sorted() { print("\(key)=\(vars[key]!)") }
         exit(0)
@@ -7601,15 +8162,24 @@ case "template":
     case "render":
         let extended = templateExtended(takeFlag("--colors"))
         let light = takeBool("--light")
-        let overrides = takeFlag("--overrides").map { jsonStringMap($0, label: "--overrides") } ?? [:]
+        var overrides = takeFlag("--overrides").map { jsonStringMap($0, label: "--overrides") } ?? [:]
         let recompute = takeBool("--recompute")
         let text = takeFlag("--text")
         let file = takeFlag("--file")
         let out = takeFlag("--out")
         noExtraArguments()
         var vars = ThemeVariables.build(colors: extended.colors, extended: extended.extended, light: light)
+        ThemeVariables.addSyntaxRoles(&vars, colors: extended.colors,
+                                      extended: extended.extended,
+                                      variety: extended.syntax)
+        if let pin = extended.extended.operatorPin, overrides["operator"] == nil {
+            overrides["operator"] = pin
+        }
         for (key, value) in overrides where !value.isEmpty { vars[key] = value }
-        if recompute { ThemeVariables.recomputeDerived(&vars, overrides: overrides) }
+        if recompute {
+            ThemeVariables.recomputeDerived(&vars, overrides: overrides,
+                                            variety: extended.syntax)
+        }
         let template: String
         if let text {
             template = text
@@ -8416,6 +8986,45 @@ case "palette":
         ]
         if jsonOut { printJSON(Dictionary(uniqueKeysWithValues: shades)) }
         for (key, hex) in shades { print("\(key) \(hex)") }
+        exit(0)
+
+    // Omacosy's syntax operator role: derived from the palette, kept clear of
+    // the variable foreground and the number colour, legible on the
+    // background. The Theme Studio reads it for its Operator swatch.
+    case "operator":
+        guard let colorsRaw = takeFlag("--colors") else {
+            fail("palette operator needs --colors (#rrggbb,#rrggbb,...)")
+        }
+        let colors = hexListArgument(colorsRaw)
+        guard colors.count == 16 else { fail("palette operator needs exactly 16 colours") }
+        noExtraArguments()
+        let hex = ColorMath.syntaxOperator(colors: colors)
+        if jsonOut { printJSON(["operator": hex]) }
+        print(hex)
+        exit(0)
+
+    // The whole syntax token map for a variety: base roles, collapsed variants
+    // (grouped), or bounded neighbouring shades. `classic` is the shipped
+    // bindings, byte for byte.
+    case "syntax":
+        guard let colorsRaw = takeFlag("--colors") else {
+            fail("palette syntax needs --colors (#rrggbb,#rrggbb,...)")
+        }
+        let colors = hexListArgument(colorsRaw)
+        guard colors.count == 16 else { fail("palette syntax needs exactly 16 colours") }
+        let variety = takeFlag("--variety") ?? "classic"
+        guard ["classic", "grouped", "neighboring", "expressive"].contains(variety) else {
+            fail("--variety must be classic, grouped, neighboring or expressive")
+        }
+        let operatorPin = takeFlag("--operator").map { normalizedHex($0) }
+        let pins = takeFlag("--syntax-json").map {
+            jsonStringMap($0, label: "--syntax-json")
+        } ?? [:]
+        noExtraArguments()
+        let map = ThemeVariables.syntaxColors(colors: colors, variety: variety,
+                                              operatorPin: operatorPin, pins: pins)
+        if jsonOut { printJSON(map) }
+        for key in map.keys.sorted() { print("\(key) \(map[key]!)") }
         exit(0)
 
     case "render":

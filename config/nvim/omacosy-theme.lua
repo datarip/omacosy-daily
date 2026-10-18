@@ -42,6 +42,54 @@ local function apply()
       -- (blue), so name the theme's own accent directly.
       hl.SnacksDashboardHeader = { fg = c.accent }
       hl.SnacksDashboardFooter = { fg = c.accent }
+      -- Omacosy's syntax layer; Aether has no token keys, so name the
+      -- highlights itself. Guarded so an older palette.lua still fits.
+      local s = c.syntax or {}
+      local groups = {
+        ["@operator"] = s.operator or c.operator,
+        ["@keyword"] = s.keyword,
+        ["@keyword.control"] = s["keyword.control"],
+        ["@keyword.import"] = s["keyword.import"],
+        ["@keyword.operator"] = s.operator or c.operator,
+        ["@function"] = s.function,
+        ["@function.call"] = s.function,
+        ["@function.builtin"] = s["function.builtin"],
+        ["@function.method"] = s["function.method"],
+        ["@constructor"] = s.constructor,
+        ["@string"] = s.string,
+        ["@string.escape"] = s["string.escape"],
+        ["@string.regex"] = s["string.regex"],
+        ["@string.special"] = s["string.special"],
+        ["@number"] = s.number,
+        ["@boolean"] = s.boolean,
+        ["@constant"] = s.constant,
+        ["@constant.builtin"] = s["constant.builtin"],
+        ["@type"] = s.type,
+        ["@type.builtin"] = s["type.builtin"],
+        ["@type.interface"] = s["type.interface"],
+        ["@variable"] = s.variable,
+        ["@variable.parameter"] = s["variable.parameter"],
+        ["@variable.member"] = s["variable.member"],
+        ["@property"] = s.property,
+        ["@label"] = s.label,
+        ["@attribute"] = s.attribute,
+        ["@tag"] = s.tag,
+        ["@title"] = s.title,
+        ["@comment"] = s.comment,
+        ["@comment.documentation"] = s["comment.doc"],
+        ["@punctuation"] = s.punctuation,
+        ["@punctuation.bracket"] = s["punctuation.bracket"],
+        ["@punctuation.delimiter"] = s["punctuation.delimiter"],
+        ["@punctuation.special"] = s["punctuation.special"],
+        ["@preproc"] = s.preproc,
+        ["@text.literal"] = s["text.literal"],
+        ["@markup.heading"] = s.title,
+        ["@markup.strong"] = s["emphasis.strong"],
+        ["@markup.italic"] = s.emphasis,
+      }
+      for group, colour in pairs(groups) do
+        if colour then hl[group] = { fg = colour } end
+      end
     end,
   })
   vim.cmd.colorscheme("aether")

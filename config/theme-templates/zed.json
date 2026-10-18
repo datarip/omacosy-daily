@@ -211,242 +211,242 @@
 
         "syntax": {
           "attribute": {
-            "color": "{yellow}",
+            "color": "{attribute}",
             "font_style": "italic",
             "font_weight": null
           },
           "boolean": {
-            "color": "{orange}",
+            "color": "{boolean}",
             "font_style": null,
             "font_weight": null
           },
           "comment": {
-            "color": "{muted}",
+            "color": "{comment}",
             "font_style": "italic",
             "font_weight": null
           },
           "comment.doc": {
-            "color": "{muted}",
+            "color": "{comment.doc}",
             "font_style": "italic",
             "font_weight": null
           },
           "constant": {
-            "color": "{bright_yellow}",
+            "color": "{constant}",
             "font_style": null,
             "font_weight": null
           },
           "constructor": {
-            "color": "{yellow}",
+            "color": "{constructor}",
             "font_style": null,
             "font_weight": null
           },
           "embedded": {
-            "color": "{foreground}",
+            "color": "{embedded}",
             "font_style": null,
             "font_weight": null
           },
           "emphasis": {
-            "color": "{red}",
+            "color": "{emphasis}",
             "font_style": "italic",
             "font_weight": null
           },
           "emphasis.strong": {
-            "color": "{red}",
+            "color": "{emphasis.strong}",
             "font_style": null,
             "font_weight": 700
           },
           "enum": {
-            "color": "{yellow}",
+            "color": "{enum}",
             "font_style": null,
             "font_weight": null
           },
           "function": {
-            "color": "{blue}",
+            "color": "{function}",
             "font_style": null,
             "font_weight": null
           },
           "function.builtin": {
-            "color": "{cyan}",
+            "color": "{function.builtin}",
             "font_style": null,
             "font_weight": null
           },
           "function.definition": {
-            "color": "{blue}",
+            "color": "{function.definition}",
             "font_style": null,
             "font_weight": null
           },
           "function.method": {
-            "color": "{blue}",
+            "color": "{function.method}",
             "font_style": null,
             "font_weight": null
           },
           "function.special.definition": {
-            "color": "{blue}",
+            "color": "{function.special.definition}",
             "font_style": null,
             "font_weight": null
           },
           "hint": {
-            "color": "{muted}",
+            "color": "{hint}",
             "font_style": "italic",
             "font_weight": null
           },
           "keyword": {
-            "color": "{bright_magenta}",
+            "color": "{keyword}",
             "font_style": null,
             "font_weight": null
           },
           "label": {
-            "color": "{yellow}",
+            "color": "{label}",
             "font_style": null,
             "font_weight": null
           },
           "link_text": {
-            "color": "{blue}",
+            "color": "{link_text}",
             "font_style": null,
             "font_weight": null
           },
           "link_uri": {
-            "color": "{cyan}",
+            "color": "{link_uri}",
             "font_style": "underline",
             "font_weight": null
           },
           "number": {
-            "color": "{orange}",
+            "color": "{number}",
             "font_style": null,
             "font_weight": null
           },
           "operator": {
-            "color": "{bright_blue}",
+            "color": "{operator}",
             "font_style": null,
             "font_weight": null
           },
           "predictive": {
-            "color": "{muted}",
+            "color": "{predictive}",
             "font_style": "italic",
             "font_weight": null
           },
           "preproc": {
-            "color": "{cyan}",
+            "color": "{preproc}",
             "font_style": null,
             "font_weight": null
           },
           "primary": {
-            "color": "{foreground}",
+            "color": "{primary}",
             "font_style": null,
             "font_weight": null
           },
           "property": {
-            "color": "{cyan}",
+            "color": "{property}",
             "font_style": null,
             "font_weight": null
           },
           "punctuation": {
-            "color": "{dark_fg}",
+            "color": "{punctuation}",
             "font_style": null,
             "font_weight": null
           },
           "punctuation.bracket": {
-            "color": "{dark_fg}",
+            "color": "{punctuation.bracket}",
             "font_style": null,
             "font_weight": null
           },
           "punctuation.delimiter": {
-            "color": "{dark_fg}",
+            "color": "{punctuation.delimiter}",
             "font_style": null,
             "font_weight": null
           },
           "punctuation.list_marker": {
-            "color": "{cyan}",
+            "color": "{punctuation.list_marker}",
             "font_style": null,
             "font_weight": null
           },
           "punctuation.special": {
-            "color": "{bright_blue}",
+            "color": "{punctuation.special}",
             "font_style": null,
             "font_weight": null
           },
           "string": {
-            "color": "{green}",
+            "color": "{string}",
             "font_style": null,
             "font_weight": null
           },
           "string.escape": {
-            "color": "{bright_magenta}",
+            "color": "{string.escape}",
             "font_style": null,
             "font_weight": null
           },
           "string.regex": {
-            "color": "{bright_cyan}",
+            "color": "{string.regex}",
             "font_style": null,
             "font_weight": null
           },
           "string.special": {
-            "color": "{green}",
+            "color": "{string.special}",
             "font_style": null,
             "font_weight": null
           },
           "string.special.symbol": {
-            "color": "{cyan}",
+            "color": "{string.special.symbol}",
             "font_style": null,
             "font_weight": null
           },
           "tag": {
-            "color": "{yellow}",
+            "color": "{tag}",
             "font_style": null,
             "font_weight": null
           },
           "text.literal": {
-            "color": "{green}",
+            "color": "{text.literal}",
             "font_style": null,
             "font_weight": null
           },
           "title": {
-            "color": "{blue}",
+            "color": "{title}",
             "font_style": null,
             "font_weight": 700
           },
           "type": {
-            "color": "{yellow}",
+            "color": "{type}",
             "font_style": null,
             "font_weight": null
           },
           "type.builtin": {
-            "color": "{foreground}",
+            "color": "{type.builtin}",
             "font_style": null,
             "font_weight": null
           },
           "type.interface": {
-            "color": "{yellow}",
+            "color": "{type.interface}",
             "font_style": null,
             "font_weight": null
           },
           "type.super": {
-            "color": "{yellow}",
+            "color": "{type.super}",
             "font_style": "italic",
             "font_weight": null
           },
           "variable": {
-            "color": "{foreground}",
+            "color": "{variable}",
             "font_style": null,
             "font_weight": null
           },
           "variable.member": {
-            "color": "{cyan}",
+            "color": "{variable.member}",
             "font_style": null,
             "font_weight": null
           },
           "variable.parameter": {
-            "color": "{cyan}",
+            "color": "{variable.parameter}",
             "font_style": "italic",
             "font_weight": null
           },
           "variable.special": {
-            "color": "{foreground}",
+            "color": "{variable.special}",
             "font_style": "italic",
             "font_weight": null
           },
           "variant": {
-            "color": "{orange}",
+            "color": "{variant}",
             "font_style": null,
             "font_weight": null
           }

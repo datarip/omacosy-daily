@@ -121,6 +121,11 @@ colors are derived from the palette `omacosy-derive` already wrote:
 - Their chroma follows the picture, so a pastel wallpaper gets a pastel set.
 - Every one is then pushed in lightness until it reaches 4.5:1 against the
   background.
+- A separate **operator** role is derived for syntax: it starts at the
+  bright-blue slot and, only when that sits too close to the variable
+  foreground or the number colour, moves to the hue furthest from the whole
+  syntax set. It must still reach 4.5:1 on the background. The editor exports
+  use the same rule.
 - The background itself is the theme's surface, pushed AWAY from the text until
   the text reads at 8:1. A terminal cannot be mid-tone: a dusty pink bar at
   relative luminance 0.19 would force every color to run to white or black.
@@ -142,8 +147,16 @@ sourced by a shell.
 | `OMACOSY_BLACK` … `OMACOSY_BR_WHITE` | the same 16, by name |
 | `OMACOSY_ACCENT`, `OMACOSY_ALT` | the theme's accent, and a second one |
 | `OMACOSY_OK`, `OMACOSY_WARN`, `OMACOSY_ERR`, `OMACOSY_INFO`, `OMACOSY_PEACH` | the roles a prompt uses, so a template says `err` and not `red` |
+| `OMACOSY_OPERATOR` | the syntax operator role: kept clear of the variable and number colours, 4.5:1 on the background |
 | `OMACOSY_MUTED` | dimmed text |
 | `OMACOSY_IS_DARK` | 1 on a dark terminal, 0 on a light one |
+
+A saved edition can also pin the base syntax roles. Those do not live in this
+file; they arrive through `overrides.env` as `OMACOSY_SYNTAX_<role>` (and the
+operator as `OMACOSY_OPERATOR`), layered over the palette. The Neovim writer
+asks `omacosy-themecore palette syntax` for the token map, so the live
+`nvim/palette.lua` carries the same Classic / Grouped / Neighboring /
+Expressive variants as the editor exports.
 
 No surface ramp is written. A consumer that wants one derives it from the
 background, the foreground and `OMACOSY_MUTED`.
@@ -309,15 +322,21 @@ Aether's colourscheme, [`omacom/aether.nvim`](https://github.com/omacom/aether.n
 `~/.config/omacosy/nvim/palette.lua`: a `colors` table under Aether's role
 names (`background`, `foreground`, `muted`, `lighter_bg`, `dark_bg`,
 `darker_bg`, `dark_fg`, `light_fg`, `bright_fg`, `red`, `yellow`, `orange`,
-`green`, `cyan`, `blue`, `purple`, `brown`, the six `bright_*`, `accent`,
-`cursor`, `selection`, `selection_foreground`, `selection_background`). Any
-config can read it with `dofile()`.
+`operator`, `green`, `cyan`, `blue`, `purple`, `brown`, the six `bright_*`,
+`accent`, `cursor`, `selection`, `selection_foreground`,
+`selection_background`). Any config can read it with `dofile()`.
 
 **The colourscheme.** The plugin hands that table to `aether.setup`; Aether
 paints every group from it. `accent` is the theme's own accent, so Neovim's
 accent matches the bar and the focus ring: Aether's ANSI blue slot for a
 palette theme built in the Theme Studio, and the picture's derived role accent
-for a Magic (wallpaper) theme. `transparent = true`, with transparent sidebars and
+for a Magic (wallpaper) theme. Aether has no operator key, so the plugin names
+`@operator` and `@keyword.operator` itself from the `operator` colour, which
+keeps `+ - * / < >` distinct from variables and numbers. An edition's
+**Syntax Variety** travels as a `syntax` file beside `colors.toml`, so the live
+Neovim palette follows the same Grouped / Neighboring / Expressive choice as
+the editor exports. `transparent = true`,
+with transparent sidebars and
 floats, keeps the editor's background the terminal's, so Ghostty's opacity shows
 through. The LazyVim dashboard logo (the `SnacksDashboardHeader` group), which
 Aether links to `Title`, is pointed at the accent too.
@@ -373,9 +392,11 @@ repainted, no Ghostty or tmux reload fires, `btop.conf` is untouched, and the
 machine's own tool opacity is not baked in. Every app is written whether or not
 it is installed here, so a bundle is complete.
 
-`omacosy-term-auto-theme export-theme <dir> <out-dir>` is the writer-facing
-half; run it directly with a directory holding a `colors.toml` (and an
-`overrides.env` when the theme has overrides). The exported `term-env.sh` and
+`omacosy-term-auto-theme export-theme <dir> <out-dir> [<label>] [<syntax>]` is
+the writer-facing half; run it directly with a directory holding a
+`colors.toml` (and an `overrides.env` when the theme has per-app overrides or
+syntax pins). `theme export` passes the record's `palette.syntax` as the last
+argument. The exported `term-env.sh` and
 `tmux-theme.conf` are self-contained — colour exports and a `status-style` — so
 a bundle never points back at the machine that made it.
 

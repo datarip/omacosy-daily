@@ -51,6 +51,38 @@ one changes only that Omacosy surface, never the `colors.toml` the terminal
 follows; click a card to open the colour inspector, and the pin dot plus the
 header Reset or "Reset N pinned" return them to auto.
 
+The **Syntax** row is full width and carries the ten base roles as swatches:
+**Operator, Keyword, Function, String, Number, Type, Variable, Property,
+Comment, Punctuation**. Each is derived from the palette and pinnable like the
+other shades; the nine family roles are stored as `syntax_<role>` pins, while
+**Operator** keeps its own `operator` pin. Operator is derived to
+stay perceptually clear of the variable foreground and the number colour, and
+is pushed to at least 4.5:1 on the background; when the bright-blue slot
+already stands apart it is kept, so most themes do not move. A literal
+complementary hue is deliberately not used: for a blue accent it would land on
+the number colour. The per-app **Template Overrides** panel also lists **Zed**
+and **VS Code** with their own **Operator** role, so an editor can diverge
+without changing the theme.
+
+The row header carries the **Syntax Variety** dropdown. **Classic** keeps the
+shipped token bindings, so an existing theme does not change. **Grouped**
+gives every variant its family's colour and leaves the differentiation to
+italics and weights. **Neighboring** keeps each variant a close shade of its
+family. **Expressive** rotates the variant's hue far enough to read as its own
+colour inside the family — green strings gain a teal escape and a yellow
+regex, blue functions a violet builtin — instead of merely a lighter tint.
+The choice is stored as `palette.syntax` in the record, applies live to the
+mock terminal, and
+travels to the Zed, VS Code and Neovim exports. The base swatches are the
+families; the dropdown changes their derived variants, which is why the
+base colours themselves stay put. A read-only **Variants** row below them
+(String/Escape, Function/Builtin, Type/Builtin, Number/Boolean,
+Comment/Doc, Punctuation/Bracket) shows those derived colours changing as
+you pick Grouped, Neighboring or Expressive. The mock terminal's language
+tabs show the same choices in context: doc comments, builtin calls,
+properties, builtin types, booleans, string escapes, punctuation and
+operators. A single variant can still be tuned by editing a template.
+
 ## Layout and styling
 
 The editor is two columns of the same width around the centre preview: the
@@ -119,7 +151,7 @@ automatically from the repo otherwise.
 
 ### What a bundle contains
 
-A full bundle is 17 files (16 when the theme has no per-app overrides):
+A full bundle is 17 files (16 when the theme has no per-app overrides or syntax pins):
 
 | File | What it is |
 | --- | --- |
@@ -130,13 +162,17 @@ A full bundle is 17 files (16 when the theme has no per-app overrides):
 | `vscode-extension/` | a VS Code colour-theme extension (`package.json`, `themes/theme.json`) |
 | `ghostty.conf`, `starship.toml`, `term-env.sh`, `term-palette.env` | the terminal's own colours |
 | `btop.theme`, `nvim-palette.lua`, `lazygit-theme.yml`, `delta.gitconfig`, `yazi-theme.toml`, `tmux-theme.conf` | the terminal tools' configs |
-| `overrides.env` | per-app role overrides, only when the theme has any |
+| `overrides.env` | per-app role overrides plus the theme-wide operator and `syntax_<role>` pins, when present |
 
 The bundle is self-contained: every file is generated from the theme, so it
 never points back at the machine that made it. It carries the theme's colours
 and configs, **not** the wallpaper picture — the record's `wallpaper.path` is
 provenance only, and the editor re-seeds its palette from whatever wallpaper
 you open it on.
+
+Zed's `operator`, VS Code's semantic and TextMate operator scopes, and
+Neovim's `operator` colour all read the theme's **Operator** role, so the
+exported editors agree with the editor preview and with each other.
 
 ### No secrets
 
