@@ -23,6 +23,14 @@
 import AppKit
 
 struct C { var r: Double, g: Double, b: Double
+    init(r: Double, g: Double, b: Double) { self.r = r; self.g = g; self.b = b }
+    init(hex: String) {
+        let h = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        let v = UInt64(h, radix: 16) ?? 0
+        self.init(r: Double((v >> 16) & 0xff) / 255,
+                  g: Double((v >> 8) & 0xff) / 255,
+                  b: Double(v & 0xff) / 255)
+    }
     var hex: String { String(format: "#%02x%02x%02x", q(r), q(g), q(b)) }
     func q(_ v: Double) -> Int { Int((min(1, max(0, v)) * 255).rounded()) } }
 
@@ -217,6 +225,11 @@ if let t = readColoursToml(themeDir), let b = t["background"], let f = t["foregr
             bg = x
         }
     }
+    // The terminal will draw this exact 8-bit hex. Derive every other
+    // colour from that canonical background, not from the unrounded
+    // intermediate, so the live palette and the engine cannot disagree by
+    // one channel at a rounding boundary.
+    bg = C(hex: bg.hex)
     fg = legible(lab, on: bg, ratio: 8)
     // the accent is the cursor and the prompt's last segment, so it has to be
     // readable on THIS background, not only on the bar's pill

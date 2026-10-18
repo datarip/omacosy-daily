@@ -130,7 +130,9 @@ colors are derived from the palette `omacosy-derive` already wrote:
   the text reads at 8:1. A terminal cannot be mid-tone: a dusty pink bar at
   relative luminance 0.19 would force every color to run to white or black.
   Which way it runs is the theme's own answer — light text means a dark
-  terminal.
+  terminal. That background is then rounded once to the 8-bit hex the terminal
+  actually draws, and every other colour is derived from that exact value, not
+  from the unrounded intermediate.
 
 ## 2. The palette file
 
