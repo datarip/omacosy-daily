@@ -2707,6 +2707,43 @@ func extractColors(url: URL, light: Bool, mode: String, useCache: Bool = true,
     return palette
 }
 
+// Every mode's strip for the editor's Method picker, from ONE image sample.
+// Calling `palette extract` per mode decodes the picture and repeats the
+// median cut each time, so a cold 23-row picker was 23 full extractions and
+// could still be running when the dropdown opened. One dominant list feeds
+// all 23 Aether generators here; each palette is the same value the
+// per-mode command produces, and every mode that was not cached is saved so
+// later single-mode asks stay fast.
+func extractModePalettes(url: URL, light: Bool, useCache: Bool = true) throws -> [(mode: String, colors: [String])] {
+    var dominant: (colors: [String], counts: [Int])?
+    var result: [(String, [String])] = []
+
+    // Decode and median-cut once, on the first mode that is not cached.
+    func sharedDominant() throws -> (colors: [String], counts: [Int]) {
+        if let dominant { return dominant }
+        let extracted = try extractDominantColors(url: url, count: Extract.dominantColorsToExtract)
+        guard extracted.colors.count >= 8 else {
+            throw ThemeError(message: "not enough colors extracted from image")
+        }
+        dominant = extracted
+        return extracted
+    }
+
+    for mode in Modes.all.map({ $0.value }) {
+        let cacheKey = useCache ? ExtractCache.key(path: url.path, light: light, mode: mode) : nil
+        if let cacheKey, let cached = ExtractCache.load(cacheKey) {
+            result.append((mode, cached))
+            continue
+        }
+        let shared = try sharedDominant()
+        let palette = normalizeBrightness(
+            generatePaletteByMode(shared.colors, normalizeCounts(shared.counts), light, mode))
+        if let cacheKey { ExtractCache.save(cacheKey, palette) }
+        result.append((mode, palette))
+    }
+    return result
+}
+
 // MARK: - Magic: the Omacosy bridge (Phase 2b)
 
 // Ported verbatim from helper/derive.swift — the engine that paints the bar,
@@ -7580,6 +7617,7 @@ func usage() -> Never {
            omacosy-themecore wallpaper rename <old> <new> [--json]
            omacosy-themecore wallpaper trash <path> [--json]
            omacosy-themecore palette extract <image> [--mode ID] [--light] [--no-cache] [--json]
+           omacosy-themecore palette strips <image> [--light] [--no-cache] [--json]
            omacosy-themecore palette generate --colors CSV [--counts CSV|--weights CSV]
                                            [--mode ID] [--light] [--normalize] [--json]
            omacosy-themecore palette magic <image> [--roles] [--no-cache] [--json]
@@ -8850,6 +8888,31 @@ case "palette":
                 printJSON(["path": path, "mode": mode, "light": light, "colors": palette])
             }
             palette.forEach { print($0) }
+            exit(0)
+        } catch { themeError(error) }
+
+    case "strips":
+        do {
+            guard let raw = args.first else { throw ThemeError(message: "palette strips needs an image path") }
+            args.removeFirst()
+            let light = takeBool("--light")
+            let noCache = takeBool("--no-cache")
+            noExtraArguments()
+            let path = Wallpapers.resolved(raw)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {
+                throw ThemeError(message: "no such image: \(path)")
+            }
+            let palettes = try extractModePalettes(url: URL(fileURLWithPath: path),
+                                                   light: light, useCache: !noCache)
+            var modes: [String: [String]] = [:]
+            for (mode, colors) in palettes { modes[mode] = colors }
+            if jsonOut {
+                printJSON(["path": path, "light": light, "modes": modes])
+            }
+            for (mode, colors) in palettes {
+                print("\(mode) \(colors.joined(separator: " "))")
+            }
             exit(0)
         } catch { themeError(error) }
 

@@ -7633,7 +7633,12 @@ final class PaletteModel {
 
     // --- engine -------------------------------------------------------------
 
-    private func update() { onUpdate?() }
+    private func update() {
+        onUpdate?()
+        // A dropdown opened before its strips finished now fills in place;
+        // the old snapshot forced the user to close and reopen it.
+        MethodPicker.refreshStrips()
+    }
     private func edited() { onUserEdit?() }
 
     private func defaultExtended(_ colors: [String], accent: String?) -> [String: String] {
@@ -8044,50 +8049,33 @@ final class PaletteModel {
     }
 
     // The mini palette strips the Method picker shows. The Magic strip is
-    // the seed itself and appears at once; the mode strips run in small
-    // parallel batches shortly after the first paint, so the picker is
-    // populated by the time it is opened. Magic runs with them: an edition
-    // seeds no strip of its own, and without it the Magic row stayed empty.
+    // the seed itself and appears at once; the mode strips come from one
+    // `palette strips` pass that samples the picture once and generates
+    // every mode from the shared dominant colours. The old per-mode batches
+    // decoded the picture again for each row, so a cold editor could still
+    // be filling the dropdown when it opened. No delay and no poll: the one
+    // result lands on main, and an already-open picker redraws through
+    // update().
     private func loadStrips() {
         guard !extractSource.isEmpty else { return }
         stripGeneration += 1
         let gen = stripGeneration
-        let values = ["magic"] + modeGroups.flatMap { $0.modes.map { $0.value } }
         let q = shellQuote(extractSource)
         let light = resolvedMode == "light"
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        DispatchQueue.global().async { [weak self] in
             guard let self else { return }
-            let batchSize = 6
-            var start = 0
-            while start < values.count {
+            let (code, out) = self.themecore("palette strips \(q)\(light ? " --light" : "") --json")
+            guard self.stripGeneration == gen else { return }
+            guard code == 0, let data = out.data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let modes = obj["modes"] as? [String: [String]]
+            else { return }
+            DispatchQueue.main.async {
                 guard self.stripGeneration == gen else { return }
-                let batch = Array(values[start..<min(start + batchSize, values.count)])
-                let group = DispatchGroup()
-                let lock = NSLock()
-                var done: [(String, [String])] = []
-                for value in batch {
-                    group.enter()
-                    DispatchQueue.global().async {
-                        defer { group.leave() }
-                        let cmd = "palette extract \(q) --mode \(value)\(light ? " --light" : "") --json"
-                        let (code, out) = self.themecore(cmd)
-                        guard code == 0, let data = out.data(using: .utf8),
-                              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                              let colors = obj["colors"] as? [String], colors.count == 16
-                        else { return }
-                        lock.lock()
-                        done.append((value, colors))
-                        lock.unlock()
-                    }
+                for (value, colors) in modes where colors.count == 16 {
+                    self.strips[value] = colors
                 }
-                group.wait()
-                guard self.stripGeneration == gen else { return }
-                DispatchQueue.main.async {
-                    guard self.stripGeneration == gen else { return }
-                    for (value, colors) in done { self.strips[value] = colors }
-                    if !done.isEmpty { self.update() }
-                }
-                start += batchSize
+                self.update()
             }
         }
     }
@@ -8196,6 +8184,11 @@ final class MethodPicker: NSObject {
     private var rows: [Row]
     private var selected = 0
     private let liveApply: Bool
+    // Set by the editor's Method picker only: it returns the model's current
+    // strips, so a row that was still a placeholder when the card opened
+    // fills in when the palette load lands instead of staying blank until
+    // the card is reopened.
+    private var liveStrips: (() -> [String: [String]])?
     private var completion: ((String) -> Void)?
     private var monitors: [Any] = []
     private let W: CGFloat = 340
@@ -8205,9 +8198,11 @@ final class MethodPicker: NSObject {
 
     private init(rows: [Row], strips: [String: [String]], currentMethod: String,
                  title: String, liveApply: Bool,
+                 liveStrips: (() -> [String: [String]])?,
                  completion: @escaping (String) -> Void) {
         self.rows = rows
         self.liveApply = liveApply
+        self.liveStrips = liveStrips
         self.completion = completion
         let h = min(430, max(80, MethodPickerList.height(for: rows) + 20 + 32))
         self.H = h
@@ -8233,10 +8228,12 @@ final class MethodPicker: NSObject {
     static func present(from view: NSView, rows: [Row], strips: [String: [String]],
                         currentMethod: String, title: String = "Method",
                         liveApply: Bool = false,
+                        liveStrips: (() -> [String: [String]])? = nil,
                         completion: @escaping (String) -> Void) {
         active?.close()
         let p = MethodPicker(rows: rows, strips: strips, currentMethod: currentMethod,
-                             title: title, liveApply: liveApply, completion: completion)
+                             title: title, liveApply: liveApply, liveStrips: liveStrips,
+                             completion: completion)
         guard let host = view.window else { return }
         let btn = host.convertToScreen(view.convert(view.bounds, to: nil))
         var x = btn.minX
@@ -8253,6 +8250,16 @@ final class MethodPicker: NSObject {
     }
 
     static func dismiss() { active?.close() }
+
+    // Called from PaletteModel.update(); only the card that supplied a
+    // liveStrips closure (the editor's Method picker) does anything, so the
+    // presets and filter cards keep the fixed strips they were opened with.
+    static func refreshStrips() { active?.refreshLiveStrips() }
+
+    private func refreshLiveStrips() {
+        guard let liveStrips else { return }
+        root.setStrips(liveStrips())
+    }
 
     private func show() {
         NSApp.activate(ignoringOtherApps: true)
@@ -8369,6 +8376,13 @@ final class MethodPickerRoot: NSView {
         let w = max(scroll.contentSize.width, 10)
         list.frame = NSRect(x: 0, y: 0, width: w,
                             height: max(scroll.contentSize.height, MethodPickerList.height(for: rows)))
+    }
+
+    func setStrips(_ next: [String: [String]]) {
+        guard next != strips else { return }
+        strips = next
+        list.strips = next
+        list.needsDisplay = true
     }
 
     func scrollToSelected() { list.scrollRowIntoView(selected, in: scroll) }
@@ -9988,7 +10002,8 @@ final class PaletteBuilderView: NSView {
                 }
             }
             MethodPicker.present(from: self.doc.methodButton, rows: rows, strips: model.strips,
-                                 currentMethod: model.method, liveApply: true) { [weak model] value in
+                                 currentMethod: model.method, liveApply: true,
+                                 liveStrips: { [weak model] in model?.strips ?? [:] }) { [weak model] value in
                 model?.chooseMethod(value)
             }
         }
