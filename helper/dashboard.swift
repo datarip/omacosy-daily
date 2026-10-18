@@ -6723,9 +6723,9 @@ func hexString(from color: NSColor) -> String? {
 }
 
 // The engine's ColorMath.lightened, integer-exact. The semantic ACCENT
-// group's Orange is the red slot lightened 15% (`palette shades`), and
-// that orange is the accent an edition carries to the desktop — the bar,
-// the focus ring and the dashboard chrome all read it.
+// group's Orange is the red slot lightened 15% (`palette shades`): a shade
+// of the palette, not the UI accent. The accent is the ANSI blue slot, as in
+// Aether, so this orange moves no desktop surface by itself.
 func lightenedHex(_ hex: String, percent: Double) -> String {
     let clean = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
     guard clean.count == 6, let v = UInt64(clean, radix: 16) else { return hex }
@@ -6749,6 +6749,33 @@ func mixHex(_ a: String, _ b: String, _ p: Int) -> String {
     guard let (ar, ag, ab) = comps(a), let (br, bg, bb) = comps(b) else { return a }
     func ch(_ x: Int, _ y: Int) -> Int { x + (y - x) * p / 100 }
     return String(format: "#%02x%02x%02x", ch(ar, br), ch(ag, bg), ch(ab, bb))
+}
+
+// Aether's setPalette rule for the four extended colours: the accent is the
+// ANSI blue slot (index 4), which is what Aether's editor shows under UI ->
+// Accent and what its templates write as `accent`. The red slot lightened 15%
+// is a different colour — the semantic ACCENT group's Orange shade — and
+// using it as the UI accent turned every blue-dominant wallpaper's bar, ring
+// and chrome red. The two stay apart here exactly as they do in Aether.
+// `accent` is the picture's own role accent, which Magic passes through.
+func paletteExtendedDefaults(_ colors: [String], accent: String?) -> [String: String] {
+    let c = colors.count == 16 ? colors : Array(repeating: "#000000", count: 16)
+    return ["accent": accent ?? c[4],
+            "cursor": c[7],
+            "selection_foreground": c[0], "selection_background": c[7]]
+}
+
+// The 16 colours a Magic draft seeds from: the derived theme's ANSI set with
+// slot 0 replaced by the background the theme really draws on (OMACOSY_BG).
+// The derived set's slot 0 is ANSI black — the background lightened 0.10 — a
+// colour for text, not a pane to paint, and the Theme Studio reads slot 0 as
+// the background. Without this swap the Magic pane came out a rung too light
+// and washed out over the wallpaper, unlike every Aether preset.
+func magicThemeColors(_ ansi: [String], background: String?) -> [String] {
+    guard ansi.count == 16, let bg = background.flatMap(cleanHex) else { return ansi }
+    var colors = ansi
+    colors[0] = bg
+    return colors
 }
 
 // A user-typed colour, normalised to "#rrggbb"; nil when it is not one.
@@ -7109,9 +7136,10 @@ final class PaletteModel {
         resolvedMode = resolved == "light" ? "light" : "dark"
         baseColors = colors
         // Aether's setPalette at extraction: the UI colours derive from the
-        // new palette. For Magic the accent is the wallpaper's own role
-        // accent (`palette magic --roles`) so the draft and the raw theme
-        // stay one theme; without it the palette's orange stands in.
+        // new palette, and the accent is its ANSI blue slot. For Magic the
+        // accent is the wallpaper's own role accent (`palette magic --roles`)
+        // so the draft and the raw theme stay one theme; without it the
+        // palette's blue slot stands in.
         extendedHex = defaultExtended(colors, accent: accent)
         adjustments = EditorAdjustments()
         curve = []
@@ -7565,15 +7593,7 @@ final class PaletteModel {
     private func edited() { onUserEdit?() }
 
     private func defaultExtended(_ colors: [String], accent: String?) -> [String: String] {
-        let c = colors.count == 16 ? colors : Array(repeating: "#000000", count: 16)
-        // The accent is the same orange the semantic ACCENT group shows:
-        // the red slot lightened 15% (the engine's `palette shades`). The
-        // ANSI blue slot (c[4]) left the desktop accent unrelated to the
-        // palette the editor draws, so the bar and dashboard kept a colour
-        // the user could not find anywhere in the editor.
-        return ["accent": accent ?? lightenedHex(c[1], percent: 15),
-                "cursor": c[7],
-                "selection_foreground": c[0], "selection_background": c[7]]
+        paletteExtendedDefaults(colors, accent: accent)
     }
 
     // Aether's setPalette: a whole-palette swap re-derives the four UI
@@ -7759,7 +7779,7 @@ final class PaletteModel {
                 // A magic re-extraction is the wallpaper's own theme again:
                 // the accent returns to the picture's role accent (so the
                 // edition matches the raw Wallpaper cell), not the palette's
-                // orange.
+                // ANSI blue slot.
                 magicAccent = obj["accent"] as? String
             }
             guard colors.count == 16 else { return }
@@ -12837,9 +12857,9 @@ final class ThemeEditor {
             DispatchQueue.global().async { [weak self] in
                 guard let self else { return }
                 // Fast path: the derived theme the Themes grid already shows.
-                // Its 16 colours ARE the Magic palette (the Phase 2
-                // cross-check pins them), and term-palette reads them in
-                // milliseconds instead of a fresh extraction (~0.6 s on 4K).
+                // Its ANSI colours plus OMACOSY_BG ARE the Magic palette (the
+                // Phase 2 cross-check pins them), and term-palette reads them
+                // in milliseconds instead of a fresh extraction (~0.6 s on 4K).
                 let (rc, rout) = shell("\(HOME)/.local/bin/omacosy-custom-theme theme --raw \(q) 2>/dev/null")
                 let dir = rout.split(separator: "\n").last.map(String.init)?
                     .trimmingCharacters(in: .whitespaces) ?? ""
@@ -12849,6 +12869,7 @@ final class ThemeEditor {
                     let (tc, _) = shell("\(HOME)/.local/bin/omacosy-term-palette \(shellQuote(dir)) \(shellQuote(envFile)) >/dev/null 2>&1")
                     var byIndex: [Int: String] = [:]
                     var accent: String? = nil
+                    var background: String? = nil
                     var resolved = "dark"
                     if tc == 0, let text = try? String(contentsOfFile: envFile, encoding: .utf8) {
                         for line in text.split(separator: "\n") {
@@ -12857,6 +12878,8 @@ final class ThemeEditor {
                             let value = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
                             if parts[0].hasPrefix("OMACOSY_P"), let i = Int(parts[0].dropFirst(9)) {
                                 byIndex[i] = value
+                            } else if parts[0] == "OMACOSY_BG" {
+                                background = value
                             } else if parts[0] == "OMACOSY_ACCENT" {
                                 accent = value
                             } else if parts[0] == "OMACOSY_IS_DARK" {
@@ -12865,7 +12888,8 @@ final class ThemeEditor {
                         }
                     }
                     try? FileManager.default.removeItem(atPath: envFile)
-                    let colors = (0..<16).compactMap { byIndex[$0] }
+                    let colors = magicThemeColors((0..<16).compactMap { byIndex[$0] },
+                                                  background: background)
                     if colors.count == 16 {
                         DispatchQueue.main.async {
                             self.model.seedDraft(image: wallpaper, colors: colors,
@@ -18103,6 +18127,76 @@ func aaScoreSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--aa-score-selftest") {
     exit(aaScoreSelfTest() == 0 ? 0 : 1)
+}
+
+// The editor's UI accent is Aether's ANSI blue slot, not the red slot's
+// lightened orange (the semantic ACCENT group's Orange shade). Aether's own
+// Semantic Colors panel shows the two side by side — #F59CB5 under ACCENT /
+// Orange, #89B4FA under UI / Accent — and its bar, ring and chrome follow the
+// latter. Pin that apart so the red slot cannot quietly drive the desktop
+// again on a blue-dominant wallpaper.
+func paletteAccentSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    // Catppuccin Mocha: the palette in the Aether screenshot beside the bug
+    // report. Its blue slot is #89b4fa, its red slot lightens to #f59cb5.
+    let mocha = ["#1e1e2e", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#cba6f7",
+                 "#94e2d5", "#cdd6f4", "#45475a", "#f38ba8", "#a6e3a1", "#f9e2af",
+                 "#89b4fa", "#cba6f7", "#94e2d5", "#bac2de"]
+    let ext = paletteExtendedDefaults(mocha, accent: nil)
+    check("the UI accent is Aether's ANSI blue slot", ext["accent"] == "#89b4fa")
+    check("the red slot's orange is not the UI accent",
+          ext["accent"] != lightenedHex("#f38ba8", percent: 15))
+    check("cursor and selection follow the palette",
+          ext["cursor"] == "#cdd6f4" && ext["selection_foreground"] == "#1e1e2e"
+              && ext["selection_background"] == "#cdd6f4")
+    check("Magic keeps the accent it extracted from the picture",
+          paletteExtendedDefaults(mocha, accent: "#46a8ef")["accent"] == "#46a8ef")
+    check("a short palette still yields four colours",
+          paletteExtendedDefaults(["#123456"], accent: nil).values.allSatisfy { $0 == "#000000" })
+    print(failures == 0 ? "palette accent selftest: all checks passed"
+                        : "palette accent selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--palette-accent-selftest") {
+    exit(paletteAccentSelfTest() == 0 ? 0 : 1)
+}
+
+// A Magic draft takes its 16 colours from term-palette's ANSI set, whose slot 0
+// is ANSI black (the background lightened 0.10) — so the preview and a saved
+// Magic theme painted their terminal a rung too light and looked washed out
+// over the wallpaper, unlike every Aether preset. The draft now seeds slot 0
+// from OMACOSY_BG, the background the theme really draws on; pin it here.
+func magicBackgroundSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    // The derived theme of wallhaven-13vym3 on this machine: P0 is ANSI black,
+    // OMACOSY_BG is the surface the auto theme actually draws on.
+    let ansi = ["2f2720", "d08260", "86a559", "bb9043", "8293db", "c77daa", "27adad", "e6c8a8",
+                "736a61", "f9a784", "abcb7e", "e2b669", "a9bafd", "efa2d0", "59d3d3", "e6c8a8"]
+    let fixed = magicThemeColors(ansi, background: "171009")
+    check("slot 0 is the theme's real background", fixed[0] == "#171009")
+    check("the ANSI colours after slot 0 are untouched",
+          Array(fixed[1...]) == Array(ansi[1...]))
+    check("a #-prefixed background normalises too",
+          magicThemeColors(ansi, background: "#171009")[0] == "#171009")
+    check("without a background the set is unchanged", magicThemeColors(ansi, background: nil) == ansi)
+    check("a malformed background is ignored", magicThemeColors(ansi, background: "nope") == ansi)
+    check("a short set is left alone", magicThemeColors(["2f2720"], background: "171009") == ["2f2720"])
+    print(failures == 0 ? "magic background selftest: all checks passed"
+                        : "magic background selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--magic-background-selftest") {
+    exit(magicBackgroundSelfTest() == 0 ? 0 : 1)
 }
 
 // The picker's arrow keys must move the LIST's highlight, not just the

@@ -17,9 +17,17 @@ Saving or applying keeps the editor open: **Save** writes the theme and
 window — only the **✕** button or **Esc** does. Several palettes can therefore
 be saved, applied and compared in one sitting. Applying a theme repaints the
 whole editor too, scrollbars and buttons included. The dashboard and the bar
-draw their own background and pills from the palette's **accent** — the colour
-the palette names itself with — so any applied palette, Magic or an Aether
-mode, keeps Omacosy's chrome on theme.
+draw their own background and pills from the palette's **accent** — Aether's
+ANSI blue slot (index 4) for a Mode or Preset, the picture's own derived role
+accent for Magic — so any applied palette keeps Omacosy's chrome on theme. The
+**Accent** group in the Semantic Colors section is a different thing: its
+**Orange** shade is the red slot lightened 15%, a palette shade that drives no
+desktop surface by itself.
+
+Magic's slot 0 is the wallpaper theme's own background — the same
+`OMACOSY_BG` the auto themes draw on, not the ANSI black one rung above it —
+so its terminal preview is as deep as an Aether preset's instead of washing
+out over the wallpaper.
 
 The editor previews the theme you are building **live**: its own background,
 text, pills and accent follow the draft as you transform the palette, before

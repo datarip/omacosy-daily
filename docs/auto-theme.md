@@ -314,9 +314,10 @@ names (`background`, `foreground`, `muted`, `lighter_bg`, `dark_bg`,
 config can read it with `dofile()`.
 
 **The colourscheme.** The plugin hands that table to `aether.setup`; Aether
-paints every group from it. `accent` is omacosy's own orange (the palette's red
-lightened 15%), so Neovim's accent matches the bar and the focus ring; Aether's
-own blue accent is not used. `transparent = true`, with transparent sidebars and
+paints every group from it. `accent` is the theme's own accent, so Neovim's
+accent matches the bar and the focus ring: Aether's ANSI blue slot for a
+palette theme built in the Theme Studio, and the picture's derived role accent
+for a Magic (wallpaper) theme. `transparent = true`, with transparent sidebars and
 floats, keeps the editor's background the terminal's, so Ghostty's opacity shows
 through. The LazyVim dashboard logo (the `SnacksDashboardHeader` group), which
 Aether links to `Title`, is pointed at the accent too.

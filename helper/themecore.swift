@@ -2424,10 +2424,12 @@ func extractionModeExists(_ mode: String) -> Bool {
 
 // Extraction results are cached under ~/.local/state/omacosy/studio/palettes,
 // keyed by resolved path + mtime (milliseconds) + ladder + mode, so a repeat
-// ask answers in tens of milliseconds. Version 1; bump when a generator's
+// ask answers in tens of milliseconds. Versioned; bump when a generator's
 // output changes meaningfully.
 enum ExtractCache {
-    static let version = 1
+    // Bump when the cached palette's meaning changes. v2: a Magic palette's
+    // slot 0 is the theme's background (OMACOSY_BG), not ANSI black.
+    static let version = 2
     // The Magic roles are one six-pass image analysis. `magicUntouched` asks
     // for them on every new theme revision, so they get their own cache beside
     // the palette. Version them separately: the palette's output is stable
@@ -3229,19 +3231,9 @@ enum TermFormula {
     static func palette(accent accentHex: String, surface: String, label: String) -> [String] {
         var accent = C(hex: accentHex)
         let lab = C(hex: label)
-        var bg = C(hex: surface)
+        let bg = C(hex: terminalBackground(surface: surface, label: label))
 
         let dark = relLum(lab) > 0.4
-        if contrast(lab, bg) < 8 {
-            let o = toOK(bg)
-            var L = o.L
-            while L > 0.03 && L < 0.99 {
-                L += dark ? -0.01 : 0.01
-                let x = fit(L, min(o.C, 0.05), o.h)
-                if contrast(lab, x) >= 8 { bg = x; break }
-                bg = x
-            }
-        }
         accent = legible(accent, on: bg, ratio: 4.5)
 
         let aOK = toOK(accent)
@@ -3263,6 +3255,41 @@ enum TermFormula {
         for h in base { ansi.append(legible(fit(brightL, chroma, harmonised(h)), on: bg, ratio: 4.5).hex) }
         ansi.append(legible(lab, on: bg, ratio: 10).hex)
         return ansi
+    }
+
+    // The background a Magic theme's terminal actually draws on
+    // (omacosy-term-palette's OMACOSY_BG): the theme's surface pushed away
+    // from its text until it reads at 8:1, the same rule term-palette.swift
+    // applies. A deep surface does not move.
+    static func terminalBackground(surface: String, label: String) -> String {
+        var bg = C(hex: surface)
+        let lab = C(hex: label)
+        let dark = relLum(lab) > 0.4
+        if contrast(lab, bg) < 8 {
+            let o = toOK(bg)
+            var L = o.L
+            while L > 0.03 && L < 0.99 {
+                L += dark ? -0.01 : 0.01
+                let x = fit(L, min(o.C, 0.05), o.h)
+                if contrast(lab, x) >= 8 { bg = x; break }
+                bg = x
+            }
+        }
+        return bg.hex
+    }
+
+    // A Magic theme's 16 colours with slot 0 set to the background it really
+    // draws on. `palette` returns term-palette's ANSI set, whose slot 0 is
+    // ANSI black (the background lightened 0.10) — a colour to write text
+    // with, not a pane to paint. Every Aether palette keeps the background in
+    // slot 0, and the Theme Studio reads slot 0 as the background; without
+    // this swap a Magic pane came out one rung too light over the wallpaper.
+    static func themePalette(accent accentHex: String, surface: String, label: String) -> [String] {
+        var colors = palette(accent: accentHex, surface: surface, label: label)
+        if colors.count == 16 {
+            colors[0] = terminalBackground(surface: surface, label: label)
+        }
+        return colors
     }
 }
 
@@ -3308,9 +3335,9 @@ func magicPalette(url: URL, useCache: Bool = true) throws -> [String] {
     if useCache, let key, let cached = ExtractCache.load(key) { return cached }
 
     let roles = try magicRoles(url: url, useCache: useCache)
-    let palette = TermFormula.palette(accent: roles.accent.hex,
-                                      surface: roles.surface.hex,
-                                      label: roles.label.hex)
+    let palette = TermFormula.themePalette(accent: roles.accent.hex,
+                                           surface: roles.surface.hex,
+                                           label: roles.label.hex)
     if useCache, let key { ExtractCache.save(key, palette) }
     return palette
 }
@@ -8275,9 +8302,9 @@ case "palette":
                 // Returning both here saves a second six-pass extraction: the
                 // palette hangs off the roles we just read/computed.
                 let colors = noCache
-                    ? TermFormula.palette(accent: roles.accent.hex,
-                                          surface: roles.surface.hex,
-                                          label: roles.label.hex)
+                    ? TermFormula.themePalette(accent: roles.accent.hex,
+                                               surface: roles.surface.hex,
+                                               label: roles.label.hex)
                     : try magicPalette(url: url, useCache: true)
                 let low = roles.isLowChroma ? "+lowchroma" : ""
                 if jsonOut {

@@ -38,8 +38,8 @@ local function apply()
     styles = { sidebars = "transparent", floats = "transparent" },
     colors = colors,
     on_highlights = function(hl, c)
-      -- the LazyVim dashboard logo is the header; Aether links it to Title,
-      -- so it wore blue while the desktop accent is orange. Name it directly.
+      -- the LazyVim dashboard logo is the header; Aether links it to Title
+      -- (blue), so name the theme's own accent directly.
       hl.SnacksDashboardHeader = { fg = c.accent }
       hl.SnacksDashboardFooter = { fg = c.accent }
     end,

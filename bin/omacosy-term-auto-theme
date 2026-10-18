@@ -708,8 +708,8 @@ write_btop() {
   fg="$(ovr btop foreground "$(val OMACOSY_FG)")"
   muted="$(ovr btop muted "$(val OMACOSY_MUTED)")"
   lighter_bg="$(ovr btop lighter_bg "$(mix "$bg" "#ffffff" 10)")"
-  # Aether's {accent} is the palette's blue slot; its {orange} is Omacosy's
-  # accent (the red slot lightened) and btop's template does not use it.
+  # Aether's {accent} is the palette's blue slot, and that is what btop's
+  # template binds here; its {orange} (the red slot lightened) is unused by btop.
   accent="$(ovr btop accent "$(val OMACOSY_BLUE)")"
   red="$(ovr btop red "$(val OMACOSY_RED)")"
   green="$(ovr btop green "$(val OMACOSY_GREEN)")"
@@ -846,9 +846,10 @@ write_nvim() {
   bright_cyan="$(ovr nvim bright_cyan "$(val OMACOSY_P14)")"
   bright_blue="$(ovr nvim bright_blue "$(val OMACOSY_P12)")"
   bright_purple="$(ovr nvim bright_purple "$(val OMACOSY_P13)")"
-  # The accent is Omacosy's own (the palette's orange), so Neovim's accent --
-  # and any accent-driven UI like the LazyVim logo -- matches the desktop.
-  # {blue} stays the palette's blue slot; Aether's blue accent is not used.
+  # The accent is the theme's own, so Neovim's accent -- and any
+  # accent-driven UI like the LazyVim logo -- matches the desktop: Aether's
+  # ANSI blue slot for a palette theme, the picture's derived role accent for
+  # a Magic theme. {blue} stays the palette's blue slot either way.
   accent="$(ovr nvim accent "$(val OMACOSY_ACCENT)")"
   cursor="$(ovr nvim cursor "$(val OMACOSY_CURSOR)")"
   sel="$(ovr nvim selection "$lighter_bg")"
