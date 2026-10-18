@@ -64,7 +64,7 @@ the number colour. The per-app **Template Overrides** panel also lists **Zed**
 and **VS Code** with their own **Operator** role, so an editor can diverge
 without changing the theme.
 
-The row header carries the **Syntax Variety** dropdown. **Classic** keeps the
+The row header carries the **Variant Style** dropdown. **Classic** keeps the
 shipped token bindings, so an existing theme does not change. **Grouped**
 gives every variant its family's colour and leaves the differentiation to
 italics and weights. **Neighboring** keeps each variant a close shade of its
@@ -75,7 +75,9 @@ The choice is stored as `palette.syntax` in the record, applies live to the
 mock terminal, and
 travels to the Zed, VS Code and Neovim exports. The base swatches are the
 families; the dropdown changes their derived variants, which is why the
-base colours themselves stay put. A read-only **Variants** row below them
+base colours themselves stay put. It is a **variant style**, not a remap of
+the ten base swatches: **Operator** has no derived variant, so it does not
+change with the dropdown at all. A read-only **Variants** row below them
 (String/Escape, Function/Builtin, Type/Builtin, Number/Boolean,
 Comment/Doc, Punctuation/Bracket) shows those derived colours changing as
 you pick Grouped, Neighboring or Expressive. The mock terminal's language

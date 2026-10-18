@@ -8979,10 +8979,10 @@ final class SemanticSectionView: NSView {
     private let varietyButton = PopupButtonView()
     private static func varietyTitle(_ value: String) -> String {
         switch value {
-        case "grouped": return "Variety: Grouped"
-        case "neighboring": return "Variety: Neighboring"
-        case "expressive": return "Variety: Expressive"
-        default: return "Variety: Classic"
+        case "grouped": return "Variant Style: Grouped"
+        case "neighboring": return "Variant Style: Neighboring"
+        case "expressive": return "Variant Style: Expressive"
+        default: return "Variant Style: Classic"
         }
     }
 
@@ -9006,7 +9006,7 @@ final class SemanticSectionView: NSView {
                              label: "Expressive — Wider"),
         ]
         MethodPicker.present(from: varietyButton, rows: rows, strips: [:],
-                             currentMethod: syntaxVariety, title: "Syntax Variety",
+                             currentMethod: syntaxVariety, title: "Variant Style",
                              liveApply: true) { [weak self] value in
             self?.onVariety?(value)
         }
@@ -9111,7 +9111,7 @@ final class SemanticSectionView: NSView {
         }
         // In the group's header row, beside the SYNTAX title and above the
         // cards: the same 20 pt trigger height the Method/Presets pickers use.
-        let w: CGFloat = 220
+        let w: CGFloat = 250
         varietyButton.isHidden = false
         varietyButton.frame = NSRect(x: box.maxX - 10 - w, y: box.maxY - 26,
                                      width: w, height: 20)

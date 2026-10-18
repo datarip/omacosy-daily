@@ -335,7 +335,7 @@ palette theme built in the Theme Studio, and the picture's derived role accent
 for a Magic (wallpaper) theme. Aether has no operator key, so the plugin names
 `@operator` and `@keyword.operator` itself from the `operator` colour, which
 keeps `+ - * / < >` distinct from variables and numbers. An edition's
-**Syntax Variety** travels as a `syntax` file beside `colors.toml`, so the live
+**Variant Style** travels as a `syntax` file beside `colors.toml`, so the live
 Neovim palette follows the same Grouped / Neighboring / Expressive choice as
 the editor exports. `transparent = true`,
 with transparent sidebars and
