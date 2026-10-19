@@ -212,7 +212,16 @@ the message names both flags.
 ## Custom presets
 
 The Wallpaper Editor's **Presets** section keeps Aether's built-in looks (the
-dropdown) and lets you save your own. **Save Current** stores the filter
+dropdown) and lets you save your own. Under **COLOR FILTERS** it also carries
+eight Wratten-style filters — **Red, Orange, Yellow, Green, Teal, Blue, Violet
+and Magenta** — each of which turns the picture black and white and lays a
+coloured filter over the luma. They are ordinary recipes: Saturation 0,
+Contrast 115, plus `colorFilterHue` (0–360) and `colorFilterStrength` (0–100),
+so a custom preset can carry its own hue and the master **Strength** blends it
+with everything else. From the CLI the same two fields are
+`--color-filter-hue` and `--color-filter-strength`.
+
+**Save Current** stores the filter
 adjustments you have made to the picture — only the values that differ from the
 defaults — under a name you type. Saved presets show as rows under **Custom**:
 click a name to apply it, click its **✕** to delete it. Applying a preset is a

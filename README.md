@@ -778,7 +778,9 @@ Editor, and a saved variation carries a named card of its own with
 Wallpaper Editor: **Save** stores the theme and its edited wallpaper, and
 **Apply & Save** puts them on the desktop. Its **Presets** keeps your own
 filter presets — **Save Current**, a **Custom** list with delete, and
-**Import/Export** in Aether's `aether-presets.json` shape. **Export**
+**Import/Export** in Aether's `aether-presets.json` shape — and adds eight
+**colour filters** that turn the picture black and white under a Red, Orange,
+Yellow, Green, Teal, Blue, Violet or Magenta tint. **Export**
 writes a shareable folder — the theme plus its Zed, VS Code, Neovim and
 terminal configs — and **Import** reads one back, or a `colors.toml` or a
 Base16 scheme; a name already in your library is offered Rename or Replace

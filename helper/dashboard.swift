@@ -4871,6 +4871,20 @@ enum EditorPresets {
         ("Poster", ["posterize": 5, "contrast": 130, "saturation": 140]),
         ("Dreamy", ["blur": 15, "brightness": 110, "saturation": 80, "fade": 20]),
         ("Noir", ["saturation": 0, "contrast": 140, "grain": 3, "vignette": 40]),
+        ("Red Filter", ["saturation": 0, "contrast": 115, "colorFilterHue": 0, "colorFilterStrength": 100]),
+        ("Orange Filter", ["saturation": 0, "contrast": 115, "colorFilterHue": 30, "colorFilterStrength": 100]),
+        ("Yellow Filter", ["saturation": 0, "contrast": 115, "colorFilterHue": 55, "colorFilterStrength": 100]),
+        ("Green Filter", ["saturation": 0, "contrast": 115, "colorFilterHue": 120, "colorFilterStrength": 100]),
+        ("Teal Filter", ["saturation": 0, "contrast": 115, "colorFilterHue": 180, "colorFilterStrength": 100]),
+        ("Blue Filter", ["saturation": 0, "contrast": 115, "colorFilterHue": 220, "colorFilterStrength": 100]),
+        ("Violet Filter", ["saturation": 0, "contrast": 115, "colorFilterHue": 275, "colorFilterStrength": 100]),
+        ("Magenta Filter", ["saturation": 0, "contrast": 115, "colorFilterHue": 320, "colorFilterStrength": 100]),
+    ]
+    // The colour-filter presets, grouped under their own heading in the
+    // dropdown. Kept in step with themecore's ImagePresets.
+    static let colorFilters: Set<String> = [
+        "Red Filter", "Orange Filter", "Yellow Filter", "Green Filter",
+        "Teal Filter", "Blue Filter", "Violet Filter", "Magenta Filter",
     ]
 }
 
@@ -5179,8 +5193,15 @@ final class EditorPanelDoc: NSView, NSTextFieldDelegate {
         presetsButton.title = "Choose…"
         presetsButton.onClick = { [weak self] in
             guard let self else { return }
-            let rows = EditorPresets.all.map {
-                MethodPicker.Row(header: nil, value: $0.name, label: $0.name)
+            var rows: [MethodPicker.Row] = []
+            var addedFilterHeader = false
+            for preset in EditorPresets.all {
+                if EditorPresets.colorFilters.contains(preset.name) && !addedFilterHeader {
+                    rows.append(MethodPicker.Row(header: "COLOR FILTERS", value: nil,
+                                                 label: "COLOR FILTERS"))
+                    addedFilterHeader = true
+                }
+                rows.append(MethodPicker.Row(header: nil, value: preset.name, label: preset.name))
             }
             MethodPicker.present(from: self.presetsButton, rows: rows, strips: [:],
                                  currentMethod: "", title: "Presets", liveApply: true) { [weak self] name in
@@ -5876,6 +5897,11 @@ struct EditorFilters: Equatable {
     var highlights = 0.0
     var temperature = 0.0
     var tint = 0.0
+    // A photographic colour filter: the picture's luma tinted by `hue` (0-360)
+    // and blended by `strength` (0-100). With Saturation 0 this is a black-and-
+    // white picture under a coloured filter.
+    var colorFilterHue = 0.0
+    var colorFilterStrength = 0.0
     var curvePoints: [[Double]] = []
     var paletteStops: [String] = []
     var paletteStrength = 70.0
@@ -5909,7 +5935,8 @@ struct EditorFilters: Equatable {
             "paletteStops", "palette_stops", "paletteStrength", "palette_strength",
             "cropX", "cropY", "cropW", "cropH", "crop_x", "crop_y", "crop_w", "crop_h",
             "resizeW", "resizeH", "resize_w", "resize_h", "rotate", "flipH", "flipV",
-            "flip_h", "flip_v", "strength"]
+            "flip_h", "flip_v", "strength", "colorFilterHue", "color_filter_hue",
+            "colorFilterStrength", "color_filter_strength"]
         for (key, value) in json where known.contains(key) {
             switch key {
             case "blur": blur = num(value)
@@ -5933,6 +5960,8 @@ struct EditorFilters: Equatable {
             case "highlights": highlights = num(value)
             case "temperature": temperature = num(value)
             case "tint": tint = num(value)
+            case "colorFilterHue", "color_filter_hue": colorFilterHue = num(value)
+            case "colorFilterStrength", "color_filter_strength": colorFilterStrength = num(value)
             case "paletteStrength", "palette_strength": paletteStrength = num(value)
             case "cropX", "crop_x": cropX = num(value)
             case "cropY", "crop_y": cropY = num(value)
@@ -5990,6 +6019,7 @@ struct EditorFilters: Equatable {
         f.highlights = lerp(highlights, 0)
         f.temperature = lerp(temperature, 0)
         f.tint = lerp(tint, 0)
+        f.colorFilterStrength = lerp(colorFilterStrength, 0)
         f.hueRotate = hueRotate * s
         f.sepia = sepia * s
         f.invert = invert * s
@@ -6014,6 +6044,7 @@ struct EditorFilters: Equatable {
             && exposure == 0 && vignette == 0 && sharpen == 0 && grain == 0 && shadows == 0
             && oilPaint == 0 && pixelate == 0 && clarity == 0 && fade == 0 && posterize == 0 && noise == 0
             && highlights == 0 && temperature == 0 && tint == 0 && rotate == 0 && !flipH && !flipV
+            && colorFilterStrength == 0
             && cropX == 0 && cropY == 0 && cropW == 1 && cropH == 1 && resizeW == 0 && resizeH == 0
     }
 
@@ -6063,6 +6094,8 @@ struct EditorFilters: Equatable {
             case "highlights": return highlights
             case "temperature": return temperature
             case "tint": return tint
+            case "colorFilterHue": return colorFilterHue
+            case "colorFilterStrength": return colorFilterStrength
             case "paletteStrength": return paletteStrength
             case "cropX": return cropX
             case "cropY": return cropY
@@ -6098,6 +6131,8 @@ struct EditorFilters: Equatable {
             case "highlights": highlights = newValue
             case "temperature": temperature = newValue
             case "tint": tint = newValue
+            case "colorFilterHue": colorFilterHue = newValue
+            case "colorFilterStrength": colorFilterStrength = newValue
             case "paletteStrength": paletteStrength = newValue
             case "cropX": cropX = newValue
             case "cropY": cropY = newValue
@@ -6122,6 +6157,7 @@ struct EditorFilters: Equatable {
             "clarity": clarity, "fade": fade, "posterize": posterize, "noise": noise,
             "shadows": shadows,
             "highlights": highlights, "temperature": temperature, "tint": tint,
+            "colorFilterHue": colorFilterHue, "colorFilterStrength": colorFilterStrength,
             "paletteStrength": paletteStrength, "cropX": cropX, "cropY": cropY,
             "cropW": cropW, "cropH": cropH, "resizeW": resizeW, "resizeH": resizeH,
             "rotate": rotate, "flipH": flipH, "flipV": flipV, "strength": strength,
@@ -6271,6 +6307,16 @@ private func ciHueColorMatrix(_ image: CIImage, degrees: Double) -> CIImage {
         b: CIVector(x: m[2][0], y: m[2][1], z: m[2][2], w: 0),
         a: CIVector(x: 0, y: 0, z: 0, w: 1),
         bias: CIVector(x: 0, y: 0, z: 0, w: 0))
+}
+
+// The engine's colour-filter tint: a hue at moderate saturation, normalised so
+// its brightest channel is 1. Keeps white white-ish instead of the pure hue.
+private func colorFilterTint(_ hue: Double) -> (r: Double, g: Double, b: Double) {
+    let hex = hslHex(hue, 60, 50)
+    guard hex.count == 7, let v = UInt64(hex.dropFirst(), radix: 16) else { return (1, 1, 1) }
+    let r = Double((v >> 16) & 0xff), g = Double((v >> 8) & 0xff), b = Double(v & 0xff)
+    let m = max(r, max(g, b))
+    return m > 0 ? (r / m, g / m, b / m) : (1, 1, 1)
 }
 
 // A tone curve applied to every channel, done as a colour cube because the
@@ -6558,6 +6604,20 @@ func editorPreviewRender(_ input: CIImage, raw: EditorFilters, maxSize: Int) -> 
                      z: (i == 2 ? 1 - amt : 0) + amt * s[i][2], w: 0)
         }
         ci = ciColorMatrix(ci, r: row(0), g: row(1), b: row(2),
+                           a: CIVector(x: 0, y: 0, z: 0, w: 1),
+                           bias: CIVector(x: 0, y: 0, z: 0, w: 0))
+    }
+    if f.colorFilterStrength > 0 {
+        // out = (1 - amount)·rgb + amount·tint·luma, one 3×3 matrix.
+        let amount = f.colorFilterStrength / 100
+        let tint = colorFilterTint(f.colorFilterHue)
+        let lr = 0.2126, lg = 0.7152, lb = 0.0722
+        func row(_ t: Double) -> CIVector {
+            CIVector(x: (1 - amount) + amount * t * lr,
+                     y: amount * t * lg,
+                     z: amount * t * lb, w: 0)
+        }
+        ci = ciColorMatrix(ci, r: row(tint.r), g: row(tint.g), b: row(tint.b),
                            a: CIVector(x: 0, y: 0, z: 0, w: 1),
                            bias: CIVector(x: 0, y: 0, z: 0, w: 0))
     }
@@ -18163,6 +18223,91 @@ func editorStateSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--image-editor-selftest") {
     exit(editorStateSelfTest() == 0 ? 0 : 1)
+}
+
+// The colour-filter presets: one per main hue, each a black-and-white recipe
+// with a coloured tint. Checks the preset table, the apply/reset rule, the
+// JSON round-trip and the tint math the preview and the engine share.
+func colorFilterSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    let filters = EditorPresets.all.filter { EditorPresets.colorFilters.contains($0.name) }
+    check("eight colour filters", filters.count == 8)
+    check("colour filters are part of the preset list",
+          filters.count == EditorPresets.colorFilters.count)
+    check("preset names are unique",
+          Set(EditorPresets.all.map { $0.name }).count == EditorPresets.all.count)
+    check("every filter is black and white with a full-strength tint",
+          filters.allSatisfy {
+              $0.values["saturation"] == 0
+                  && $0.values["colorFilterStrength"] == 100
+                  && ($0.values["colorFilterHue"] ?? -1) >= 0
+                  && ($0.values["colorFilterHue"] ?? 361) <= 360
+          })
+
+    var working = EditorFilters()
+    working.sepia = 40
+    working.brightness = 130
+    working.colorFilterStrength = 60
+    working.colorFilterHue = 200
+    let red = working.applyingPreset(
+        EditorPresets.all.first { $0.name == "Red Filter" }!.values.mapValues { $0 as Any })
+    check("a filter preset resets the recipe it replaces",
+          red.sepia == 0 && red.brightness == 100 && red.saturation == 0)
+    check("a filter preset carries its hue and strength",
+          red.colorFilterHue == 0 && red.colorFilterStrength == 100)
+    check("a filter recipe is not the identity", !red.isIdentity)
+
+    let json = red.jsonObject()
+    let roundTrip = EditorFilters(json: json)
+    check("the filter survives a JSON round-trip",
+          roundTrip.colorFilterHue == red.colorFilterHue
+              && roundTrip.colorFilterStrength == red.colorFilterStrength
+              && roundTrip == red)
+
+    var half = red
+    half.strength = 50
+    check("Strength scales the filter amount", half.strengthScaled().colorFilterStrength == 50)
+    check("a hue with no strength is the identity",
+          EditorFilters().isIdentity
+              && { var f = EditorFilters(); f.colorFilterHue = 90; return f.isIdentity }())
+
+    let r = colorFilterTint(0), g = colorFilterTint(120), b = colorFilterTint(240)
+    check("hue 0 is red", r.r == 1 && r.g < r.r && r.b < r.r)
+    check("hue 120 is green", g.g == 1 && g.r < g.g && g.b < g.g)
+    check("hue 240 is blue", b.b == 1 && b.r < b.b && b.g < b.b)
+
+    // The live preview's CoreImage path must tint too, not only the engine.
+    let solid = CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5))
+        .cropped(to: CGRect(x: 0, y: 0, width: 8, height: 8))
+    var previewRecipe = EditorFilters()
+    previewRecipe.saturation = 0
+    previewRecipe.colorFilterStrength = 100
+    previewRecipe.colorFilterHue = 0
+    if let cg = editorPreviewRender(solid, raw: previewRecipe, maxSize: 0),
+       let space = CGColorSpace(name: CGColorSpace.sRGB) {
+        var px = [UInt8](repeating: 0, count: 4)
+        if let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8,
+                               bytesPerRow: 4, space: space,
+                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            check("the preview tints the luma red",
+                  Int(px[0]) > Int(px[1]) && Int(px[0]) > Int(px[2]))
+        }
+    } else {
+        check("the preview renders the colour filter", false)
+    }
+
+    print(failures == 0 ? "colour-filter selftest: all checks passed"
+                        : "colour-filter selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--color-filter-selftest") {
+    exit(colorFilterSelfTest() == 0 ? 0 : 1)
 }
 
 // The context menu's day/night rules are two pure functions; drive them with

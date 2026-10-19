@@ -4015,6 +4015,11 @@ struct ImageFilters {
     var highlights = 0.0
     var temperature = 0.0
     var tint = 0.0
+    // A photographic colour filter: the picture's luma tinted by `hue` (0-360)
+    // and blended by `strength` (0-100). With Saturation 0 this is a black-and-
+    // white picture under a coloured filter.
+    var colorFilterHue = 0.0
+    var colorFilterStrength = 0.0
     var curvePoints: [[Double]] = []
     var paletteStops: [String] = []
     var paletteStrength = 70.0
@@ -4049,7 +4054,8 @@ struct ImageFilters {
             "paletteStops", "palette_stops", "paletteStrength", "palette_strength",
             "cropX", "cropY", "cropW", "cropH", "crop_x", "crop_y", "crop_w", "crop_h",
             "resizeW", "resizeH", "resize_w", "resize_h", "rotate", "flipH", "flipV",
-            "flip_h", "flip_v", "strength"]
+            "flip_h", "flip_v", "strength", "colorFilterHue", "color_filter_hue",
+            "colorFilterStrength", "color_filter_strength"]
         for (key, value) in json {
             let canon: String
             switch key {
@@ -4066,6 +4072,8 @@ struct ImageFilters {
             case "resize_h": canon = "resizeH"
             case "flip_h": canon = "flipH"
             case "flip_v": canon = "flipV"
+            case "color_filter_hue": canon = "colorFilterHue"
+            case "color_filter_strength": canon = "colorFilterStrength"
             default: canon = key
             }
             guard known.contains(key) else { extra[key] = value; continue }
@@ -4091,6 +4099,8 @@ struct ImageFilters {
             case "highlights": highlights = num(value)
             case "temperature": temperature = num(value)
             case "tint": tint = num(value)
+            case "colorFilterHue": colorFilterHue = num(value)
+            case "colorFilterStrength": colorFilterStrength = num(value)
             case "paletteStrength": paletteStrength = num(value)
             case "cropX": cropX = num(value)
             case "cropY": cropY = num(value)
@@ -4150,6 +4160,7 @@ struct ImageFilters {
         f.highlights = lerp(highlights, 0)
         f.temperature = lerp(temperature, 0)
         f.tint = lerp(tint, 0)
+        f.colorFilterStrength = lerp(colorFilterStrength, 0)
         f.hueRotate = hueRotate * s
         f.sepia = sepia * s
         f.invert = invert * s
@@ -4174,6 +4185,7 @@ struct ImageFilters {
             && exposure == 0 && vignette == 0 && sharpen == 0 && grain == 0 && shadows == 0
             && oilPaint == 0 && pixelate == 0 && clarity == 0 && fade == 0 && posterize == 0 && noise == 0
             && highlights == 0 && temperature == 0 && tint == 0 && rotate == 0 && !flipH && !flipV
+            && colorFilterStrength == 0
             && cropX == 0 && cropY == 0 && cropW == 1 && cropH == 1 && resizeW == 0 && resizeH == 0
     }
 
@@ -4190,6 +4202,7 @@ struct ImageFilters {
             "clarity": clarity, "fade": fade, "posterize": posterize, "noise": noise,
             "shadows": shadows, "highlights": highlights, "temperature": temperature,
             "tint": tint, "paletteStrength": paletteStrength,
+            "colorFilterHue": colorFilterHue, "colorFilterStrength": colorFilterStrength,
             "cropX": cropX, "cropY": cropY, "cropW": cropW, "cropH": cropH,
             "resizeW": resizeW, "resizeH": resizeH, "rotate": rotate,
             "flipH": flipH, "flipV": flipV, "strength": strength,
@@ -4314,6 +4327,14 @@ enum ImagePresets {
         ImagePreset(name: "Poster", values: ["posterize": 5, "contrast": 130, "saturation": 140]),
         ImagePreset(name: "Dreamy", values: ["blur": 15, "brightness": 110, "saturation": 80, "fade": 20]),
         ImagePreset(name: "Noir", values: ["saturation": 0, "contrast": 140, "grain": 3, "vignette": 40]),
+        ImagePreset(name: "Red Filter", values: ["saturation": 0, "contrast": 115, "colorFilterHue": 0, "colorFilterStrength": 100]),
+        ImagePreset(name: "Orange Filter", values: ["saturation": 0, "contrast": 115, "colorFilterHue": 30, "colorFilterStrength": 100]),
+        ImagePreset(name: "Yellow Filter", values: ["saturation": 0, "contrast": 115, "colorFilterHue": 55, "colorFilterStrength": 100]),
+        ImagePreset(name: "Green Filter", values: ["saturation": 0, "contrast": 115, "colorFilterHue": 120, "colorFilterStrength": 100]),
+        ImagePreset(name: "Teal Filter", values: ["saturation": 0, "contrast": 115, "colorFilterHue": 180, "colorFilterStrength": 100]),
+        ImagePreset(name: "Blue Filter", values: ["saturation": 0, "contrast": 115, "colorFilterHue": 220, "colorFilterStrength": 100]),
+        ImagePreset(name: "Violet Filter", values: ["saturation": 0, "contrast": 115, "colorFilterHue": 275, "colorFilterStrength": 100]),
+        ImagePreset(name: "Magenta Filter", values: ["saturation": 0, "contrast": 115, "colorFilterHue": 320, "colorFilterStrength": 100]),
     ]
     static func named(_ name: String) -> ImagePreset? {
         all.first { $0.name.lowercased() == name.lowercased() }
@@ -4511,6 +4532,7 @@ enum ImagePipeline {
             || f.contrast != 100 || f.saturation != 100 || f.hueRotate != 0 || f.sepia > 0
             || f.invert > 0 || f.exposure != 0 || f.shadows != 0 || f.highlights != 0 || f.grain > 0
             || f.temperature != 0 || f.tint != 0 || f.fade > 0 || f.posterize > 0 || f.noise > 0
+            || f.colorFilterStrength > 0
         if !needsPixel { return }
 
         let bri = f.brightness / 100
@@ -4532,6 +4554,17 @@ enum ImagePipeline {
         let posterStep = posterLevels > 1 ? 255 / (posterLevels - 1) : 0
         let hueRad = f.hueRotate * Double.pi / 180
         let cosH = cos(hueRad), sinH = sin(hueRad)
+        // The colour filter's tint: a hue at moderate saturation, normalised so
+        // its brightest channel is 1. White therefore stays white-ish rather
+        // than collapsing to the pure hue.
+        let filterAmt = f.colorFilterStrength / 100
+        var filterHue = f.colorFilterHue.truncatingRemainder(dividingBy: 360)
+        if filterHue < 0 { filterHue += 360 }
+        let filterRGB = ColorMath.rgb(fromHSL: HSL(h: filterHue, s: 60, l: 50))
+        let filterMax = max(filterRGB.r, max(filterRGB.g, filterRGB.b))
+        let filterR = filterMax > 0 ? filterRGB.r / filterMax : 1
+        let filterG = filterMax > 0 ? filterRGB.g / filterMax : 1
+        let filterB = filterMax > 0 ? filterRGB.b / filterMax : 1
 
         var d = image.pixels
         for i in stride(from: 0, to: d.count, by: 4) {
@@ -4574,6 +4607,12 @@ enum ImagePipeline {
                 r += (sr - r) * sepiaAmt
                 g += (sg - g) * sepiaAmt
                 b += (sb - b) * sepiaAmt
+            }
+            if filterAmt > 0 {
+                let gray = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                r += (gray * filterR - r) * filterAmt
+                g += (gray * filterG - g) * filterAmt
+                b += (gray * filterB - b) * filterAmt
             }
             if gamma != 1 {
                 r = pow(max(0, r) / 255, gamma) * 255
@@ -7951,6 +7990,8 @@ func takeImageFilterFlags(_ f: inout ImageFilters) {
     if let v = takeNumber("--highlights") { f.highlights = v }
     if let v = takeNumber("--temperature") { f.temperature = v }
     if let v = takeNumber("--tint") { f.tint = v }
+    if let v = takeNumber("--color-filter-hue") { f.colorFilterHue = v }
+    if let v = takeNumber("--color-filter-strength") { f.colorFilterStrength = v }
     if let v = takeNumber("--palette-strength") { f.paletteStrength = v }
     if let v = takeNumber("--rotate") { f.rotate = v }
     if let v = takeNumber("--strength") { f.strength = v }
