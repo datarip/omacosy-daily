@@ -243,6 +243,8 @@ bottom-right corner. Each is `palette.barBG` at 0.92 with a 1 px
 arrow follows the last scroll direction while shelf remains on both sides,
 flips to the only way out at either end, and hides when the content fits. The
 search results keep their load-more scrolling and do not show the arrow.
+Removing a bookmark rebuilds the shelf in place and restores its scroll
+position, so a clearing run does not jump back to the top.
 
 ## The wallpaper metadata card
 

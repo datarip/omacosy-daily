@@ -14330,6 +14330,8 @@ final class WHBookmarkStore {
                                 savedAt: Date().timeIntervalSince1970)
     }
 
+    func debugRemove(_ id: String) { byID[id] = nil }
+
     private func load() {
         guard let data = FileManager.default.contents(atPath: path),
               let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
@@ -15924,6 +15926,14 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         rebuildGrid()
     }
 
+    func debugUnbookmark(at index: Int) {
+        guard config.bookmarkedOnly, index >= 0, index < grid.cards.count else { return }
+        let w = grid.cards[index]
+        bookmarks.debugRemove(w.id)
+        grid.bookmarkedIDs = Set(bookmarks.all().map { $0.id })
+        refreshBookmarksGrid()
+    }
+
     func debugJumpTopY() -> CGFloat { max(0, grid.frame.height - scroll.contentSize.height) }
     func debugJumpOriginY() -> CGFloat { scroll.contentView.bounds.origin.y }
     func debugJumpHidden() -> Bool { jumpButton.isHidden }
@@ -16290,7 +16300,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         beginSearch(reset: false)
     }
 
-    private func rebuildGrid() {
+    private func rebuildGrid(resetScroll: Bool = true) {
         let cards: [WHWallpaper]
         if config.bookmarkedOnly {
             cards = bookmarks.all()
@@ -16313,7 +16323,7 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
         if avail > 40 { grid.frame.size.width = avail }
         grid.minContentHeight = scroll.contentSize.height
         grid.rebuild()
-        if config.bookmarkedOnly { pendingTopScroll = true }
+        if config.bookmarkedOnly && resetScroll { pendingTopScroll = true }
         needsLayout = true
         needsDisplay = true
     }
@@ -16338,8 +16348,23 @@ final class WallpapersTabView: NSView, NSTextFieldDelegate, ScrollStepTab {
     private func toggleBookmark(_ w: WHWallpaper) -> Bool {
         let on = bookmarks.toggle(w)
         grid.bookmarkedIDs = Set(bookmarks.all().map { $0.id })
-        if config.bookmarkedOnly { rebuildGrid() } else { grid.needsDisplay = true }
+        if config.bookmarkedOnly { refreshBookmarksGrid() } else { grid.needsDisplay = true }
         return on
+    }
+
+    private func refreshBookmarksGrid() {
+        let oldH = grid.frame.height
+        let origin = scroll.contentView.bounds.origin
+        pendingTopScroll = false
+        rebuildGrid(resetScroll: false)
+        let delta = grid.frame.height - oldH
+        let maxY = max(0, grid.frame.height - scroll.contentSize.height)
+        let y = min(maxY, max(0, origin.y + delta))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        scroller.refresh()
+        updateJumpButton()
+        grid.loadVisible(scroll.documentVisibleRect)
     }
 
     private func toggleSelected(_ w: WHWallpaper) {
@@ -18506,6 +18531,11 @@ func wallpapersJumpSelfTest() -> Int {
     tab.debugJumpScroll(by: -120)   // negative dy walks back towards the top
     check("scrolling up keeps the arrow pointing up",
           !tab.debugJumpHidden() && tab.debugJumpUp())
+    let before = tab.debugJumpOriginY()
+    tab.debugUnbookmark(at: 0)
+    tab.layoutSubtreeIfNeeded()
+    check("unbookmarking keeps the viewport",
+          abs(tab.debugJumpOriginY() - before) < 1)
     tab.debugLeaveBookmarks()
     tab.layoutSubtreeIfNeeded()
     check("the arrow hides outside the Bookmarked view", tab.debugJumpHidden())

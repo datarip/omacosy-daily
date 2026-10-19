@@ -382,8 +382,9 @@ with seven tabs:
   switching on its own. A bulk download retries a rate-limited or interrupted
   file with a growing random wait, and a file that still fails keeps its tick
   so **Download** offers exactly the failures again. A **Bookmarked** filter
-  shows saved pictures, with the same floating jump arrow for long shelves.
-  Right-click a result for a compact metadata card:
+  shows saved pictures, with the same floating jump arrow for long shelves;
+  unbookmarking one leaves the shelf where it was instead of jumping back to
+  the top. Right-click a result for a compact metadata card:
   resolution, ratio, size, type, upload date, views, favourites, source,
   colour swatches, uploader and a comma-separated tag list; a source link
   opens in the browser, and **Copy Link** copies the wallhaven page URL.
