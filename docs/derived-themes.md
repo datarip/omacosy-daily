@@ -830,6 +830,20 @@ A poll rather than a resident notification observer: this does nothing on
 almost every machine, and a script that exits in milliseconds costs less
 than a process holding an observer.
 
+The bar asks the same one-shot to re-check after every wake, and watches
+macOS's appearance notification, so a flip is applied at once while awake
+and as soon as the session returns after one that happened with the lid
+closed. It is the same script and the same no-op check: an event, not
+another timer.
+
+The lock screen shows the **real** system wallpaper, not the instant preview
+overlay. A day/night switch therefore starts the real handoff immediately
+instead of after the usual 10-second browse debounce, and the launch agent
+keeps its worker alive when it exits (`AbandonProcessGroup`) so that the
+handoff is not cut short. The no-op shortcut checks the system picture as
+well as the theme symlink, so an interrupted handoff is retried rather than
+mistaken for a completed switch.
+
 **It acts only on a change of appearance.** Without that it would re-apply
 every minute and stamp on a theme you picked by hand thirty seconds
 earlier. Pick gruvbox at 3pm with `night=osaka-jade` and gruvbox stays
@@ -843,8 +857,9 @@ appearance it saw in `~/.local/state/omacosy/appearance`, which is how it
 tells a change from a repeat.
 
 Measured on an M1 Air: **30 ms per run**, whether following is on or off —
-about 43 seconds of CPU a day, spread over 1440 wake-ups, from a script
-that exits rather than a process that stays resident.
+about 43 seconds of CPU a day across the 1440 launch-agent runs, plus a
+handful of wake checks, from a script that exits rather than a process
+that stays resident.
 
 Turning it off:
 

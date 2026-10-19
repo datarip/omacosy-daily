@@ -136,6 +136,21 @@ apply_apps() {
   echo $! > "$APPLY_PID"
 }
 
+# Does the REAL system wallpaper already name the same file as $1 on every
+# screen? The preview overlay and the real picture are separate: an
+# interrupted handoff leaves the theme link right and the system picture
+# stale, and the lock screen shows the system picture. `wallpaper get` prints
+# one path per screen.
+wallpaper_is_set() {
+  [ -x "$HELPER" ] || return 0
+  local p n=0
+  while IFS= read -r p; do
+    n=$((n + 1))
+    [ -n "$p" ] && [ "$p" -ef "$1" ] || return 1
+  done < <("$HELPER" wallpaper get 2>/dev/null)
+  [ "$n" -gt 0 ]
+}
+
 show_overlay_then_relink() {
   local wall="$1" theme_dir="$2" logical="$3" index="${4:-}" i ack="$STATE_DIR/overlay-ack"
 
@@ -148,6 +163,14 @@ show_overlay_then_relink() {
   if [ "$(readlink "$CURRENT_LINK" 2>/dev/null || true)" = "$theme_dir" ]; then
     record_switch "$logical" "$wall" "$index"
     apply_apps "$logical" "$theme_dir"
+    # The link can be right while the system picture is stale: a handoff
+    # interrupted when a one-shot launchd job exited used to be killed on
+    # exit. Only a link AND the real picture make this a no-op.
+    if ! wallpaper_is_set "$wall"; then
+      log "re-apply $logical: system wallpaper is stale"
+      schedule_settle "$logical" "$wall"
+      return 0
+    fi
     log "no-op $logical -> $theme_dir"
     return 0
   fi

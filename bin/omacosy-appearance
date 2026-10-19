@@ -78,4 +78,8 @@ printf '%s\n' "$NOW" > "$STATE"
 # A missing value for this half is not a failure: setting only `night` and
 # leaving days alone is a reasonable thing to want.
 [ -n "$WANT" ] || exit 0
-"$CUSTOM" apply "$WANT" >/dev/null 2>&1 || true
+# An appearance flip is a single event, not a burst: there is nothing to
+# debounce. Start the real-wallpaper handoff at once, so the lock screen
+# (which shows the real picture, not the preview overlay) catches up while
+# the display is still locked.
+OMACOSY_SETTLE_SECONDS=0 "$CUSTOM" apply "$WANT" >/dev/null 2>&1 || true

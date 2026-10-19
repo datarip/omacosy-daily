@@ -5237,6 +5237,22 @@ NSWorkspace.shared.notificationCenter.addObserver(
     forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
 ) { _ in updateBarVisibility() }
 
+// The day/night follower is a one-shot: it exits at once unless
+// follow_appearance=on. Ask it to re-check at wake instead of waiting for
+// the launch agent's next 60 s tick, so a theme that changed while the lid
+// was closed is applied as soon as the session is back.
+func refreshAppearanceTheme() {
+    DispatchQueue.global(qos: .utility).async {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: NSHomeDirectory()
+                              + "/.local/bin/omacosy-appearance")
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return }
+        p.waitUntilExit()
+    }
+}
+
 // waking clears the gamma table, so the shade has to be reasserted.
 // A monitor unplugged or replugged while asleep is the case the screen
 // notification handles worst: it fires at wake while the WM still holds
@@ -5248,8 +5264,17 @@ NSWorkspace.shared.notificationCenter.addObserver(
     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
         monitorCount = NSScreen.screens.count
         syncWorkspaceFold("wake")
+        refreshAppearanceTheme()
     }
 }
+
+// The appearance flip is itself a distributed notification. Watching it
+// covers a manual toggle and an automatic flip while awake at once; the
+// wake check above covers the flip that happened while the lid was closed.
+DistributedNotificationCenter.default().addObserver(
+    forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+    object: nil, queue: .main
+) { _ in refreshAppearanceTheme() }
 
 // media: Spotify broadcasts every state change itself, and the payload
 // already carries the track — so the pill repaints without asking anyone

@@ -880,6 +880,12 @@ launchctl load "$HOME/Library/LaunchAgents/com.omacosy.overlay.plist"
 #
 # StartInterval, not KeepAlive: it is a one-shot that must NOT be
 # restarted when it exits, which every run does.
+#
+# AbandonProcessGroup: a day/night switch to a saved edition hands the
+# real-wallpaper apply to a short-lived background worker. launchd kills
+# the job's process group when a one-shot exits, which silently dropped
+# that worker and left the lock screen on the previous theme. This keeps
+# the worker alive to finish its handoff.
 cat > "$HOME/Library/LaunchAgents/com.omacosy.appearance.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -889,6 +895,7 @@ cat > "$HOME/Library/LaunchAgents/com.omacosy.appearance.plist" <<PLIST
   <key>ProgramArguments</key><array><string>$HOME/.local/bin/omacosy-appearance</string></array>
   <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>60</integer>
+  <key>AbandonProcessGroup</key><true/>
   <key>StandardErrorPath</key><string>/tmp/omacosy-appearance.err</string>
 </dict>
 </plist>

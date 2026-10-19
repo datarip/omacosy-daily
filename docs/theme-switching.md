@@ -108,8 +108,14 @@ OmniWM, `aerospace.toml` under AeroSpace). On each press it:
 
 - a quiet pause with no further press (`OMACOSY_SETTLE_SECONDS`, default 10) is
   taken as the choice — one one-shot deadline, the only timer in the feature;
+  a day/night switch has no burst to collapse, so it uses `0` and starts the
+  handoff at once;
 - the coordinator then asks macOS for the real wallpaper and writes the path
   to `~/.local/state/omacosy/overlay-target`;
+- the worker that does that is a child of the caller. A one-shot launchd job
+  such as `omacosy-appearance` must keep it alive after the job exits
+  (`AbandonProcessGroup`); otherwise the real wallpaper is never applied, and
+  the lock screen keeps the previous picture;
 - the helper re-checks on every write to the state directory and to
   `~/Library/Application Support/com.apple.wallpaper/Store` (both **kqueue**
   sources), and hides the overlay once **every** screen's `desktopImageURL`
@@ -201,6 +207,11 @@ is crisp.
   It clears on its own. Removing it would mean applying the real wallpaper
   before the overlay appears — the ~4.5 s delay the overlay exists to hide — so
   it is accepted.
+- **A day/night flip that happened while asleep can show the old lock-screen
+  picture for the few seconds the handoff takes.** The switch itself starts at
+  once on wake and completes the real handoff, so the lock screen catches up
+  while it is still locked instead of staying stale. The first frame cannot be
+  corrected from user space: the lock screen is drawn before any agent runs.
 - The **terminal and its apps** are told at the same moment as the bar and the
   ring, but they are separate programs that must rewrite their configs and
   reload, so they settle about a second later.

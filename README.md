@@ -825,7 +825,10 @@ omacosy-custom-theme follow on
 ```
 
 Either may name a shipped theme, one of its wallpapers, or a file of your
-own. Full manual: **[docs/derived-themes.md](docs/derived-themes.md)**.
+own. The bar follows macOS's appearance notification and re-checks after
+every wake; a switch also completes the real wallpaper handoff, so the lock
+screen follows the same theme. Full manual:
+**[docs/derived-themes.md](docs/derived-themes.md)**.
 
 ### Terminal auto-theme: your tools follow the wallpaper
 
