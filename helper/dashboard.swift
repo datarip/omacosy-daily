@@ -8108,13 +8108,14 @@ final class PaletteModel {
         histogram = bins.map { Int(($0 * 4096).rounded()) }
     }
 
-    // The mini palette strips the Method picker shows. The Magic strip is
-    // the seed itself and appears at once; the mode strips come from one
-    // `palette strips` pass that samples the picture once and generates
-    // every mode from the shared dominant colours. The old per-mode batches
-    // decoded the picture again for each row, so a cold editor could still
-    // be filling the dropdown when it opened. No delay and no poll: the one
-    // result lands on main, and an already-open picker redraws through
+    // The mini palette strips the Method picker shows. A draft seeds the
+    // Magic strip itself, so it appears at once; the mode strips come from
+    // one `palette strips` pass that samples the picture once and generates
+    // every mode from the shared dominant colours. An edition seeds no strip
+    // (`seedEdition` clears the map), so Magic is fetched beside them — it is
+    // its own six-pass analysis, not one of the generated modes, and without
+    // this the row stayed a row of placeholders. No delay and no poll: the
+    // results land on main, and an already-open picker redraws through
     // update().
     private func loadStrips() {
         guard !extractSource.isEmpty else { return }
@@ -8135,6 +8136,22 @@ final class PaletteModel {
                 for (value, colors) in modes where colors.count == 16 {
                     self.strips[value] = colors
                 }
+                self.update()
+            }
+        }
+        // Magic runs alongside the bulk pass: on a cold image it is the
+        // slower of the two, and the picker fills the row when it lands.
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            let (code, out) = self.themecore("palette extract \(q) --mode magic --json")
+            guard self.stripGeneration == gen else { return }
+            guard code == 0, let data = out.data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let colors = obj["colors"] as? [String], colors.count == 16
+            else { return }
+            DispatchQueue.main.async {
+                guard self.stripGeneration == gen else { return }
+                self.strips["magic"] = colors
                 self.update()
             }
         }
