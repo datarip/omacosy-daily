@@ -40,6 +40,8 @@
 //                           activate another running app once, then
 //                           <previous>; used to make a non-activating
 //                           launcher panel resign key without a key event
+//   activate-bundle <id>    activate a running app; unlike open -b, this
+//                           never asks Finder for a new window
 //   brightness              print the built-in display's brightness (0-100)
 //   brightness set <0-100>  set it (DisplayServices — built-in/Apple
 //                           displays only; external DDC is out of scope)
@@ -786,6 +788,13 @@ case "bt":
 case "frontmost-bundle":
     print(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "")
 
+case "activate-bundle":
+    guard args.count > 2 else { fail("usage: activate-bundle <bundle-id>") }
+    guard let app = NSWorkspace.shared.runningApplications.first(where: {
+        $0.bundleIdentifier == args[2]
+    }) else { exit(1) }
+    exit(app.activate(options: [.activateAllWindows]) ? 0 : 1)
+
 case "focus-away":
     guard args.count > 3 else { fail("usage: focus-away <previous-bundle> <launcher-bundle>") }
     let previous = args[2], launcher = args[3]
@@ -822,5 +831,5 @@ case "window-exists":
     exit(found ? 0 : 1)
 
 default:
-    fail("usage: omacosy-helper cursor | displays | default-browser | default-app <scheme> | wallpaper <path> | audio ... | bt ... | brightness [set <0-100>] | input-age | window-exists <owner> | frontmost-bundle | focus-away <previous> <launcher>")
+    fail("usage: omacosy-helper cursor | displays | default-browser | default-app <scheme> | wallpaper <path> | audio ... | bt ... | brightness [set <0-100>] | input-age | window-exists <owner> | frontmost-bundle | focus-away <previous> <launcher> | activate-bundle <id>")
 }

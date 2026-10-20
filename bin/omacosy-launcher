@@ -83,15 +83,18 @@ return_to_previous() {  # <owner> <different-app-first:0|1>
   [ -f "$PREV" ] && bid="$(cat "$PREV" 2>/dev/null || true)"
   case "$bid" in
     '' | com.raycast.macos | com.tinycast.app | com.runningwithcrayons.Alfred)
-      # no saved app: a normal app activation is still enough for Tinycast
-      # and Alfred, but it cannot restore the exact window the user left.
-      open -b com.apple.finder >/dev/null 2>&1
+      # no saved app: leave the panel as it is rather than opening Finder
+      return 1
       ;;
     *)
       # Alfred's panel never becomes frontmost; activate another running
       # app once so it resigns key, then put the previous app back.
       if [ "$different" = 1 ] && [ -x "$HELPER" ]; then
         "$HELPER" focus-away "$bid" "com.runningwithcrayons.Alfred" >/dev/null 2>&1 || return 1
+      elif [ -x "$HELPER" ]; then
+        # activate-bundle, not open -b: open -b for Finder asks for a NEW
+        # window, which is the Finder window that appeared on close.
+        "$HELPER" activate-bundle "$bid" >/dev/null 2>&1 || return 1
       else
         open -b "$bid" >/dev/null 2>&1 || return 1
       fi
