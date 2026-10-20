@@ -4583,9 +4583,10 @@ watch(movedPath, create: true) {
 
 // omacosy-launcher writes the launcher's owner here when Super+Space is
 // pressed a second time. The bar already holds Accessibility, so it can
-// send Escape straight to that process; the wrapper itself cannot, because
-// Karabiner's shell has no such grant. This is also what closes Alfred,
-// whose panel is never the frontmost app.
+// send Command+W straight to that process; the wrapper itself cannot,
+// because Karabiner's shell has no such grant. This is also what closes
+// Alfred, whose panel is never the frontmost app. Command+W, not Escape:
+// the launchers answer Escape with the system beep.
 let dismissPath = "/tmp/omacosy-bar-dismiss"
 watch(dismissPath, create: true) {
     guard let text = try? String(contentsOfFile: dismissPath, encoding: .utf8) else { return }
@@ -4597,8 +4598,12 @@ watch(dismissPath, create: true) {
     else { return }
     let pid = app.processIdentifier
     let src = CGEventSource(stateID: .hidSystemState)
-    CGEvent(keyboardEventSource: src, virtualKey: 53, keyDown: true)?.postToPid(pid)
-    CGEvent(keyboardEventSource: src, virtualKey: 53, keyDown: false)?.postToPid(pid)
+    let down = CGEvent(keyboardEventSource: src, virtualKey: 13, keyDown: true)
+    down?.flags = .maskCommand
+    let up = CGEvent(keyboardEventSource: src, virtualKey: 13, keyDown: false)
+    up?.flags = .maskCommand
+    down?.postToPid(pid)
+    up?.postToPid(pid)
 }
 
 let wsPath = "/tmp/omacosy-bar-ws"
