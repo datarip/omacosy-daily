@@ -9699,6 +9699,7 @@ final class ChannelSliderView: NSView, NSTextFieldDelegate {
 final class ColorInspectorView: NSView, NSTextFieldDelegate {
     var onColor: ((String) -> Void)?
 
+    private let previewWell = ColorWellView()
     private let hexField = DrawnTextField()
     private let tabs = SegmentedView()
     private var rgbSliders: [ChannelSliderView] = []
@@ -9733,6 +9734,11 @@ final class ColorInspectorView: NSView, NSTextFieldDelegate {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        // The header swatch opens the same colour picker as the Palette Grade
+        // and From Colour wells, so it can sample the preview.
+        previewWell.toolTip = "Pick Colour"
+        previewWell.onChange = { [weak self] hex in self?.onColor?(hex) }
+        addSubview(previewWell)
         // DrawnTextField draws its own box + centred value, so it needs no
         // bezel/background/alignment here; only the input wiring.
         hexField.boxAlpha = 0.25
@@ -9783,6 +9789,8 @@ final class ColorInspectorView: NSView, NSTextFieldDelegate {
         self.fgHex = fgHex
         self.recents = recent
         self.hex = hex ?? "#000000"
+        previewWell.hex = self.hex
+        previewWell.isHidden = !active
         if hexField.currentEditor() == nil { hexField.stringValue = hex ?? "" }
         syncChannels()
         syncing = false
@@ -9879,6 +9887,8 @@ final class ColorInspectorView: NSView, NSTextFieldDelegate {
 
     override func layout() {
         super.layout()
+        previewWell.frame = NSRect(x: 0, y: bounds.height - headerTop - 22,
+                                   width: 22, height: 22)
         hexField.frame = NSRect(x: bounds.width - 96, y: bounds.height - headerTop - 24,
                                 width: 96, height: 18)
         let tabsSize = tabs.sizeThatFits()
@@ -9905,14 +9915,7 @@ final class ColorInspectorView: NSView, NSTextFieldDelegate {
                         x: 0, midTop: 12, height: bounds.height)
             return
         }
-        // header: preview + name + hex field
-        let preview = NSRect(x: 0, y: bounds.height - headerTop - 22, width: 22, height: 22)
-        let path = NSBezierPath(roundedRect: preview.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(5), yRadius: windowCornerRadius(5))
-        nsColor(fromHex: hex).setFill()
-        path.fill()
-        palette.muted.withAlphaComponent(0.35).setStroke()
-        path.lineWidth = 1
-        path.stroke()
+        // header: the preview well (a subview) + name + hex field
         drawMidLeft(truncate(title, nerdFont("Bold", 11), bounds.width - 130),
                     nerdFont("Bold", 11), palette.label,
                     x: 30, midTop: headerTop + 11, height: bounds.height)
@@ -9990,6 +9993,7 @@ final class ColorInspectorView: NSView, NSTextFieldDelegate {
 
     func refreshColors() {
         hexField.needsDisplay = true
+        previewWell.needsDisplay = true
         for s in rgbSliders + hslSliders { s.refreshColors() }
         needsDisplay = true
     }

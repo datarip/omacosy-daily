@@ -53,7 +53,10 @@ Accent**) and **Ring & Status** (**Ring, Red, Green, Yellow**) — that are
 editable **independently of the palette the terminal tools use**. Overriding
 one changes only that Omacosy surface, never the `colors.toml` the terminal
 follows; click a card to open the colour inspector, and the pin dot plus the
-header Reset or "Reset N pinned" return them to auto.
+header Reset or "Reset N pinned" return them to auto. The inspector's header
+swatch is a colour well like the Palette Grade and From Colour swatches:
+click it for the system colour picker and use its eyedropper to sample the
+wallpaper preview.
 
 The **Syntax** row is full width and carries the ten base roles as swatches:
 **Operator, Keyword, Function, String, Number, Type, Variable, Property,
