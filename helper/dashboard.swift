@@ -470,6 +470,43 @@ enum BarMode: Int { case visible = 0, hidden = 1, auto = 2 }
 enum TerminalThemeMode: Int { case own = 0, follow = 1 }
 enum WeatherUnit: Int { case celsius = 0, fahrenheit = 1 }
 
+enum LauncherChoice: String, CaseIterable {
+    case auto, raycast, tinycast, alfred, omniwm, none
+
+    var title: String {
+        switch self {
+        case .auto: return "Auto"
+        case .raycast: return "Raycast"
+        case .tinycast: return "Tinycast"
+        case .alfred: return "Alfred"
+        case .omniwm: return "OmniWM"
+        case .none: return "None"
+        }
+    }
+
+    func displayTitle(omniwm: Bool) -> String { title }
+
+    static func options(omniwm: Bool) -> [(choice: LauncherChoice, label: String)] {
+        if omniwm {
+            return [(.auto, "Auto"), (.raycast, "Raycast"),
+                    (.tinycast, "Tinycast"), (.alfred, "Alfred"),
+                    (.omniwm, "OmniWM"), (.none, "None")]
+        }
+        return [(.auto, "Auto"), (.raycast, "Raycast"),
+                (.tinycast, "Tinycast"), (.alfred, "Alfred"), (.none, "None")]
+    }
+
+    static func menuIndex(for choice: LauncherChoice, omniwm: Bool) -> Int {
+        let opts = options(omniwm: omniwm)
+        return opts.firstIndex(where: { $0.choice == choice }) ?? 0
+    }
+
+    static func choice(at index: Int, omniwm: Bool) -> LauncherChoice {
+        let opts = options(omniwm: omniwm)
+        return opts.indices.contains(index) ? opts[index].choice : .auto
+    }
+}
+
 struct DashboardState {
     var wm: WindowManager = .aerospace
     var corners: CornerMode = .rounded
@@ -479,6 +516,7 @@ struct DashboardState {
     var fullscreen: Bool = false
     var termTheme: TerminalThemeMode = .own
     var weatherUnit: WeatherUnit = .celsius
+    var launcher: LauncherChoice = .auto
 }
 
 // The three widths behind the S/M/L segmented control, and the width a live
@@ -531,6 +569,12 @@ func readState() -> DashboardState {
     }
 
     s.weatherUnit = readWeatherUnit()
+
+    let rawLauncher = readConfKey(SETTINGS, "LAUNCHER") ?? "auto"
+    s.launcher = LauncherChoice(rawValue: rawLauncher) ?? .auto
+    // OmniWM's launcher cannot work under AeroSpace; show Auto instead of
+    // leaving the row on a value the picker cannot offer.
+    if s.wm == .aerospace, s.launcher == .omniwm { s.launcher = .auto }
     return s
 }
 
@@ -564,6 +608,28 @@ func weatherUnitSelfTest() -> Int {
     print(failures == 0 ? "weather-unit selftest: all checks passed"
                         : "weather-unit selftest: \(failures) failed")
     return failures
+}
+func launcherChoiceSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)"); if !ok { failures += 1 }
+    }
+    let air = LauncherChoice.options(omniwm: false).map { $0.label }
+    let omni = LauncherChoice.options(omniwm: true).map { $0.label }
+    check("AeroSpace hides OmniWM", !air.contains("OmniWM"))
+    check("Auto is first", air.first == "Auto" && omni.first == "Auto")
+    check("AeroSpace keeps None", air.contains("None"))
+    check("OmniWM is offered", omni.contains("OmniWM"))
+    check("Auto round-trips", LauncherChoice.choice(at: 0, omniwm: true) == .auto)
+    check("OmniWM falls back to Auto", LauncherChoice.menuIndex(for: .omniwm, omniwm: false) == 0)
+    check("None is last", air.last == "None" && omni.last == "None")
+    check("plain title", LauncherChoice.auto.displayTitle(omniwm: false) == "Auto" && LauncherChoice.tinycast.displayTitle(omniwm: true) == "Tinycast")
+    print(failures == 0 ? "launcher-choice selftest: all checks passed"
+                        : "launcher-choice selftest: \(failures) failed")
+    return failures
+}
+if CommandLine.arguments.contains("--launcher-choice-selftest") {
+    exit(launcherChoiceSelfTest() == 0 ? 0 : 1)
 }
 if CommandLine.arguments.contains("--weather-unit-selftest") {
     exit(weatherUnitSelfTest() == 0 ? 0 : 1)
@@ -955,17 +1021,20 @@ struct OptionRow {
     let title: String
     let desc: String
     let seg: SegmentedView?
+    let drop: WHDropdown?
     let slider: OpacitySliderView?
     let check: CheckView?
     let toggle: ToggleView?
 
     init(category: String, title: String, desc: String,
-         seg: SegmentedView? = nil, slider: OpacitySliderView? = nil,
+         seg: SegmentedView? = nil, drop: WHDropdown? = nil,
+         slider: OpacitySliderView? = nil,
          check: CheckView? = nil, toggle: ToggleView? = nil) {
         self.category = category
         self.title = title
         self.desc = desc
         self.seg = seg
+        self.drop = drop
         self.slider = slider
         self.check = check
         self.toggle = toggle
@@ -1009,6 +1078,13 @@ final class OptionsDocView: NSView {
                                    y: bounds.height - segTop - sz.height,
                                    width: sz.width, height: sz.height)
             }
+            if let drop = row.drop {
+                let sz = drop.sizeThatFits()
+                let dTop = top + (rowH - sz.height) / 2
+                drop.frame = NSRect(x: bounds.width - sz.width,
+                                    y: bounds.height - dTop - sz.height,
+                                    width: sz.width, height: sz.height)
+            }
             if let slider = row.slider {
                 let w: CGFloat = 176
                 slider.frame = NSRect(x: bounds.width - w, y: bounds.height - (top + rowH / 2) - 7,
@@ -1047,6 +1123,7 @@ final class OptionsDocView: NSView {
             // wrapping to a second line when it is long
             var controlMinX = bounds.width
             if let seg = row.seg { controlMinX = min(controlMinX, bounds.width - seg.sizeThatFits().width) }
+            if let drop = row.drop { controlMinX = min(controlMinX, bounds.width - drop.sizeThatFits().width) }
             if row.slider != nil { controlMinX = min(controlMinX, bounds.width - 220) }
             if let check = row.check { controlMinX = min(controlMinX, bounds.width - check.sizeThatFits().width) }
             if let toggle = row.toggle { controlMinX = min(controlMinX, bounds.width - toggle.sizeThatFits().width) }
@@ -1075,6 +1152,7 @@ final class OptionsTabView: NSView, ScrollStepTab {
         needsDisplay = true
         doc.needsDisplay = true
         for r in rows { r.seg?.needsDisplay = true }
+        for r in rows { r.drop?.needsDisplay = true }
         for r in rows { r.slider?.needsDisplay = true }
         for r in rows { r.check?.needsDisplay = true }
         for r in rows { r.toggle?.needsDisplay = true }
@@ -1088,6 +1166,7 @@ final class OptionsTabView: NSView, ScrollStepTab {
         var out: [String: Bool] = ["doc": doc.needsDisplay, "saveButton": saveButton.needsDisplay]
         for (i, r) in rows.enumerated() {
             if let s = r.seg { out["seg\(i)"] = s.needsDisplay }
+            if let s = r.drop { out["drop\(i)"] = s.needsDisplay }
             if let s = r.slider { out["slider\(i)"] = s.needsDisplay }
             if let s = r.check { out["check\(i)"] = s.needsDisplay }
             if let s = r.toggle { out["toggle\(i)"] = s.needsDisplay }
@@ -1100,6 +1179,7 @@ final class OptionsTabView: NSView, ScrollStepTab {
         doc.needsDisplay = false
         for r in rows {
             r.seg?.needsDisplay = false
+            r.drop?.needsDisplay = false
             r.slider?.needsDisplay = false
             r.check?.needsDisplay = false
             r.toggle?.needsDisplay = false
@@ -1107,6 +1187,7 @@ final class OptionsTabView: NSView, ScrollStepTab {
         saveButton.needsDisplay = false
     }
     private var original = DashboardState()
+    private var launcherChoice: LauncherChoice = .auto
     private var status = ""
     private let scroll = NSScrollView()
     private let doc = OptionsDocView()
@@ -1150,6 +1231,24 @@ final class OptionsTabView: NSView, ScrollStepTab {
         original = readState()
 
         let wmSeg = makeSeg(["AeroSpace", "OmniWM"], original.wm.rawValue)
+        let omniwmSelected = original.wm == .omniwm
+        let launcherDrop = WHDropdown()
+        let launcherOptions = LauncherChoice.options(omniwm: omniwmSelected)
+        launcherDrop.items = launcherOptions.map { $0.label }
+        launcherDrop.selectedIndex = LauncherChoice.menuIndex(for: original.launcher, omniwm: omniwmSelected)
+        launcherDrop.title = original.launcher.displayTitle(omniwm: omniwmSelected)
+        launcherDrop.accentAtRest = true
+        launcherDrop.controlWidth = 150
+        launcherDrop.menuWidth = 150
+        launcherDrop.toolTip = "Launcher"
+        launcherChoice = original.launcher
+        launcherDrop.onPick = { [weak self, weak launcherDrop] i in
+            guard let self, let drop = launcherDrop else { return }
+            let choice = LauncherChoice.choice(at: i, omniwm: self.isOmniwmSelected)
+            self.launcherChoice = choice
+            drop.title = choice.displayTitle(omniwm: self.isOmniwmSelected)
+            drop.needsDisplay = true
+        }
         let cornerSeg = makeSeg(["Rounded", "Square"], original.corners.rawValue)
         let bordersSeg = makeSeg(["S", "M", "L"], original.borders.rawValue)
         let shadowToggle = ToggleView()
@@ -1172,6 +1271,9 @@ final class OptionsTabView: NSView, ScrollStepTab {
             OptionRow(category: "Window Manager", title: "Window Manager",
                       desc: "Which tiling manager Omacosy switches to. Switching reloads Omacosy for a moment.",
                       seg: wmSeg),
+            OptionRow(category: "Window Manager", title: "Launcher",
+                      desc: "What Super+Space opens.",
+                      drop: launcherDrop),
             OptionRow(category: "Windows", title: "Window & UI Corners",
                       desc: "MacOS window corners and Omacosy UI components outside the menu bar and the Workspaces overview.", seg: cornerSeg),
             OptionRow(category: "Windows", title: "Borders",
@@ -1196,12 +1298,33 @@ final class OptionsTabView: NSView, ScrollStepTab {
                       toggle: nsfwToggle),
         ]
         doc.rows = rows
+        wmSeg.onChange = { [weak self] i in self?.wmSelectionChanged(omniwm: i == 1) }
         for r in rows {
             if let s = r.seg { doc.addSubview(s) }
+            if let d = r.drop { doc.addSubview(d) }
             if let sl = r.slider { doc.addSubview(sl) }
             if let c = r.check { doc.addSubview(c) }
             if let t = r.toggle { doc.addSubview(t) }
         }
+    }
+
+    private var isOmniwmSelected: Bool {
+        (rows.first(where: { $0.title == "Window Manager" })?.seg?.index ?? original.wm.rawValue) == 1
+    }
+
+    private func wmSelectionChanged(omniwm: Bool) {
+        guard let drop = rows.first(where: { $0.title == "Launcher" })?.drop else { return }
+        var choice = launcherChoice
+        if !omniwm, choice == .omniwm { choice = .auto }
+        let opts = LauncherChoice.options(omniwm: omniwm)
+        launcherChoice = choice
+        drop.items = opts.map { $0.label }
+        drop.selectedIndex = LauncherChoice.menuIndex(for: choice, omniwm: omniwm)
+        drop.title = choice.displayTitle(omniwm: omniwm)
+        drop.needsDisplay = true
+        doc.needsLayout = true
+        doc.needsDisplay = true
+        doc.layoutSubtreeIfNeeded()
     }
 
     override func layout() {
@@ -1249,6 +1372,7 @@ final class OptionsTabView: NSView, ScrollStepTab {
         let fullscreen = toggleValue("Full Screen Mode") ?? original.fullscreen
         let termTheme = TerminalThemeMode(rawValue: segIndex("Terminal Auto-Theme") ?? original.termTheme.rawValue) ?? original.termTheme
         let ghosttyShadow = toggleValue("Ghostty Window Shadow") ?? original.ghosttyShadow
+        let launcher = launcherChoice
 
         // the machine-wide terminal opacity
         var opacityChanged = false
@@ -1268,6 +1392,9 @@ final class OptionsTabView: NSView, ScrollStepTab {
         var steps: [String] = []
         if wm != original.wm {
             steps.append("\(HOME)/.local/bin/omacosy-wm-switch \(wm == .omniwm ? "omniwm" : "aerospace")")
+        }
+        if launcher != original.launcher {
+            steps.append("\(HOME)/.local/bin/omacosy-launcher set \(launcher.rawValue)")
         }
         if corners != original.corners {
             setConfKey(SETTINGS, "WINDOW_CORNER", corners == .square ? "0.1" : "")
@@ -8268,7 +8395,7 @@ final class MethodPicker: NSObject {
     private var liveStrips: (() -> [String: [String]])?
     private var completion: ((String) -> Void)?
     private var monitors: [Any] = []
-    private let W: CGFloat = 340
+    private let W: CGFloat
     // sized to the list at init, so a short dropdown is a short card; the long
     // Method/Presets lists still cap at the original 430
     private let H: CGFloat
@@ -8276,11 +8403,13 @@ final class MethodPicker: NSObject {
     private init(rows: [Row], strips: [String: [String]], currentMethod: String,
                  title: String, liveApply: Bool,
                  liveStrips: (() -> [String: [String]])?,
+                 width: CGFloat,
                  completion: @escaping (String) -> Void) {
         self.rows = rows
         self.liveApply = liveApply
         self.liveStrips = liveStrips
         self.completion = completion
+        self.W = max(150, min(340, width))
         let h = min(430, max(80, MethodPickerList.height(for: rows) + 20 + 32))
         self.H = h
         window = PickerWindow(contentRect: NSRect(x: 0, y: 0, width: W, height: h),
@@ -8306,11 +8435,12 @@ final class MethodPicker: NSObject {
                         currentMethod: String, title: String = "Method",
                         liveApply: Bool = false,
                         liveStrips: (() -> [String: [String]])? = nil,
+                        width: CGFloat = 340,
                         completion: @escaping (String) -> Void) {
         active?.close()
         let p = MethodPicker(rows: rows, strips: strips, currentMethod: currentMethod,
                              title: title, liveApply: liveApply, liveStrips: liveStrips,
-                             completion: completion)
+                             width: width, completion: completion)
         guard let host = view.window else { return }
         let btn = host.convertToScreen(view.convert(view.bounds, to: nil))
         var x = btn.minX
@@ -8518,7 +8648,10 @@ final class MethodPickerList: NSView {
                 r.fill()
             }
             let ink = i == selected ? palette.barBG : palette.label
-            drawMidLeft(truncate(row.label, nerdFont("Regular", 12), bounds.width - 170),
+            // Palette-strip pickers reserve the strip and checkmark; a plain
+            // picker such as Launcher only needs room for the checkmark.
+            let labelW = bounds.width - (strips.isEmpty ? 46 : 170)
+            drawMidLeft(truncate(row.label, nerdFont("Regular", 12), labelW),
                         nerdFont("Regular", 12), ink,
                         x: 10, midTop: tops[i] + Self.rowH / 2, height: bounds.height)
             if !strips.isEmpty {
@@ -14861,16 +14994,29 @@ final class WHDropdown: NSView {
     var title = "" { didSet { needsDisplay = true } }
     var items: [String] = []
     var selectedIndex = 0 { didSet { needsDisplay = true } }
+    var accentAtRest = false { didSet { needsDisplay = true } }
+    var controlWidth: CGFloat = 198 { didSet { needsDisplay = true } }
+    var menuWidth: CGFloat? = nil
     var onPick: ((Int) -> Void)?
+
+    func sizeThatFits() -> NSSize { NSSize(width: controlWidth, height: 28) }
 
     override func draw(_ dirtyRect: NSRect) {
         let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
-        palette.itemBG.withAlphaComponent(0.35).setFill(); r.fill()
-        palette.muted.withAlphaComponent(0.35).setStroke(); r.lineWidth = 1; r.stroke()
+        if accentAtRest {
+            palette.accent.withAlphaComponent(0.9).setFill(); r.fill()
+            palette.accent.withAlphaComponent(0.9).setStroke()
+        } else {
+            palette.itemBG.withAlphaComponent(0.35).setFill(); r.fill()
+            palette.muted.withAlphaComponent(0.35).setStroke()
+        }
+        r.lineWidth = 1; r.stroke()
         let f = nerdFont("Regular", 12)
-        drawMidLeft(truncate(title, f, bounds.width - 40), f, palette.label,
+        drawMidLeft(truncate(title, f, bounds.width - 40), f,
+                    accentAtRest ? palette.barBG : palette.label,
                     x: 10, midTop: bounds.height / 2, height: bounds.height)
-        drawMidCenter("\u{f078}", nerdFont("Regular", 9), palette.muted,
+        drawMidCenter("\u{f078}", nerdFont("Regular", 9),
+                      accentAtRest ? palette.barBG : palette.muted,
                       centerX: bounds.width - 15, midTop: bounds.height / 2, height: bounds.height)
     }
 
@@ -14882,7 +15028,8 @@ final class WHDropdown: NSView {
         let rows = items.map { MethodPicker.Row(header: nil, value: $0, label: $0) }
         let current = items.indices.contains(selectedIndex) ? items[selectedIndex] : ""
         MethodPicker.present(from: self, rows: rows, strips: [:],
-                             currentMethod: current, title: toolTip ?? "Select") { [weak self] value in
+                             currentMethod: current, title: toolTip ?? "Select",
+                             width: menuWidth ?? 340) { [weak self] value in
             guard let self, let i = self.items.firstIndex(of: value),
                   i != self.selectedIndex else { return }
             self.selectedIndex = i

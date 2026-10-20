@@ -350,7 +350,10 @@ Your values live in one file outside the clone,
 
 `omacosy-launcher status` shows the current choice and what it resolves to;
 `omacosy-launcher set <value>` changes it and rebinds `Super+Space` without a
-reinstall. `set` writes `settings.conf`, so a later `install.sh` keeps it.
+reinstall. `set` writes `settings.conf`, so a later `install.sh` keeps it. The
+same choice is in the Settings **Options** tab as a **Launcher** dropdown;
+OmniWM is hidden there while AeroSpace is selected, and Save calls
+`omacosy-launcher set`.
 
 `install.sh` regenerates the window-manager configs on each run, then
 runs `omacosy-settings`, which writes your values back into them. After
@@ -370,9 +373,10 @@ file loads `~/.zshrc.local`.
 `Super`+`,` opens a cheatsheet-style modal — the same card as `Super`+`k` —
 with seven tabs:
 
-- **Options** — the window manager (AeroSpace or OmniWM), window & UI corners,
-  menu-bar mode, fullscreen, terminal auto-theme, and a global **Hide NSFW
-  Content** switch.
+- **Options** — the window manager (AeroSpace or OmniWM), the launcher
+  (Auto, Raycast, Tinycast, Alfred, OmniWM or None; the OmniWM choice is
+  hidden while AeroSpace is selected), window & UI corners, menu-bar mode,
+  fullscreen, terminal auto-theme, and a global **Hide NSFW Content** switch.
 - **Workspaces** — which apps open on which workspace, per display, with a
   searchable picker. **Save** writes `~/.config/omacosy/settings.conf`, runs
   `omacosy-settings`, and drops any app rule you removed (under OmniWM that

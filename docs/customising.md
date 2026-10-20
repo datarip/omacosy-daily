@@ -158,7 +158,9 @@ OmniWM's own launcher on OmniWM; `omniwm` only works while OmniWM is the
 window manager. `none` leaves the chord unbound, for an unsupported launcher
 or a launcher's own hotkey. `omacosy-launcher status` shows the current
 choice, and `omacosy-launcher set <value>` changes it at once and writes
-`settings.conf`, so a later install keeps it.
+`settings.conf`, so a later install keeps it. The same choice is in the
+Settings **Options** tab as a **Launcher** dropdown; OmniWM is hidden there
+while AeroSpace is selected, and Save calls `omacosy-launcher set`.
 
 `SERIALIZE_APP_SPAWNS="1"` sends the music and messenger chords through
 `omacosy-spawn-cmd`, so a burst of presses opens one window at a time.
