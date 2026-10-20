@@ -37,9 +37,6 @@
 //   window-exists <owner>   succeed when an on-screen window owned by <owner>
 //                           looks like a launcher panel (above layer 0 and
 //                           wider than a status item)
-//   frontmost-bundle        the bundle id of the frontmost app
-//   activate-bundle <id>    activate a running app; unlike open -b, this
-//                           never asks Finder for a new window
 //   brightness              print the built-in display's brightness (0-100)
 //   brightness set <0-100>  set it (DisplayServices — built-in/Apple
 //                           displays only; external DDC is out of scope)
@@ -913,16 +910,6 @@ case "bt":
         fail("usage: bt power [on|off|toggle] | bt devices | bt connect <addr> | bt disconnect <addr>")
     }
 
-case "frontmost-bundle":
-    print(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "")
-
-case "activate-bundle":
-    guard args.count > 2 else { fail("usage: activate-bundle <bundle-id>") }
-    guard let app = NSWorkspace.shared.runningApplications.first(where: {
-        $0.bundleIdentifier == args[2]
-    }) else { exit(1) }
-    exit(app.activate(options: [.activateAllWindows]) ? 0 : 1)
-
 case "window-exists":
     // The launcher toggle reads this before deciding open vs close. A
     // status item is narrow and a hidden palette is not on screen; the
@@ -943,5 +930,5 @@ case "window-exists":
     exit(found ? 0 : 1)
 
 default:
-    fail("usage: omacosy-helper cursor | displays | default-browser | default-app <scheme> | wallpaper <path> | audio ... | bt ... | brightness [set <0-100>] | input-age | window-exists <owner> | frontmost-bundle | activate-bundle <id>")
+    fail("usage: omacosy-helper cursor | displays | default-browser | default-app <scheme> | wallpaper <path> | audio ... | bt ... | brightness [set <0-100>] | input-age | window-exists <owner>")
 }

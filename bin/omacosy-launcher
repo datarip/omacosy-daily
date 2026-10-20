@@ -22,7 +22,6 @@ AERO="$HOME/.config/aerospace/aerospace.toml"
 KARA="$HOME/.local/bin/omacosy-karabiner-omniwm"
 OMNI="$HOME/.local/bin/omacosy-omni"
 HELPER="$HOME/.local/bin/omacosy-helper"
-PREV="/tmp/omacosy-launcher-previous-$(id -u)"
 DISMISS="/tmp/omacosy-bar-dismiss"
 OMNIWMCTL="$(command -v omniwmctl 2>/dev/null || echo /opt/homebrew/bin/omniwmctl)"
 
@@ -69,49 +68,14 @@ window_open() {
   [ -x "$HELPER" ] && "$HELPER" window-exists "$owner" >/dev/null 2>&1
 }
 
-remember_front() {
-  local bid
-  [ -x "$HELPER" ] || return 0
-  bid="$("$HELPER" frontmost-bundle 2>/dev/null || true)"
-  case "$bid" in
-    '' | com.raycast.macos | com.tinycast.app | com.runningwithcrayons.Alfred) return 0 ;;
-  esac
-  printf '%s' "$bid" > "$PREV" 2>/dev/null || true
-}
-
-return_to_previous() {  # <owner>
-  local owner=$1 bid="" i
-  [ -f "$PREV" ] && bid="$(cat "$PREV" 2>/dev/null || true)"
-  case "$bid" in
-    '' | com.raycast.macos | com.tinycast.app | com.runningwithcrayons.Alfred)
-      # no saved app: leave the panel as it is rather than opening Finder
-      return 1
-      ;;
-    *)
-      if [ -x "$HELPER" ]; then
-        # activate-bundle, not open -b: open -b for Finder asks for a NEW
-        # window, which is the Finder window that appeared on close.
-        "$HELPER" activate-bundle "$bid" >/dev/null 2>&1 || return 1
-      else
-        open -b "$bid" >/dev/null 2>&1 || return 1
-      fi
-      ;;
-  esac
-  for i in $(seq 1 20); do
-    sleep 0.05
-    if ! window_open "$owner"; then rm -f "$PREV"; return 0; fi
-  done
-  return 1
-}
-
-close_raycast() {
-  local i
-  # Raycast is a non-activating panel, so focus return does not close it.
-  # Its own default global hotkey is Option+Space; send that once.
+toggle_hotkey() {  # <owner>
+  local owner=$1 i
+  # The launchers' own global hotkey. Tinycast and Raycast both answer a
+  # clean Option+Space; this is the toggle their direct shortcut uses.
   osascript -e 'tell application "System Events" to key code 49 using option down' >/dev/null 2>&1
   for i in $(seq 1 20); do
     sleep 0.05
-    ! window_open Raycast && { rm -f "$PREV"; return 0; }
+    ! window_open "$owner" && return 0
   done
   return 1
 }
@@ -120,19 +84,20 @@ open_one() {
   case "$1" in
     raycast)
       if window_open Raycast; then
-        close_raycast
+        toggle_hotkey Raycast
         return 0
       fi
-      remember_front
-      open -b com.raycast.macos "raycast://" >/dev/null 2>&1
+      # -g lets the non-activating panel appear without taking focus.
+      open -g -b com.raycast.macos "raycast://" >/dev/null 2>&1
       ;;
     tinycast)
       if window_open Tinycast; then
-        return_to_previous Tinycast
+        toggle_hotkey Tinycast
         return 0
       fi
-      remember_front
-      open -b com.tinycast.app "tinycast://" >/dev/null 2>&1
+      # -g is the difference from the URL's activate path: the app behind
+      # keeps focus, exactly like Tinycast's own Option+Space shortcut.
+      open -g -b com.tinycast.app "tinycast://" >/dev/null 2>&1
       ;;
     alfred)
       installed alfred || return 1
@@ -142,11 +107,10 @@ open_one() {
         local i
         for i in $(seq 1 20); do
           sleep 0.05
-          ! window_open Alfred && { rm -f "$PREV"; return 0; }
+          ! window_open Alfred && return 0
         done
         return 0
       fi
-      remember_front
       osascript -e 'tell application id "com.runningwithcrayons.Alfred" to search ""' >/dev/null 2>&1
       ;;
     omniwm)

@@ -4595,7 +4595,6 @@ watch(dismissPath, create: true) {
             ($0.localizedName ?? "").caseInsensitiveCompare(owner) == .orderedSame
         })
     else { return }
-    usleep(300_000)
     let pid = app.processIdentifier
     let src = CGEventSource(stateID: .privateState)
     let down = CGEvent(keyboardEventSource: src, virtualKey: 13, keyDown: true)
