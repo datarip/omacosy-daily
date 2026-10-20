@@ -3004,12 +3004,37 @@ final class CheatsheetView: NSView {
 
 var cheatWindow: CheatWindow?
 var cheatPrevApp: NSRunningApplication?
+var cheatClickToken: Any?
+var cheatLocalClickToken: Any?
 
-func hideCheatsheet() {
+// A click anywhere outside the sheet closes it, like the settings
+// dashboard. Two monitors are needed: the global one sees clicks that
+// land in another app, and the local one sees clicks in this app's own
+// windows (the bar's popups) — a global monitor never receives those.
+// Neither path reactivates the app that had focus before the sheet, or
+// it would steal it back from whatever the user just clicked.
+func watchCheatClicks() {
+    cheatClickToken = NSEvent.addGlobalMonitorForEvents(
+        matching: [.leftMouseDown, .rightMouseDown]) { _ in
+        guard let w = cheatWindow else { return }
+        if w.frame.contains(NSEvent.mouseLocation) { return }
+        hideCheatsheet(reactivate: false)
+    }
+    cheatLocalClickToken = NSEvent.addLocalMonitorForEvents(
+        matching: [.leftMouseDown, .rightMouseDown]) { e in
+        if let w = cheatWindow, e.window !== w { hideCheatsheet(reactivate: false) }
+        return e
+    }
+}
+
+func hideCheatsheet(reactivate: Bool = true) {
+    if let t = cheatClickToken { NSEvent.removeMonitor(t); cheatClickToken = nil }
+    if let t = cheatLocalClickToken { NSEvent.removeMonitor(t); cheatLocalClickToken = nil }
     cheatWindow?.orderOut(nil)
     cheatWindow = nil
-    // hand focus back to whoever had it before the sheet took key
-    cheatPrevApp?.activate()
+    // hand focus back to whoever had it before the sheet took key — but
+    // not when an outside click is already sending it somewhere else
+    if reactivate { cheatPrevApp?.activate() }
     cheatPrevApp = nil
 }
 
@@ -3046,6 +3071,7 @@ func toggleCheatsheet() {
     window.makeKeyAndOrderFront(nil)
     window.makeFirstResponder(view)
     cheatWindow = window
+    watchCheatClicks()
     tlog("cheatsheet: \(entries.count) bindings")
 }
 

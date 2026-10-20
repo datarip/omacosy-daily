@@ -682,7 +682,7 @@ on re-runs and names such keyboards when it finds one connected.
 | `Super+shift+t` | next theme |
 | `Super+shift+b` | next wallpaper of the current theme |
 | `Super+shift+l` | lock the screen |
-| `Super+k` | keybinding cheatsheet (this table, rendered from the config) |
+| `Super+k` | keybinding cheatsheet (this table, rendered from the config); Esc, `Super+k` or a click anywhere outside closes it |
 | `Super+,` | Settings — options, app→workspace assignment, and a theme gallery |
 
 ![The keybinding cheatsheet — every binding, parsed from aerospace.toml](docs/screenshots/cheatsheet.jpg)
