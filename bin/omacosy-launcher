@@ -68,23 +68,17 @@ window_open() {
   [ -x "$HELPER" ] && "$HELPER" window-exists "$owner" >/dev/null 2>&1
 }
 
-toggle_hotkey() {  # <owner>
-  local owner=$1 i
+toggle_hotkey() {
   # The launchers' own global hotkey. Tinycast and Raycast both answer a
   # clean Option+Space; this is the toggle their direct shortcut uses.
   osascript -e 'tell application "System Events" to key code 49 using option down' >/dev/null 2>&1
-  for i in $(seq 1 20); do
-    sleep 0.05
-    ! window_open "$owner" && return 0
-  done
-  return 1
 }
 
 open_one() {
   case "$1" in
     raycast)
       if window_open Raycast; then
-        toggle_hotkey Raycast
+        toggle_hotkey
         return 0
       fi
       # -g lets the non-activating panel appear without taking focus.
@@ -92,7 +86,7 @@ open_one() {
       ;;
     tinycast)
       if window_open Tinycast; then
-        toggle_hotkey Tinycast
+        toggle_hotkey
         return 0
       fi
       # -g is the difference from the URL's activate path: the app behind
@@ -103,12 +97,8 @@ open_one() {
       installed alfred || return 1
       if window_open Alfred; then
         # No focus change: activating another app would switch workspaces.
+        # The bar's watcher dismisses it; this command does not wait or poll.
         printf 'Alfred' > "$DISMISS" 2>/dev/null || true
-        local i
-        for i in $(seq 1 20); do
-          sleep 0.05
-          ! window_open Alfred && return 0
-        done
         return 0
       fi
       osascript -e 'tell application id "com.runningwithcrayons.Alfred" to search ""' >/dev/null 2>&1
