@@ -4583,10 +4583,11 @@ watch(movedPath, create: true) {
 
 // omacosy-launcher writes the launcher's owner here when Super+Space is
 // pressed a second time. The bar already holds Accessibility, so it can
-// send Command+W straight to that process; the wrapper itself cannot,
-// because Karabiner's shell has no such grant. This is also what closes
-// Alfred, whose panel is never the frontmost app. Command+W, not Escape:
-// the launchers answer Escape with the system beep.
+// send Escape straight to that process; the wrapper itself cannot, because
+// Karabiner's shell has no such grant. This is also what closes Alfred,
+// whose panel is never the frontmost app. Escape is the launchers' native
+// close key; the earlier beep came from sending it while the Super chord
+// was still held, or from a second fallback key.
 let dismissPath = "/tmp/omacosy-bar-dismiss"
 watch(dismissPath, create: true) {
     guard let text = try? String(contentsOfFile: dismissPath, encoding: .utf8) else { return }
@@ -4597,24 +4598,13 @@ watch(dismissPath, create: true) {
         })
     else { return }
     // Manual Super+Space still holds Caps Lock (Command+Control+Option)
-    // when this runs. A posted Command+W then carries those modifiers too,
-    // and the launcher answers the invalid chord with the system beep.
-    // Wait for the physical chord to be released, then post from a
-    // private source that has no physical modifier state.
-    for _ in 0..<50 {
-        let flags = CGEventSource.flagsState(.combinedSessionState)
-        if !flags.contains(.maskCommand),
-            !flags.contains(.maskControl),
-            !flags.contains(.maskOption) { break }
-        usleep(10_000)
-    }
-    usleep(30_000)
+    // when this runs. Give the chord a fixed release window first, then
+    // post one clean Escape from a private source with no modifiers.
+    usleep(300_000)
     let pid = app.processIdentifier
     let src = CGEventSource(stateID: .privateState)
-    let down = CGEvent(keyboardEventSource: src, virtualKey: 13, keyDown: true)
-    down?.flags = .maskCommand
-    let up = CGEvent(keyboardEventSource: src, virtualKey: 13, keyDown: false)
-    up?.flags = .maskCommand
+    let down = CGEvent(keyboardEventSource: src, virtualKey: 53, keyDown: true)
+    let up = CGEvent(keyboardEventSource: src, virtualKey: 53, keyDown: false)
     down?.postToPid(pid)
     up?.postToPid(pid)
 }
