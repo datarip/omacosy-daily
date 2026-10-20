@@ -69,18 +69,24 @@ window_open() {
 }
 
 dismiss_via_bar() {
-  local owner=$1
+  local owner=$1 i
   printf '%s' "$owner" > "$DISMISS" 2>/dev/null || return 1
-  sleep 0.25
-  ! window_open "$owner"
+  # Wait for the close animation. A fixed short sleep used to see the old
+  # window still on screen, run the fallback, and send a second Escape;
+  # that second key is the system beep.
+  for i in $(seq 1 20); do
+    sleep 0.05
+    ! window_open "$owner" && return 0
+  done
+  return 1
 }
 
 close_one() {
   case "$1" in
     raycast) open -b com.raycast.macos "raycast://hideWindow" >/dev/null 2>&1 ;;
-    tinycast) osascript -e 'tell application "System Events" to key code 53' >/dev/null 2>&1 ;;
-    alfred) return 0 ;;  # only the bar can dismiss a non-frontmost panel
-    *) return 1 ;;
+    # Tinycast closes on the bar's Escape. Alfred has no shell fallback: its
+    # panel is never frontmost. Do nothing rather than send another key.
+    *) return 0 ;;
   esac
 }
 
