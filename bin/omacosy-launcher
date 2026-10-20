@@ -23,6 +23,7 @@ KARA="$HOME/.local/bin/omacosy-karabiner-omniwm"
 OMNI="$HOME/.local/bin/omacosy-omni"
 HELPER="$HOME/.local/bin/omacosy-helper"
 PREV="/tmp/omacosy-launcher-previous-$(id -u)"
+DISMISS="/tmp/omacosy-bar-dismiss"
 OMNIWMCTL="$(command -v omniwmctl 2>/dev/null || echo /opt/homebrew/bin/omniwmctl)"
 
 valid() {
@@ -78,8 +79,8 @@ remember_front() {
   printf '%s' "$bid" > "$PREV" 2>/dev/null || true
 }
 
-return_to_previous() {  # <owner> <different-app-first:0|1>
-  local owner=$1 different=${2:-0} bid="" i
+return_to_previous() {  # <owner>
+  local owner=$1 bid="" i
   [ -f "$PREV" ] && bid="$(cat "$PREV" 2>/dev/null || true)"
   case "$bid" in
     '' | com.raycast.macos | com.tinycast.app | com.runningwithcrayons.Alfred)
@@ -87,11 +88,7 @@ return_to_previous() {  # <owner> <different-app-first:0|1>
       return 1
       ;;
     *)
-      # Alfred's panel never becomes frontmost; activate another running
-      # app once so it resigns key, then put the previous app back.
-      if [ "$different" = 1 ] && [ -x "$HELPER" ]; then
-        "$HELPER" focus-away "$bid" "com.runningwithcrayons.Alfred" >/dev/null 2>&1 || return 1
-      elif [ -x "$HELPER" ]; then
+      if [ -x "$HELPER" ]; then
         # activate-bundle, not open -b: open -b for Finder asks for a NEW
         # window, which is the Finder window that appeared on close.
         "$HELPER" activate-bundle "$bid" >/dev/null 2>&1 || return 1
@@ -131,7 +128,7 @@ open_one() {
       ;;
     tinycast)
       if window_open Tinycast; then
-        return_to_previous Tinycast 0
+        return_to_previous Tinycast
         return 0
       fi
       remember_front
@@ -140,7 +137,13 @@ open_one() {
     alfred)
       installed alfred || return 1
       if window_open Alfred; then
-        return_to_previous Alfred 1
+        # No focus change: activating another app would switch workspaces.
+        printf 'Alfred' > "$DISMISS" 2>/dev/null || true
+        local i
+        for i in $(seq 1 20); do
+          sleep 0.05
+          ! window_open Alfred && { rm -f "$PREV"; return 0; }
+        done
         return 0
       fi
       remember_front
