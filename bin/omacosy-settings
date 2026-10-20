@@ -57,11 +57,18 @@ if ! bash -n "$SETTINGS" 2>/dev/null; then
 fi
 
 # A key the file leaves out keeps its default. Empty means "leave it alone".
-TERMINAL="" BROWSER="" EMAIL="" MUSIC="" MESSENGER=""
+TERMINAL="" BROWSER="" EMAIL="" MUSIC="" MESSENGER="" LAUNCHER="auto"
 APP_WORKSPACE_RULES="" APP_FLOAT_RULES="" WORKSPACE_NAMES=""
 RING_RADIUS="" WINDOW_CORNER="" BORDER_WIDTH="" GHOSTTY_WINDOW_SHADOW="" SERIALIZE_APP_SPAWNS="0" AUTOHIDE=""
 # shellcheck source=/dev/null
 . "$SETTINGS"
+
+case "$LAUNCHER" in
+  "" | auto) LAUNCHER=auto ;;
+  raycast | tinycast | alfred | omniwm | none) ;;
+  *) warn "LAUNCHER '$LAUNCHER' is not auto, raycast, tinycast, alfred, omniwm or none; using auto"
+     LAUNCHER=auto ;;
+esac
 
 say "settings read from $SETTINGS"
 CHANGED=0
@@ -73,7 +80,7 @@ CHANGED=0
 #
 # An empty value is left out, not written blank: install.sh warns about
 # `MUSIC=`, and an absent key gives the same default without the warning.
-if [ -n "$TERMINAL$BROWSER$EMAIL$MUSIC$MESSENGER" ]; then
+if [ -n "$TERMINAL$BROWSER$EMAIL$MUSIC$MESSENGER$LAUNCHER" ]; then
   if [ -z "$REPO_DIR" ]; then
     warn "cannot find the clone, so config/apps.local.conf was left alone"
   else
@@ -82,10 +89,12 @@ if [ -n "$TERMINAL$BROWSER$EMAIL$MUSIC$MESSENGER" ]; then
     {
       echo "# Written by omacosy-settings from ~/.config/omacosy/settings.conf. Edit that file."
       echo "# install.sh reads this and generates ~/.config/omacosy/apps.conf from it."
-      for k in TERMINAL BROWSER EMAIL MUSIC MESSENGER; do
+      for k in TERMINAL BROWSER EMAIL MUSIC MESSENGER LAUNCHER; do
         v="${!k}"
         [ -z "$v" ] && continue
-        if is_name "$v"; then
+        if [ "$k" = LAUNCHER ]; then
+          printf 'LAUNCHER=%s\n' "$v"
+        elif is_name "$v"; then
           printf '%s=%s\n' "$k" "$v"
         else
           warn "ignoring $k: an app name cannot contain '$v'"
@@ -119,6 +128,14 @@ if [ -f "$APPS_CONF" ]; then
     fi
     say "$k=$v written to ~/.config/omacosy/apps.conf"
   done
+  if ! grep -qx "LAUNCHER=\"$LAUNCHER\"" "$APPS_CONF"; then
+    if grep -q '^LAUNCHER=' "$APPS_CONF"; then
+      sed -i '' "s|^LAUNCHER=.*|LAUNCHER=\"$LAUNCHER\"|" "$APPS_CONF"
+    else
+      printf 'LAUNCHER="%s"\n' "$LAUNCHER" >> "$APPS_CONF"
+    fi
+    say "LAUNCHER=$LAUNCHER written to ~/.config/omacosy/apps.conf"
+  fi
 fi
 
 # install.sh writes the app names into aerospace.toml, so apps.local.conf
@@ -188,6 +205,33 @@ if [ -f "$AERO" ] && ! grep -q '^cmd-ctrl-alt-comma = ' "$AERO" \
   ' "$AERO" > "$AERO.new" && mv -f "$AERO.new" "$AERO" || rm -f "$AERO.new"
   CHANGED=1
   say "added the settings dashboard chord (Super+,)"
+fi
+
+# Super+Space follows LAUNCHER. install.sh generates the wrapper line from
+# apps.local.conf; this keeps the live file in step after an edit, and removes
+# the line for none so the chord is free.
+LAUNCH_LINE="cmd-ctrl-alt-space = 'exec-and-forget \$HOME/.local/bin/omacosy-launcher'"
+if [ -f "$AERO" ]; then
+  if [ "$LAUNCHER" = none ]; then
+    if grep -Eq '^cmd-ctrl-alt-space = .*(omacosy-launcher|open -a Raycast|open-command-palette)' "$AERO"; then
+      sed -i '' -E '/^cmd-ctrl-alt-space = .*(omacosy-launcher|open -a Raycast|open-command-palette)/d' "$AERO"
+      CHANGED=1
+      say "Super+Space unbound (LAUNCHER=none)"
+    fi
+  elif ! grep -q '^cmd-ctrl-alt-space = ' "$AERO"; then
+    if grep -q '^cmd-ctrl-alt-shift-enter = ' "$AERO"; then
+      awk -v line="$LAUNCH_LINE" '
+        { print }
+        /^cmd-ctrl-alt-shift-enter = / && !done { print line; done = 1 }
+      ' "$AERO" > "$AERO.new" && mv -f "$AERO.new" "$AERO" || rm -f "$AERO.new"
+      CHANGED=1
+      say "Super+Space now runs omacosy-launcher"
+    fi
+  elif grep -Eq '^cmd-ctrl-alt-space = .*(open -a Raycast|open-command-palette)' "$AERO"; then
+    sed -i '' -E "s|^cmd-ctrl-alt-space = .*|$LAUNCH_LINE|" "$AERO"
+    CHANGED=1
+    say "Super+Space now runs omacosy-launcher"
+  fi
 fi
 
 # ── 1b. ghostty window shadow ─────────────────────────────────────
@@ -586,6 +630,7 @@ chord() { grep -m1 "^$1 = " "$AERO" 2>/dev/null | sed -E 's/.*"([^"]*)".*/\1/'; 
 echo
 say "done"
 echo "  Super+Return:        $(chord cmd-ctrl-alt-enter)"
+echo "  Super+Space:         $LAUNCHER"
 if [ -n "$BROWSER" ]; then
   echo "  Super+Shift+Return:  $BROWSER (pinned)"
 else

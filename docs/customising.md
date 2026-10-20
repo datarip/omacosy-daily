@@ -150,6 +150,16 @@ To change the Mac's default itself:
 `TERMINAL`, `MUSIC` and `MESSENGER` have no macOS default to follow, so an
 empty value there just keeps the shipped app from `config/apps.conf`.
 
+### Choose the launcher
+
+`LAUNCHER` in `settings.conf` is what `Super+Space` opens: `auto`, `raycast`,
+`tinycast`, `alfred`, `omniwm` or `none`. `auto` is Raycast on AeroSpace and
+OmniWM's own launcher on OmniWM; `omniwm` only works while OmniWM is the
+window manager. `none` leaves the chord unbound, for an unsupported launcher
+or a launcher's own hotkey. `omacosy-launcher status` shows the current
+choice, and `omacosy-launcher set <value>` changes it at once and writes
+`settings.conf`, so a later install keeps it.
+
 `SERIALIZE_APP_SPAWNS="1"` sends the music and messenger chords through
 `omacosy-spawn-cmd`, so a burst of presses opens one window at a time.
 

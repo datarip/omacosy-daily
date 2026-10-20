@@ -173,6 +173,20 @@ instead, run `./install.sh --omniwm`: AeroSpace is then not installed.
 A later `install.sh` or `omacosy-update` keeps the window manager you
 chose.
 
+`--launcher` chooses what `Super+Space` opens: `auto` (the default),
+`raycast`, `tinycast`, `alfred`, `omniwm` or `none`. `auto` means Raycast
+on AeroSpace and OmniWM's own launcher on OmniWM. `omniwm` is only
+available while OmniWM is the window manager; the other values work under
+either manager. `none` installs no third-party launcher and leaves
+`Super+Space` unbound. For example:
+
+```sh
+./install.sh --omniwm --launcher tinycast   # OmniWM + Tinycast, no Raycast
+./install.sh --aerospace --launcher alfred  # AeroSpace + Alfred, no Raycast
+```
+
+The launcher choice is independent of the window manager.
+
 The clone location matters. Configs are symlinked into the repo, and
 macOS privacy (TCC) blocks launchd services from reading `~/Documents`,
 `~/Desktop` and `~/Downloads`. If you clone there anyway, the installer
@@ -324,6 +338,7 @@ Your values live in one file outside the clone,
 | Setting | What it sets |
 | --- | --- |
 | `TERMINAL`, `BROWSER`, `EMAIL`, `MUSIC`, `MESSENGER` | the apps the launch chords open. The defaults are Ghostty, Spotify and Slack; an empty `BROWSER` or `EMAIL` makes that chord follow the Mac's default web browser or mail app (how to change those is in [docs/customising.md](docs/customising.md)) |
+| `LAUNCHER` | the app `Super+Space` opens: `auto`, `raycast`, `tinycast`, `alfred`, `omniwm` or `none`. `auto` is Raycast on AeroSpace and OmniWM's launcher on OmniWM; `omniwm` only works while OmniWM is the window manager. Empty leaves the chord unbound. `omacosy-launcher status` shows it and `omacosy-launcher set <value>` changes it at once |
 | `APP_WORKSPACE_RULES` | the workspace an app's windows open on |
 | `APP_FLOAT_RULES` | the windows that float instead of tile, under OmniWM |
 | `RING_RADIUS`, `WINDOW_CORNER` | the focus ring radius, and the radius macOS draws window corners with. The whole Settings dashboard follows the same corner — buttons, toggles, dropdowns, chips, the palette swatches and the colour wells, plus the card and its theme thumbnails — and so do the `Super+K` cheatsheet and the popup panel under a bar pill. The bar's own pills and the workspace overview stay rounded by choice |
@@ -332,6 +347,10 @@ Your values live in one file outside the clone,
 | `SERIALIZE_APP_SPAWNS` | one window at a time from a burst of presses on the music and messenger chords |
 | `GHOSTTY_WINDOW_SHADOW` | whether Ghostty draws its macOS window shadow (`on`, Ghostty's default, or `off`). Off removes the black rim a shadow makes around a dark, translucent Ghostty window under a tiling window manager; applies on the next Ghostty launch. `""` leaves Ghostty's default |
 | `LOGO_INTRO` | the effect the `Super+,` dashboard plays over its wordmark when it opens — `laseretch`, `sweep`, `waves`, `middleout`, `scattered`, `print`, `decrypt`, `errorcorrect`, `rain`, `crumble`, `expand`, `highlight`, `colorshift`, `beams`, `slice`, `wipe` or `spray`. Empty or `random` picks a different one each open, never repeating the last; each run lasts about half a second to just over a second. Reduce Motion skips the intro |
+
+`omacosy-launcher status` shows the current choice and what it resolves to;
+`omacosy-launcher set <value>` changes it and rebinds `Super+Space` without a
+reinstall. `set` writes `settings.conf`, so a later `install.sh` keeps it.
 
 `install.sh` regenerates the window-manager configs on each run, then
 runs `omacosy-settings`, which writes your values back into them. After
@@ -455,6 +474,7 @@ The keys and the daemons run these. You do not need to run them:
 | Piece | Tool | Config |
 |---|---|---|
 | Tiling WM | [AeroSpace](https://github.com/nikitabobko/AeroSpace) *or* [OmniWM](https://github.com/BarutSRB/OmniWM) via `omacosy-wm-switch` | `config/aerospace/aerospace.template.toml`, `config/omniwm/settings.template.toml` |
+| Launcher (`Super+Space`) | Raycast, Tinycast, Alfred or OmniWM's own, chosen by `LAUNCHER` | `config/apps.conf`, `bin/omacosy-launcher` |
 | Super key | [Karabiner](https://karabiner-elements.pqrs.org) (Caps Lock → cmd+ctrl+alt) | `config/karabiner/` (copied, not symlinked — TCC) |
 | Status bar, popups, shade | `omacosy-bar` (self-compiled launchd agent, one process draws all of it) | `helper/bar.swift`, `config/bar.conf` (live copy: `~/.config/omacosy/bar.conf`) |
 | Window borders + fullscreen shroud | `omacosy-borders` (self-compiled launchd agent) | `helper/borders.swift`, `config/borders.conf` |
@@ -675,10 +695,9 @@ on re-runs and names such keyboards when it finds one connected.
 | `Super+r` | resize mode (`h/j/k/l`, `-`/`=`, `esc`) — AeroSpace only; OmniWM has no binding modes |
 | `Super+shift+;` | service mode (`esc` reload, `r` flatten, `⌫` close others) |
 | **Apps and system** | |
-| `Super+enter` / `Super+shift+enter` | terminal / browser |
-| `Super+space` | launcher (Raycast; the OmniWM option opens OmniWM's command palette instead) |
-| `Super+shift+f` / `+m` / `+g` | files / music / messenger (set in `settings.conf`) |
-| `Super+shift+y` | yazi, the terminal file manager, in a new window (after `./install.sh --yazi` or `--yazi-full`) |
+| `Super+enter` / `Super+shift+enter` | terminal / browser (the default browser) |
+| `Super+space` | launcher — `LAUNCHER` in `settings.conf`; `auto` is Raycast on AeroSpace and OmniWM's launcher on OmniWM |
+| `Super+shift+f` / `+m` / `+g` / `+e` | files / music / messenger / mail (set in `settings.conf`; mail is the default mail app); files opens a NEW Finder window on every press |
 | `Super+shift+t` | next theme |
 | `Super+shift+b` | next wallpaper of the current theme |
 | `Super+shift+l` | lock the screen |
@@ -1068,8 +1087,9 @@ type-to-search), gestures, keybindings, themes — and the dwindle
 layout is native, so the split-hint machinery below simply isn't
 needed there. What changes: OmniWM draws the focus border (themed by
 theme-set), app-launching chords run through Karabiner rules that the
-switch installs and removes, and Super+Space opens OmniWM's command
-palette instead of Raycast.
+switch installs and removes, and Super+Space opens OmniWM's launcher
+when `LAUNCHER=auto`. Set `LAUNCHER=raycast`, `tinycast` or `alfred` to
+use one of those under OmniWM instead; `none` leaves the chord unbound.
 
 Under OmniWM the plumbing changes shape: `Super+N`/`Hyper+N` route
 through Karabiner into `omacosy-omni` (a held-socket IPC client) so
