@@ -3272,8 +3272,21 @@ watch(dismissPath, create: true) {
             ($0.localizedName ?? "").caseInsensitiveCompare(owner) == .orderedSame
         })
     else { return }
+    // Manual Super+Space still holds Caps Lock (Command+Control+Option)
+    // when this runs. A posted Command+W then carries those modifiers too,
+    // and the launcher answers the invalid chord with the system beep.
+    // Wait for the physical chord to be released, then post from a
+    // private source that has no physical modifier state.
+    for _ in 0..<50 {
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+        if !flags.contains(.maskCommand),
+            !flags.contains(.maskControl),
+            !flags.contains(.maskOption) { break }
+        usleep(10_000)
+    }
+    usleep(30_000)
     let pid = app.processIdentifier
-    let src = CGEventSource(stateID: .hidSystemState)
+    let src = CGEventSource(stateID: .privateState)
     let down = CGEvent(keyboardEventSource: src, virtualKey: 13, keyDown: true)
     down?.flags = .maskCommand
     let up = CGEvent(keyboardEventSource: src, virtualKey: 13, keyDown: false)
