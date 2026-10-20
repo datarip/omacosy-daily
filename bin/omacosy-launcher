@@ -21,6 +21,8 @@ APPS="$HOME/.config/omacosy/apps.conf"
 AERO="$HOME/.config/aerospace/aerospace.toml"
 KARA="$HOME/.local/bin/omacosy-karabiner-omniwm"
 OMNI="$HOME/.local/bin/omacosy-omni"
+HELPER="$HOME/.local/bin/omacosy-helper"
+DISMISS="/tmp/omacosy-bar-dismiss"
 OMNIWMCTL="$(command -v omniwmctl 2>/dev/null || echo /opt/homebrew/bin/omniwmctl)"
 
 valid() {
@@ -61,12 +63,49 @@ resolved() {
   esac
 }
 
+window_open() {
+  local owner=$1
+  [ -x "$HELPER" ] && "$HELPER" window-exists "$owner" >/dev/null 2>&1
+}
+
+dismiss_via_bar() {
+  local owner=$1
+  printf '%s' "$owner" > "$DISMISS" 2>/dev/null || return 1
+  sleep 0.25
+  ! window_open "$owner"
+}
+
+close_one() {
+  case "$1" in
+    raycast) open -b com.raycast.macos "raycast://hideWindow" >/dev/null 2>&1 ;;
+    tinycast) osascript -e 'tell application "System Events" to key code 53' >/dev/null 2>&1 ;;
+    alfred) return 0 ;;  # only the bar can dismiss a non-frontmost panel
+    *) return 1 ;;
+  esac
+}
+
 open_one() {
   case "$1" in
-    raycast) open -b com.raycast.macos "raycast://" >/dev/null 2>&1 ;;
-    tinycast) open -b com.tinycast.app "tinycast://" >/dev/null 2>&1 ;;
+    raycast)
+      if window_open Raycast; then
+        dismiss_via_bar Raycast || close_one raycast
+        return 0
+      fi
+      open -b com.raycast.macos "raycast://" >/dev/null 2>&1
+      ;;
+    tinycast)
+      if window_open Tinycast; then
+        dismiss_via_bar Tinycast || close_one tinycast
+        return 0
+      fi
+      open -b com.tinycast.app "tinycast://" >/dev/null 2>&1
+      ;;
     alfred)
       installed alfred || return 1
+      if window_open Alfred; then
+        dismiss_via_bar Alfred || close_one alfred
+        return 0
+      fi
       osascript -e 'tell application id "com.runningwithcrayons.Alfred" to search ""' >/dev/null 2>&1
       ;;
     omniwm)
