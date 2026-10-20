@@ -22,7 +22,7 @@ AERO="$HOME/.config/aerospace/aerospace.toml"
 KARA="$HOME/.local/bin/omacosy-karabiner-omniwm"
 OMNI="$HOME/.local/bin/omacosy-omni"
 HELPER="$HOME/.local/bin/omacosy-helper"
-DISMISS="/tmp/omacosy-bar-dismiss"
+PREV="/tmp/omacosy-launcher-previous-$(id -u)"
 OMNIWMCTL="$(command -v omniwmctl 2>/dev/null || echo /opt/homebrew/bin/omniwmctl)"
 
 valid() {
@@ -68,50 +68,79 @@ window_open() {
   [ -x "$HELPER" ] && "$HELPER" window-exists "$owner" >/dev/null 2>&1
 }
 
-dismiss_via_bar() {
-  local owner=$1 i
-  printf '%s' "$owner" > "$DISMISS" 2>/dev/null || return 1
-  # Wait for the close animation. A fixed short sleep used to see the old
-  # window still on screen, run the fallback, and send a second Escape;
-  # that second key is the system beep.
+remember_front() {
+  local bid
+  [ -x "$HELPER" ] || return 0
+  bid="$("$HELPER" frontmost-bundle 2>/dev/null || true)"
+  case "$bid" in
+    '' | com.raycast.macos | com.tinycast.app | com.runningwithcrayons.Alfred) return 0 ;;
+  esac
+  printf '%s' "$bid" > "$PREV" 2>/dev/null || true
+}
+
+return_to_previous() {  # <owner> <different-app-first:0|1>
+  local owner=$1 different=${2:-0} bid="" i
+  [ -f "$PREV" ] && bid="$(cat "$PREV" 2>/dev/null || true)"
+  case "$bid" in
+    '' | com.raycast.macos | com.tinycast.app | com.runningwithcrayons.Alfred)
+      # no saved app: a normal app activation is still enough for Tinycast
+      # and Alfred, but it cannot restore the exact window the user left.
+      open -b com.apple.finder >/dev/null 2>&1
+      ;;
+    *)
+      # Alfred's panel never becomes frontmost; activate another running
+      # app once so it resigns key, then put the previous app back.
+      if [ "$different" = 1 ] && [ -x "$HELPER" ]; then
+        "$HELPER" focus-away "$bid" "com.runningwithcrayons.Alfred" >/dev/null 2>&1 || return 1
+      else
+        open -b "$bid" >/dev/null 2>&1 || return 1
+      fi
+      ;;
+  esac
   for i in $(seq 1 20); do
     sleep 0.05
-    ! window_open "$owner" && return 0
+    if ! window_open "$owner"; then rm -f "$PREV"; return 0; fi
   done
   return 1
 }
 
-close_one() {
-  case "$1" in
-    raycast) open -b com.raycast.macos "raycast://hideWindow" >/dev/null 2>&1 ;;
-    # Tinycast closes on the bar's Escape. Alfred has no shell fallback: its
-    # panel is never frontmost. Do nothing rather than send another key.
-    *) return 0 ;;
-  esac
+close_raycast() {
+  local i
+  # Raycast is a non-activating panel, so focus return does not close it.
+  # Its own default global hotkey is Option+Space; send that once.
+  osascript -e 'tell application "System Events" to key code 49 using option down' >/dev/null 2>&1
+  for i in $(seq 1 20); do
+    sleep 0.05
+    ! window_open Raycast && { rm -f "$PREV"; return 0; }
+  done
+  return 1
 }
 
 open_one() {
   case "$1" in
     raycast)
       if window_open Raycast; then
-        dismiss_via_bar Raycast || close_one raycast
+        close_raycast
         return 0
       fi
+      remember_front
       open -b com.raycast.macos "raycast://" >/dev/null 2>&1
       ;;
     tinycast)
       if window_open Tinycast; then
-        dismiss_via_bar Tinycast || close_one tinycast
+        return_to_previous Tinycast 0
         return 0
       fi
+      remember_front
       open -b com.tinycast.app "tinycast://" >/dev/null 2>&1
       ;;
     alfred)
       installed alfred || return 1
       if window_open Alfred; then
-        dismiss_via_bar Alfred || close_one alfred
+        return_to_previous Alfred 1
         return 0
       fi
+      remember_front
       osascript -e 'tell application id "com.runningwithcrayons.Alfred" to search ""' >/dev/null 2>&1
       ;;
     omniwm)

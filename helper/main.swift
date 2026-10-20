@@ -35,6 +35,11 @@
 //   window-exists <owner>   succeed when an on-screen window owned by <owner>
 //                           looks like a launcher panel (above layer 0 and
 //                           wider than a status item)
+//   frontmost-bundle        the bundle id of the frontmost app
+//   focus-away <previous> <launcher>
+//                           activate another running app once, then
+//                           <previous>; used to make a non-activating
+//                           launcher panel resign key without a key event
 //   brightness              print the built-in display's brightness (0-100)
 //   brightness set <0-100>  set it (DisplayServices — built-in/Apple
 //                           displays only; external DDC is out of scope)
@@ -778,6 +783,25 @@ case "bt":
         fail("usage: bt power [on|off|toggle] | bt devices | bt connect <addr> | bt disconnect <addr>")
     }
 
+case "frontmost-bundle":
+    print(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "")
+
+case "focus-away":
+    guard args.count > 3 else { fail("usage: focus-away <previous-bundle> <launcher-bundle>") }
+    let previous = args[2], launcher = args[3]
+    let apps = NSWorkspace.shared.runningApplications
+    if let other = apps.first(where: {
+        let id = $0.bundleIdentifier ?? ""
+        return id != previous && id != launcher && !id.isEmpty
+            && $0.activationPolicy == .regular && !$0.isHidden && $0.isFinishedLaunching
+    }) {
+        other.activate(options: [.activateAllWindows])
+        usleep(150_000)
+    }
+    if let prev = apps.first(where: { $0.bundleIdentifier == previous }) {
+        prev.activate(options: [.activateAllWindows])
+    }
+
 case "window-exists":
     // The launcher toggle reads this before deciding open vs close. A
     // status item is narrow and a hidden palette is not on screen; the
@@ -798,5 +822,5 @@ case "window-exists":
     exit(found ? 0 : 1)
 
 default:
-    fail("usage: omacosy-helper cursor | displays | default-browser | default-app <scheme> | wallpaper <path> | audio ... | bt ... | brightness [set <0-100>] | input-age | window-exists <owner>")
+    fail("usage: omacosy-helper cursor | displays | default-browser | default-app <scheme> | wallpaper <path> | audio ... | bt ... | brightness [set <0-100>] | input-age | window-exists <owner> | frontmost-bundle | focus-away <previous> <launcher>")
 }
