@@ -162,6 +162,17 @@ choice, and `omacosy-launcher set <value>` changes it at once and writes
 Settings **Options** tab as a **Launcher** dropdown; OmniWM is hidden there
 while AeroSpace is selected, and Save calls `omacosy-launcher set`.
 
+`LAUNCHER_OWN_HOTKEY` decides whether the chosen launcher keeps its own
+`Option+Space`. `on`, the default, leaves it. `off` adds a base Karabiner
+rule that swallows the physical `Option+Space`, so only `Super+Space`
+opens the launcher; Tinycast and Raycast still close on `Super+Space`,
+because the wrapper's synthetic `Option+Space` is not a physical key. That
+rule also stops `Option+Space` typing a non-breaking space anywhere else.
+Nothing is swallowed when the chosen launcher has no own hotkey —
+OmniWM's launcher has none, and `none` leaves the chord unbound on purpose
+— so `Option+Space` stays free there. `omacosy-launcher status` reports
+the current state.
+
 `SERIALIZE_APP_SPAWNS="1"` sends the music and messenger chords through
 `omacosy-spawn-cmd`, so a burst of presses opens one window at a time.
 

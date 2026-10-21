@@ -57,7 +57,7 @@ if ! bash -n "$SETTINGS" 2>/dev/null; then
 fi
 
 # A key the file leaves out keeps its default. Empty means "leave it alone".
-TERMINAL="" BROWSER="" EMAIL="" MUSIC="" MESSENGER="" LAUNCHER="auto"
+TERMINAL="" BROWSER="" EMAIL="" MUSIC="" MESSENGER="" LAUNCHER="auto" LAUNCHER_OWN_HOTKEY=""
 APP_WORKSPACE_RULES="" APP_FLOAT_RULES="" WORKSPACE_NAMES=""
 RING_RADIUS="" WINDOW_CORNER="" BORDER_WIDTH="" GHOSTTY_WINDOW_SHADOW="" SERIALIZE_APP_SPAWNS="0" AUTOHIDE=""
 # shellcheck source=/dev/null
@@ -68,6 +68,11 @@ case "$LAUNCHER" in
   raycast | tinycast | alfred | omniwm | none) ;;
   *) warn "LAUNCHER '$LAUNCHER' is not auto, raycast, tinycast, alfred, omniwm or none; using auto"
      LAUNCHER=auto ;;
+esac
+case "$LAUNCHER_OWN_HOTKEY" in
+  "" | on | off) ;;
+  *) warn "LAUNCHER_OWN_HOTKEY '$LAUNCHER_OWN_HOTKEY' is not on or off; left alone"
+     LAUNCHER_OWN_HOTKEY="" ;;
 esac
 
 say "settings read from $SETTINGS"
@@ -80,7 +85,7 @@ CHANGED=0
 #
 # An empty value is left out, not written blank: install.sh warns about
 # `MUSIC=`, and an absent key gives the same default without the warning.
-if [ -n "$TERMINAL$BROWSER$EMAIL$MUSIC$MESSENGER$LAUNCHER" ]; then
+if [ -n "$TERMINAL$BROWSER$EMAIL$MUSIC$MESSENGER$LAUNCHER$LAUNCHER_OWN_HOTKEY" ]; then
   if [ -z "$REPO_DIR" ]; then
     warn "cannot find the clone, so config/apps.local.conf was left alone"
   else
@@ -89,11 +94,13 @@ if [ -n "$TERMINAL$BROWSER$EMAIL$MUSIC$MESSENGER$LAUNCHER" ]; then
     {
       echo "# Written by omacosy-settings from ~/.config/omacosy/settings.conf. Edit that file."
       echo "# install.sh reads this and generates ~/.config/omacosy/apps.conf from it."
-      for k in TERMINAL BROWSER EMAIL MUSIC MESSENGER LAUNCHER; do
+      for k in TERMINAL BROWSER EMAIL MUSIC MESSENGER LAUNCHER LAUNCHER_OWN_HOTKEY; do
         v="${!k}"
         [ -z "$v" ] && continue
         if [ "$k" = LAUNCHER ]; then
           printf 'LAUNCHER=%s\n' "$v"
+        elif [ "$k" = LAUNCHER_OWN_HOTKEY ]; then
+          printf 'LAUNCHER_OWN_HOTKEY=%s\n' "$v"
         elif is_name "$v"; then
           printf '%s=%s\n' "$k" "$v"
         else
@@ -135,6 +142,14 @@ if [ -f "$APPS_CONF" ]; then
       printf 'LAUNCHER="%s"\n' "$LAUNCHER" >> "$APPS_CONF"
     fi
     say "LAUNCHER=$LAUNCHER written to ~/.config/omacosy/apps.conf"
+  fi
+  if [ -n "$LAUNCHER_OWN_HOTKEY" ] && ! grep -qx "LAUNCHER_OWN_HOTKEY=\"$LAUNCHER_OWN_HOTKEY\"" "$APPS_CONF"; then
+    if grep -q '^LAUNCHER_OWN_HOTKEY=' "$APPS_CONF"; then
+      sed -i '' "s|^LAUNCHER_OWN_HOTKEY=.*|LAUNCHER_OWN_HOTKEY=\"$LAUNCHER_OWN_HOTKEY\"|" "$APPS_CONF"
+    else
+      printf 'LAUNCHER_OWN_HOTKEY="%s"\n' "$LAUNCHER_OWN_HOTKEY" >> "$APPS_CONF"
+    fi
+    say "LAUNCHER_OWN_HOTKEY=$LAUNCHER_OWN_HOTKEY written to ~/.config/omacosy/apps.conf"
   fi
 fi
 
@@ -231,6 +246,41 @@ if [ -f "$AERO" ]; then
     sed -i '' -E "s|^cmd-ctrl-alt-space = .*|$LAUNCH_LINE|" "$AERO"
     CHANGED=1
     say "Super+Space now runs omacosy-launcher"
+  fi
+fi
+
+# LAUNCHER_OWN_HOTKEY=off swallows each launcher's own Option+Space, so
+# Super+Space is the only way in. The rule lives in the BASE Karabiner
+# profile (both managers), not the OmniWM layer, because the launchers'
+# hotkeys are live under both. LAUNCHER=none keeps the own hotkey: using it
+# instead of Super+Space is what `none` is for.
+KARA_LAUNCHER="$BIN/omacosy-karabiner-launcher"
+[ -x "$KARA_LAUNCHER" ] || KARA_LAUNCHER="$REPO_DIR/bin/omacosy-karabiner-launcher"
+# Only a launcher with its own hotkey can be swallowed. auto resolves to
+# OmniWM's launcher under OmniWM (which has none) and to Raycast under
+# AeroSpace. OmniWM itself has no shortcut to take away.
+OWN_TARGET=$LAUNCHER
+if [ "$LAUNCHER" = auto ]; then
+  if [ -x "$BIN/omacosy-omni" ] && "$BIN/omacosy-omni" active >/dev/null 2>&1; then
+    OWN_TARGET=omniwm
+  else
+    OWN_TARGET=raycast
+  fi
+fi
+case "$OWN_TARGET" in
+  raycast | tinycast | alfred) OWN_HOTKEY=1 ;;
+  *) OWN_HOTKEY=0 ;;
+esac
+if [ -n "$LAUNCHER_OWN_HOTKEY" ] && [ -x "$KARA_LAUNCHER" ]; then
+  if [ "$LAUNCHER_OWN_HOTKEY" = off ] && [ "$OWN_HOTKEY" = 1 ]; then
+    if "$KARA_LAUNCHER" install >/dev/null 2>&1; then
+      say "the launcher's own Option+Space is swallowed (Super+Space only)"
+    else
+      warn "could not swallow the launcher's own Option+Space; run: omacosy-karabiner-launcher install"
+    fi
+  else
+    "$KARA_LAUNCHER" remove >/dev/null 2>&1 \
+      && say "the launcher's own Option+Space stays active"
   fi
 fi
 
@@ -631,6 +681,12 @@ echo
 say "done"
 echo "  Super+Return:        $(chord cmd-ctrl-alt-enter)"
 echo "  Super+Space:         $LAUNCHER"
+case "$LAUNCHER_OWN_HOTKEY" in
+  off) [ "$OWN_HOTKEY" = 1 ] \
+         && echo "  Own hotkey:          swallowed; Super+Space only" \
+         || echo "  Own hotkey:          active (this launcher has no own hotkey)" ;;
+  on)  echo "  Own hotkey:          active" ;;
+esac
 if [ -n "$BROWSER" ]; then
   echo "  Super+Shift+Return:  $BROWSER (pinned)"
 else

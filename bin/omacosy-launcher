@@ -15,6 +15,12 @@
 # keeps the choice), replaces or removes the AeroSpace chord, and refreshes
 # the OmniWM Karabiner rules. It does not install a launcher and never changes
 # the window manager.
+#
+# LAUNCHER_OWN_HOTKEY=off (in apps.conf) swallows each launcher's own
+# Option+Space through bin/omacosy-karabiner-launcher, so Super+Space is the
+# only way in. `set` re-applies that rule because `none` must give the own
+# hotkey back. The wrapper still closes Tinycast and Raycast with a synthetic
+# Option+Space; Karabiner only swallows the physical chord.
 set -u
 
 APPS="$HOME/.config/omacosy/apps.conf"
@@ -60,6 +66,25 @@ resolved() {
       if omniwm_active; then printf 'omniwm'; else printf 'raycast'; fi
       ;;
     *) printf '%s' "$1" ;;
+  esac
+}
+
+own_hotkey() {
+  local v=""
+  [ -f "$APPS" ] && . "$APPS" 2>/dev/null
+  v="${LAUNCHER_OWN_HOTKEY:-on}"
+  [ "$v" = off ] || v=on
+  printf '%s' "$v"
+}
+
+own_swallowed() {
+  local value=$1 own target
+  own="$(own_hotkey)"
+  [ "$own" = off ] || return 1
+  target="$(resolved "$value")"
+  case "$target" in
+    raycast | tinycast | alfred) return 0 ;;
+    *) return 1 ;;
   esac
 }
 
@@ -125,9 +150,10 @@ open_launcher() {
 }
 
 status() {
-  local value target_resolved r t a o active available
+  local value target_resolved r t a o active available own
   value="$(configured)"
   target_resolved="$(resolved "$value")"
+  if own_swallowed "$value"; then own=swallowed; else own=active; fi
   installed raycast && r=true || r=false
   installed tinycast && t=true || t=false
   installed alfred && a=true || a=false
@@ -143,8 +169,8 @@ status() {
   esac
 
   if [ "${1:-}" = --json ]; then
-    printf '{"configured":"%s","resolved":"%s","available":%s,"omniwmActive":%s,"installed":{"raycast":%s,"tinycast":%s,"alfred":%s,"omniwm":%s}}\n' \
-      "$value" "$target_resolved" "$available" "$active" "$r" "$t" "$a" "$o"
+    printf '{"configured":"%s","resolved":"%s","available":%s,"omniwmActive":%s,"ownHotkey":"%s","installed":{"raycast":%s,"tinycast":%s,"alfred":%s,"omniwm":%s}}\n' \
+      "$value" "$target_resolved" "$available" "$active" "$own" "$r" "$t" "$a" "$o"
     return 0
   fi
 
@@ -157,6 +183,8 @@ status() {
     "$([ "$a" = true ] && echo yes || echo no)" \
     "$([ "$o" = true ] && echo yes || echo no)"
   printf 'omniwm:      %s\n' "$([ "$active" = true ] && echo running || echo stopped)"
+  printf 'own hotkey:  %s\n' \
+    "$([ "$own" = swallowed ] && echo 'swallowed (Super+Space only)' || echo active)"
 }
 
 patch_aerospace() {
@@ -193,6 +221,23 @@ patch_aerospace() {
     return 0
   done
   echo "omacosy-launcher: no anchor in $AERO to insert the launcher chord" >&2
+}
+
+refresh_own_hotkey() {
+  local value=$1 kara self repo
+  kara="$HOME/.local/bin/omacosy-karabiner-launcher"
+  if [ ! -x "$kara" ]; then
+    self="$(readlink "$HOME/.local/bin/omacosy-launcher" 2>/dev/null || printf '%s' "$0")"
+    repo="$(cd "$(dirname "$self")/.." 2>/dev/null && pwd || true)"
+    [ -n "$repo" ] && kara="$repo/bin/omacosy-karabiner-launcher"
+  fi
+  [ -x "$kara" ] || return 0
+  if own_swallowed "$value"; then
+    "$kara" install >/dev/null 2>&1 \
+      || echo "omacosy-launcher: could not swallow the launcher's own Option+Space" >&2
+  else
+    "$kara" remove >/dev/null 2>&1 || true
+  fi
 }
 
 write_choice() {
@@ -248,6 +293,7 @@ set_launcher() {
 
   write_choice "$value"
   patch_aerospace "$value"
+  refresh_own_hotkey "$value"
 
   if omniwm_active; then
     kara="$KARA"

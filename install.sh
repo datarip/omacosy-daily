@@ -133,6 +133,13 @@ read_apps() {
       esac
       continue
     fi
+    if [ "$k" = LAUNCHER_OWN_HOTKEY ]; then
+      case "$v" in
+        on | off) LAUNCHER_OWN_HOTKEY="$v" ;;
+        *) log "ignoring LAUNCHER_OWN_HOTKEY in $(basename "$f"): expected on or off" ;;
+      esac
+      continue
+    fi
     case "$v" in
       ''|*[!A-Za-z0-9\ ._-]*)
         log "ignoring $k in $(basename "$f"): an app name cannot contain '$v'"
@@ -152,7 +159,7 @@ read_apps() {
 # deliberately left unset there, so those chords follow the macOS default
 # web browser and mail app (see bin/omacosy-browser, bin/omacosy-open)
 # until you name one.
-TERMINAL= BROWSER= EMAIL= MUSIC= MESSENGER= LAUNCHER=auto
+TERMINAL= BROWSER= EMAIL= MUSIC= MESSENGER= LAUNCHER=auto LAUNCHER_OWN_HOTKEY=on
 read_apps "$REPO_DIR/config/apps.conf"
 read_apps "$REPO_DIR/config/apps.local.conf"
 # An explicit flag wins. Otherwise a re-run keeps apps.local.conf's value,
@@ -187,8 +194,8 @@ fi
 # the bar's activity pill reads this file too and cannot read the repo from
 # a launchd agent when the clone is TCC-protected.
 mkdir -p "$HOME/.config/omacosy"
-printf 'TERMINAL="%s"\nBROWSER="%s"\nEMAIL="%s"\nMUSIC="%s"\nMESSENGER="%s"\nLAUNCHER="%s"\n' \
-  "$TERMINAL" "$BROWSER" "$EMAIL" "$MUSIC" "$MESSENGER" "$LAUNCHER" > "$HOME/.config/omacosy/apps.conf"
+printf 'TERMINAL="%s"\nBROWSER="%s"\nEMAIL="%s"\nMUSIC="%s"\nMESSENGER="%s"\nLAUNCHER="%s"\nLAUNCHER_OWN_HOTKEY="%s"\n' \
+  "$TERMINAL" "$BROWSER" "$EMAIL" "$MUSIC" "$MESSENGER" "$LAUNCHER" "$LAUNCHER_OWN_HOTKEY" > "$HOME/.config/omacosy/apps.conf"
 
 # --- 1. Homebrew ------------------------------------------------------------
 if ! command -v brew >/dev/null 2>&1; then
@@ -528,6 +535,30 @@ seen = [d.get("identifiers") for d in devs]
 devs += [d for d in kept if d.get("identifiers") not in seen]  # the seed's own entries win
 json.dump(c, open(f, "w"), indent=4)
 PY
+fi
+# LAUNCHER_OWN_HOTKEY=off swallows the chosen launcher's own Option+Space,
+# so Super+Space is the only way in. It sits in the BASE profile, not the
+# OmniWM layer below: the launchers' own hotkeys are live under both
+# managers. Only a launcher that HAS an own hotkey is swallowed: OmniWM's
+# launcher has none, so auto under OmniWM leaves Option+Space alone, and
+# LAUNCHER=none keeps it because using it instead of Super+Space is what
+# `none` is for.
+OWN_TARGET=$LAUNCHER
+if [ "$LAUNCHER" = auto ]; then
+  if [ "$WM" = omniwm ]; then OWN_TARGET=omniwm; else OWN_TARGET=raycast; fi
+fi
+case "$OWN_TARGET" in
+  raycast | tinycast | alfred) OWN_HOTKEY=1 ;;
+  *) OWN_HOTKEY=0 ;;
+esac
+KARA_LAUNCHER="$REPO_DIR/bin/omacosy-karabiner-launcher"
+if [ -x "$KARA_LAUNCHER" ]; then
+  if [ "$LAUNCHER_OWN_HOTKEY" = off ] && [ "$OWN_HOTKEY" = 1 ]; then
+    "$KARA_LAUNCHER" install >/dev/null 2>&1 \
+      || log "WARNING: could not swallow the launcher's own Option+Space; run: omacosy-karabiner-launcher install"
+  else
+    "$KARA_LAUNCHER" remove >/dev/null 2>&1 || true
+  fi
 fi
 # Name any connected keyboard Karabiner will leave alone, so a new board
 # whose Caps Lock does nothing is a one-switch fix rather than a mystery.
@@ -1033,6 +1064,7 @@ link "$REPO_DIR/bin/omacosy-weather" "$HOME/.local/bin/omacosy-weather"
 link "$REPO_DIR/bin/omacosy-spawn" "$HOME/.local/bin/omacosy-spawn"
 link "$REPO_DIR/bin/omacosy-wm-switch" "$HOME/.local/bin/omacosy-wm-switch"
 link "$REPO_DIR/bin/omacosy-karabiner-omniwm" "$HOME/.local/bin/omacosy-karabiner-omniwm"
+link "$REPO_DIR/bin/omacosy-karabiner-launcher" "$HOME/.local/bin/omacosy-karabiner-launcher"
 link "$REPO_DIR/bin/omacosy-layout" "$HOME/.local/bin/omacosy-layout"
 link "$REPO_DIR/bin/omacosy-float" "$HOME/.local/bin/omacosy-float"
 link "$REPO_DIR/bin/omacosy-finder-window" "$HOME/.local/bin/omacosy-finder-window"

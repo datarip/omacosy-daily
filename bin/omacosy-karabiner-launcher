@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# omacosy-karabiner-launcher <install|remove|check>
+#
+# LAUNCHER_OWN_HOTKEY=off in ~/.config/omacosy/apps.conf makes Super+Space
+# the only way to open the chosen launcher. Tinycast, Raycast and Alfred
+# each register their own global Option+Space with macOS; the wrapper only
+# borrows that hotkey to CLOSE Tinycast and Raycast. This rule swallows the
+# PHYSICAL Option+Space before macOS delivers it, so the launcher's own
+# shortcut stops opening it.
+#
+# It lives in the BASE profile, not the OmniWM layer: the launchers' own
+# hotkeys are live under both managers. Karabiner only sees physical
+# keyboard input, so the synthetic Option+Space the wrapper posts through
+# System Events still reaches the launcher and still closes it. That is the
+# whole trick, and it is why no app preference is edited.
+#
+# The cost is deliberate and documented: Option+Space no longer types a
+# non-breaking space anywhere while this is on.
+#
+# KARABINER can point at a copy, so a change can be tested without
+# rewriting the keyboard in use.
+set -euo pipefail
+
+KARABINER="${KARABINER:-$HOME/.config/karabiner/karabiner.json}"
+MARK="omacosy-launcher:"   # rule-description prefix, removal key
+
+[ -f "$KARABINER" ] || { echo "no karabiner.json" >&2; exit 1; }
+
+export KARABINER MARK
+python3 - "$1" <<'PY'
+import json, os, sys
+
+path = os.environ["KARABINER"]
+mark = os.environ["MARK"]
+action = sys.argv[1]
+
+if action not in ("install", "remove", "check"):
+    sys.exit("usage: omacosy-karabiner-launcher <install|remove|check>")
+
+rule = {
+    "description": f"{mark} swallow the launcher's own Option+Space",
+    "manipulators": [{
+        "type": "basic",
+        "from": {"key_code": "spacebar", "modifiers": {"mandatory": ["option"]}},
+        "to": [],
+    }],
+}
+
+with open(path) as f:
+    cfg = json.load(f)
+
+changed = False
+seen = stale = False
+for profile in cfg.get("profiles", []):
+    if not profile.get("selected", False) and len(cfg["profiles"]) > 1:
+        continue
+    cm = profile.setdefault("complex_modifications", {})
+    existing = cm.setdefault("rules", [])
+    ours = [r for r in existing if r.get("description", "").startswith(mark)]
+    kept = [r for r in existing if not r.get("description", "").startswith(mark)]
+    if action == "check":
+        # seen counts as compared; an old shape of our rule is stale even
+        # though the marker is there, the same trap the OmniWM set has.
+        seen = True
+        if ours != [rule]:
+            stale = True
+        continue
+    if action == "install":
+        if ours != [rule]:
+            cm["rules"] = kept + [rule]
+            changed = True
+    elif ours:
+        cm["rules"] = kept
+        changed = True
+
+if action == "check":
+    ok = seen and not stale
+    print("check: " + ("current" if ok else "stale or missing"))
+    sys.exit(0 if ok else 1)
+
+if changed:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=4)
+    os.replace(tmp, path)
+print(f"{action}: {'applied' if changed else 'no change'}")
+PY

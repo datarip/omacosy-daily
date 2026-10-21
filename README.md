@@ -188,6 +188,14 @@ either manager. `none` installs no third-party launcher and leaves
 
 The launcher choice is independent of the window manager.
 
+Each launcher keeps its own `Option+Space` unless `LAUNCHER_OWN_HOTKEY=off`
+is set. Then a Karabiner rule swallows that physical chord, so
+`Super+Space` is the only way in. Tinycast and Raycast still close with
+`Super+Space`: the wrapper sends a synthetic `Option+Space`, which
+Karabiner does not see. Nothing is swallowed when the chosen launcher has
+no own hotkey (OmniWM's launcher, or `none`), so `Option+Space` stays free
+there.
+
 The clone location matters. Configs are symlinked into the repo, and
 macOS privacy (TCC) blocks launchd services from reading `~/Documents`,
 `~/Desktop` and `~/Downloads`. If you clone there anyway, the installer
@@ -340,6 +348,7 @@ Your values live in one file outside the clone,
 | --- | --- |
 | `TERMINAL`, `BROWSER`, `EMAIL`, `MUSIC`, `MESSENGER` | the apps the launch chords open. The defaults are Ghostty, Spotify and Slack; an empty `BROWSER` or `EMAIL` makes that chord follow the Mac's default web browser or mail app (how to change those is in [docs/customising.md](docs/customising.md)) |
 | `LAUNCHER` | the app `Super+Space` opens: `auto`, `raycast`, `tinycast`, `alfred`, `omniwm` or `none`. `auto` is Raycast on AeroSpace and OmniWM's launcher on OmniWM; `omniwm` only works while OmniWM is the window manager. Empty leaves the chord unbound. `omacosy-launcher status` shows it and `omacosy-launcher set <value>` changes it at once |
+| `LAUNCHER_OWN_HOTKEY` | whether each launcher keeps its own `Option+Space` shortcut. `on` (the default) keeps it; `off` makes Karabiner swallow the physical chord, so `Super+Space` is the only way in. Nothing is swallowed when the chosen launcher has no own hotkey (OmniWM's launcher, or `none`). `""` leaves the installed value alone |
 | `APP_WORKSPACE_RULES` | the workspace an app's windows open on |
 | `APP_FLOAT_RULES` | the windows that float instead of tile, under OmniWM |
 | `RING_RADIUS`, `WINDOW_CORNER` | the focus ring radius, and the radius macOS draws window corners with. The whole Settings dashboard follows the same corner — buttons, toggles, dropdowns, chips, the palette swatches and the colour wells, plus the card and its theme thumbnails — and so do the `Super+K` cheatsheet and the popup panel under a bar pill. The bar's own pills and the workspace overview stay rounded by choice |
@@ -479,7 +488,7 @@ The keys and the daemons run these. You do not need to run them:
 | Piece | Tool | Config |
 |---|---|---|
 | Tiling WM | [AeroSpace](https://github.com/nikitabobko/AeroSpace) *or* [OmniWM](https://github.com/BarutSRB/OmniWM) via `omacosy-wm-switch` | `config/aerospace/aerospace.template.toml`, `config/omniwm/settings.template.toml` |
-| Launcher (`Super+Space`) | Raycast, Tinycast, Alfred or OmniWM's own, chosen by `LAUNCHER` | `config/apps.conf`, `bin/omacosy-launcher` |
+| Launcher (`Super+Space`) | Raycast, Tinycast, Alfred or OmniWM's own, chosen by `LAUNCHER`; `LAUNCHER_OWN_HOTKEY=off` makes `Super+Space` the only way in | `config/apps.conf`, `bin/omacosy-launcher`, `bin/omacosy-karabiner-launcher` |
 | Super key | [Karabiner](https://karabiner-elements.pqrs.org) (Caps Lock → cmd+ctrl+alt) | `config/karabiner/` (copied, not symlinked — TCC) |
 | Status bar, popups, shade | `omacosy-bar` (self-compiled launchd agent, one process draws all of it) | `helper/bar.swift`, `config/bar.conf` (live copy: `~/.config/omacosy/bar.conf`) |
 | Window borders + fullscreen shroud | `omacosy-borders` (self-compiled launchd agent) | `helper/borders.swift`, `config/borders.conf` |
