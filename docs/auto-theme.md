@@ -320,6 +320,12 @@ and the palette file below is still there to use by hand.
 Aether's colourscheme, [`omacom/aether.nvim`](https://github.com/omacom/aether.nvim)
 (branch `v3`), which lazy.nvim installs on first load.
 
+**Lua names.** The plugin and the vendored export template
+(`config/theme-templates/neovim.lua`) are Lua source. `function` is a Lua
+keyword, so that syntax role is written `["function"]` and read as
+`s["function"]`; a bare `function =` key or `s.function` does not compile, and
+Neovim refuses to start with the plugin loaded.
+
 **The palette.** On a custom theme omacosy writes
 `~/.config/omacosy/nvim/palette.lua`: a `colors` table under Aether's role
 names (`background`, `foreground`, `muted`, `lighter_bg`, `dark_bg`,
