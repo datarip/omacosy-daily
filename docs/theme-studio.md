@@ -228,6 +228,26 @@ omacosy-themecore theme import <file> [--id ID] [--name NAME] \
 Without `--replace` or `--rename`, an id that already exists is refused, and
 the message names both flags.
 
+## Crop and transform
+
+The Wallpaper Editor's **Transform** block crops the picture on the centre
+preview. Turn **Crop** on and drag any of the frame's **eight handles** —
+four corners and four edge midpoints — to reshape the crop freely on both
+axes, or drag inside the frame to move it. Crop mode always works on the
+original picture the recipe is applied to: for a saved edition that is its
+source wallpaper, not the edition's own copy, which may already carry an
+older crop. **⌘-drag** a handle to resize proportionally: the crop keeps the
+ratio it had when the drag started. As you drag or resize, the crop's centre
+snaps to the picture's centre on each axis independently (within a few
+points), and a guide line shows the axis it snapped to. A small pill over
+the preview's bottom-left shows the crop's size in the original picture's
+pixels, updating as you drag. The ratio buttons (**Free**, **1:1**,
+**16:9**, **4:3**, **3:2**, **9:16**, **3:4**, **2:3**) fit a centred crop
+to that ratio and constrain every handle to it; **Free** turns the
+constraint off. **Reset Crop** returns to the whole picture. Crop,
+rotate/flip and resize are stored in the recipe, so reopening an edition
+restores them.
+
 ## Custom presets
 
 The Wallpaper Editor's **Presets** section keeps Aether's built-in looks (the

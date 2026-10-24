@@ -10780,6 +10780,132 @@ final class PreviewIconButton: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+// --- crop geometry ---------------------------------------------------------
+// The crop rect is fractions of the source with a top-left origin, exactly the
+// engine's cropX/Y/W/H. Handles are numbered clockwise from the top-left
+// corner: 1..4 are the corners, 5..8 are the edge midpoints (top, right,
+// bottom, left), 0 grabs the inside to move it, and anything else starts a
+// fresh rect. `holdAspect` is the pixel width/height to keep (a ratio preset,
+// or the current crop's own ratio while Command is held); nil resizes freely.
+// `snapX`/`snapY` are the centre-snap thresholds as fractions of the picture:
+// when the rect's centre comes within one, it is placed on the centre line.
+func cropRectAfterDrag(mode: Int, start: CGPoint, end: CGPoint, orig: CGRect,
+                       imageAspect: CGFloat, holdAspect: CGFloat?,
+                       snapX: CGFloat = 0, snapY: CGFloat = 0) -> CGRect {
+    var r = orig
+    let dx = end.x - start.x
+    let dy = end.y - start.y
+    let minSide: CGFloat = 0.05
+    switch mode {
+    case 0:                                   // move
+        r.origin.x = orig.minX + dx
+        r.origin.y = orig.minY + dy
+    case 1:                                   // top-left
+        r.origin.x = min(orig.maxX - minSide, orig.minX + dx)
+        r.origin.y = min(orig.maxY - minSide, orig.minY + dy)
+        r.size.width = orig.maxX - r.origin.x
+        r.size.height = orig.maxY - r.origin.y
+    case 2:                                   // top-right
+        r.origin.y = min(orig.maxY - minSide, orig.minY + dy)
+        r.size.width = max(minSide, orig.width + dx)
+        r.size.height = orig.maxY - r.origin.y
+    case 3:                                   // bottom-right
+        r.size.width = max(minSide, orig.width + dx)
+        r.size.height = max(minSide, orig.height + dy)
+    case 4:                                   // bottom-left
+        r.origin.x = min(orig.maxX - minSide, orig.minX + dx)
+        r.size.width = orig.maxX - r.origin.x
+        r.size.height = max(minSide, orig.height + dy)
+    case 5:                                   // top edge
+        r.origin.y = min(orig.maxY - minSide, orig.minY + dy)
+        r.size.height = orig.maxY - r.origin.y
+    case 6:                                   // right edge
+        r.size.width = max(minSide, orig.width + dx)
+    case 7:                                   // bottom edge
+        r.size.height = max(minSide, orig.height + dy)
+    case 8:                                   // left edge
+        r.origin.x = min(orig.maxX - minSide, orig.minX + dx)
+        r.size.width = orig.maxX - r.origin.x
+    default:                                  // a fresh rect
+        r = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
+                   width: abs(end.x - start.x), height: abs(end.y - start.y))
+    }
+    if let aspect = holdAspect, aspect > 0, imageAspect > 0 {
+        r = proportionalCrop(r, mode: mode, orig: orig, wOverH: aspect / imageAspect)
+    }
+    // Never leave the picture, and never collapse to nothing.
+    r.size.width = max(0.02, min(1, r.size.width))
+    r.size.height = max(0.02, min(1, r.size.height))
+    r.origin.x = max(0, min(1 - r.size.width, r.origin.x))
+    r.origin.y = max(0, min(1 - r.size.height, r.origin.y))
+    // Centre snap, one axis at a time. A rect no wider (or taller) than the
+    // picture always fits when centred, so this cannot push it out of bounds.
+    if snapX > 0, abs(r.midX - 0.5) <= snapX { r.origin.x = 0.5 - r.width / 2 }
+    if snapY > 0, abs(r.midY - 0.5) <= snapY { r.origin.y = 0.5 - r.height / 2 }
+    return r
+}
+
+// The crop's size in source pixels, rounded the way the preview readout shows
+// it. The preview decode is a thumbnail, so the source size is passed in.
+func cropPixelSize(_ rect: CGRect, imageSize: CGSize) -> CGSize {
+    guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
+    return CGSize(width: (rect.width * imageSize.width).rounded(),
+                  height: (rect.height * imageSize.height).rounded())
+}
+
+// The handle positions in the crop rect's screen rect, in the geometry's mode
+// order: 1 top-left, 2 top-right, 3 bottom-right, 4 bottom-left, then the
+// edges 5 top, 6 right, 7 bottom, 8 left. In AppKit's bottom-left origin the
+// top edge is maxY, so this order is the one the resize code expects; the old
+// hit test enumerated the corners upwards and every dot acted as the opposite
+// corner's mode.
+func cropHandlePoints(_ cr: NSRect) -> [(mode: Int, point: NSPoint)] {
+    [(1, NSPoint(x: cr.minX, y: cr.maxY)),
+     (2, NSPoint(x: cr.maxX, y: cr.maxY)),
+     (3, NSPoint(x: cr.maxX, y: cr.minY)),
+     (4, NSPoint(x: cr.minX, y: cr.minY)),
+     (5, NSPoint(x: cr.midX, y: cr.maxY)),
+     (6, NSPoint(x: cr.maxX, y: cr.midY)),
+     (7, NSPoint(x: cr.midX, y: cr.minY)),
+     (8, NSPoint(x: cr.minX, y: cr.midY))]
+}
+
+// Resize proportionally, anchored at the handle's opposite side. The dimension
+// the user moved more drives the other one, so a diagonal drag follows the
+// pointer instead of jumping to whichever axis is checked first.
+func proportionalCrop(_ r: CGRect, mode: Int, orig: CGRect, wOverH: CGFloat) -> CGRect {
+    guard wOverH > 0 else { return r }
+    var w = r.width
+    var h = r.height
+    switch mode {
+    case 1...4:
+        if abs(w - orig.width) >= abs(h - orig.height) { h = w / wOverH }
+        else { w = h * wOverH }
+    case 5, 7:
+        w = h * wOverH
+    case 6, 8:
+        h = w / wOverH
+    default:
+        return r
+    }
+    // A crop may not leave the picture; keep the ratio while fitting it.
+    let scale = min(1, 1 / max(w, 1e-9), 1 / max(h, 1e-9))
+    w *= scale
+    h *= scale
+    var out = CGRect(x: 0, y: 0, width: w, height: h)
+    switch mode {
+    case 1: out.origin = CGPoint(x: orig.maxX - w, y: orig.maxY - h)
+    case 2: out.origin = CGPoint(x: orig.minX, y: orig.maxY - h)
+    case 3: out.origin = CGPoint(x: orig.minX, y: orig.minY)
+    case 4: out.origin = CGPoint(x: orig.maxX - w, y: orig.minY)
+    case 5: out.origin = CGPoint(x: orig.midX - w / 2, y: orig.maxY - h)
+    case 6: out.origin = CGPoint(x: orig.minX, y: orig.midY - h / 2)
+    case 7: out.origin = CGPoint(x: orig.midX - w / 2, y: orig.minY)
+    default: out.origin = CGPoint(x: orig.maxX - w, y: orig.midY - h / 2)
+    }
+    return out
+}
+
 final class PreviewPaneView: NSView {
     weak var model: PaletteModel?
 
@@ -10821,6 +10947,17 @@ final class PreviewPaneView: NSView {
     var cropRect = CGRect(x: 0, y: 0, width: 1, height: 1) { didSet { needsDisplay = true } }
     var cropAspect: CGFloat = 0          // 0 = free; otherwise the crop's pixel W/H
     var onCropChange: ((CGRect) -> Void)?
+    // The picture crop mode draws and measures against. It must be the same
+    // provenance source the filters are rendered from: an edition's saved
+    // media may already carry an old crop, and cropping that again would put
+    // the frame over the wrong picture.
+    var cropSourcePath = ""
+    // The source's full pixel size, for the crop size readout. The decoded
+    // preview is a downscaled thumbnail, so its dimensions are not the truth.
+    var cropImageSize = CGSize.zero
+    private var cropImagePath: String {
+        cropSourcePath.isEmpty ? (model?.imagePath ?? "") : cropSourcePath
+    }
     private var cropDrag: (mode: Int, start: NSPoint, orig: CGRect)?
 
     private let toggleMenuBar = PreviewIconButton()
@@ -11465,6 +11602,23 @@ final class PreviewPaneView: NSView {
         CGPoint(x: (p.x - fit.minX) / fit.width, y: (fit.maxY - p.y) / fit.height)
     }
 
+    // The crop's size in source pixels, pinned over the picture's bottom-left
+    // like the AA pill in the theme preview. Recomputed per draw, so it walks
+    // with the handles and with a Command-constrained resize.
+    private func drawCropSize(_ fit: NSRect) {
+        let size = cropPixelSize(cropRect, imageSize: cropImageSize)
+        guard size.width > 0, size.height > 0 else { return }
+        let text = "\(Int(size.width)) × \(Int(size.height))"
+        let font = nerdFont("Bold", 10)
+        let pill = NSRect(x: fit.minX + 8, y: fit.minY + 8,
+                          width: advance(text, font) + 16, height: 20)
+        palette.barBG.setFill()
+        NSBezierPath(roundedRect: pill, xRadius: windowCornerRadius(6),
+                     yRadius: windowCornerRadius(6)).fill()
+        drawBaseline(text, font, palette.accent,
+                     x: pill.minX + 8, baseline: pill.midY - font.capHeight / 2)
+    }
+
     private func drawCropOverlay(_ fit: NSRect) {
         let cr = cropScreenRect(fit)
         palette.barBG.withAlphaComponent(0.6).setFill()
@@ -11472,6 +11626,23 @@ final class PreviewPaneView: NSView {
         outside.append(NSBezierPath(rect: cr))
         outside.windingRule = .evenOdd
         outside.fill()
+        // A centred crop shows the axis it is snapped on. An axis the crop
+        // spans completely has no placement to detect, so it draws no guide.
+        palette.accent.setStroke()
+        if cropRect.width < 0.999, abs(cropRect.midX - 0.5) < 0.0005 {
+            let line = NSBezierPath()
+            line.move(to: NSPoint(x: fit.midX, y: fit.minY))
+            line.line(to: NSPoint(x: fit.midX, y: fit.maxY))
+            line.lineWidth = 1.5
+            line.stroke()
+        }
+        if cropRect.height < 0.999, abs(cropRect.midY - 0.5) < 0.0005 {
+            let line = NSBezierPath()
+            line.move(to: NSPoint(x: fit.minX, y: fit.midY))
+            line.line(to: NSPoint(x: fit.maxX, y: fit.midY))
+            line.lineWidth = 1.5
+            line.stroke()
+        }
         palette.label.withAlphaComponent(0.25).setStroke()
         for i in 1..<3 {
             let x = cr.minX + cr.width * CGFloat(i) / 3
@@ -11484,10 +11655,22 @@ final class PreviewPaneView: NSView {
         border.lineWidth = 1.5
         border.stroke()
         palette.accent.setFill()
+        // Four corners: round dots.
         for c in [NSPoint(x: cr.minX, y: cr.minY), NSPoint(x: cr.maxX, y: cr.minY),
                   NSPoint(x: cr.maxX, y: cr.maxY), NSPoint(x: cr.minX, y: cr.maxY)] {
             NSBezierPath(ovalIn: NSRect(x: c.x - 4, y: c.y - 4, width: 8, height: 8)).fill()
         }
+        // Four edges: a short bar on each side, so every side is a grab.
+        let bars = [
+            NSRect(x: cr.midX - 7, y: cr.maxY - 2, width: 14, height: 4),
+            NSRect(x: cr.maxX - 2, y: cr.midY - 7, width: 4, height: 14),
+            NSRect(x: cr.midX - 7, y: cr.minY - 2, width: 14, height: 4),
+            NSRect(x: cr.minX - 2, y: cr.midY - 7, width: 4, height: 14),
+        ]
+        for b in bars {
+            NSBezierPath(roundedRect: b, xRadius: 2, yRadius: 2).fill()
+        }
+        drawCropSize(fit)
     }
 
     func setCrop(_ rect: CGRect, aspect: CGFloat) {
@@ -11496,67 +11679,39 @@ final class PreviewPaneView: NSView {
     }
 
     private func cropHandleHit(_ p: NSPoint, _ cr: NSRect) -> Int {
-        let r: CGFloat = 10
-        let corners = [NSPoint(x: cr.minX, y: cr.minY), NSPoint(x: cr.maxX, y: cr.minY),
-                       NSPoint(x: cr.maxX, y: cr.maxY), NSPoint(x: cr.minX, y: cr.maxY)]
-        for (i, c) in corners.enumerated() where hypot(p.x - c.x, p.y - c.y) <= r { return i + 1 }
-        return cr.contains(p) ? 0 : 5
+        let r: CGFloat = 11
+        // Corners come first, so a small crop still gives them priority over
+        // the edge handles they sit next to.
+        for h in cropHandlePoints(cr) where hypot(p.x - h.point.x, p.y - h.point.y) <= r {
+            return h.mode
+        }
+        return cr.contains(p) ? 0 : 9
     }
 
     private func updateCrop(_ drag: (mode: Int, start: NSPoint, orig: CGRect),
-                            _ p: NSPoint, _ fit: NSRect) {
-        var r = drag.orig
+                            _ p: NSPoint, _ fit: NSRect, command: Bool) {
         let s = cropFromScreen(drag.start, fit)
         let e = cropFromScreen(p, fit)
-        switch drag.mode {
-        case 0:                                   // move
-            r.origin.x = drag.orig.minX + (e.x - s.x)
-            r.origin.y = drag.orig.minY + (e.y - s.y)
-        case 1:                                   // top-left
-            r.origin.x = min(drag.orig.maxX - 0.05, drag.orig.minX + (e.x - s.x))
-            r.origin.y = min(drag.orig.maxY - 0.05, drag.orig.minY + (e.y - s.y))
-            r.size.width = drag.orig.maxX - r.origin.x
-            r.size.height = drag.orig.maxY - r.origin.y
-        case 2:                                   // top-right
-            r.origin.y = min(drag.orig.maxY - 0.05, drag.orig.minY + (e.y - s.y))
-            r.size.width = max(0.05, drag.orig.width + (e.x - s.x))
-            r.size.height = drag.orig.maxY - r.origin.y
-        case 3:                                   // bottom-right
-            r.size.width = max(0.05, drag.orig.width + (e.x - s.x))
-            r.size.height = max(0.05, drag.orig.height + (e.y - s.y))
-        case 4:                                   // bottom-left
-            r.origin.x = min(drag.orig.maxX - 0.05, drag.orig.minX + (e.x - s.x))
-            r.size.width = drag.orig.maxX - r.origin.x
-            r.size.height = max(0.05, drag.orig.height + (e.y - s.y))
-        default:                                  // a fresh rect
-            r = CGRect(x: min(s.x, e.x), y: min(s.y, e.y),
-                       width: abs(e.x - s.x), height: abs(e.y - s.y))
+        let imgAspect: CGFloat = {
+            guard let cg = cacheImage, cg.height > 0 else { return 1 }
+            return CGFloat(cg.width) / CGFloat(cg.height)
+        }()
+        var hold: CGFloat?
+        if cropAspect > 0 {
+            hold = cropAspect
+        } else if command, drag.orig.height > 0 {
+            // Command holds the crop's current pixel ratio while it resizes.
+            hold = (drag.orig.width / drag.orig.height) * imgAspect
         }
-        if cropAspect > 0 { r = constrainedCrop(r) }
-        r = clampedCrop(r)
+        // The snap is felt on screen, so the threshold is 9 points converted
+        // into fractions of the picture's fit, not a fixed fraction.
+        let snapX = 9 / max(fit.width, 1)
+        let snapY = 9 / max(fit.height, 1)
+        let r = cropRectAfterDrag(mode: drag.mode, start: s, end: e, orig: drag.orig,
+                                  imageAspect: imgAspect, holdAspect: hold,
+                                  snapX: snapX, snapY: snapY)
         cropRect = r
         onCropChange?(r)
-    }
-
-    private func clampedCrop(_ r: CGRect) -> CGRect {
-        var out = r
-        out.size.width = max(0.02, min(1, out.size.width))
-        out.size.height = max(0.02, min(1, out.size.height))
-        out.origin.x = max(0, min(1 - out.size.width, out.origin.x))
-        out.origin.y = max(0, min(1 - out.size.height, out.origin.y))
-        return out
-    }
-
-    // Keep the crop's pixel aspect at cropAspect: h = w * (imgW/imgH) / aspect.
-    private func constrainedCrop(_ r: CGRect) -> CGRect {
-        guard let cg = cacheImage, cg.height > 0, cropAspect > 0 else { return r }
-        let imgAspect = CGFloat(cg.width) / CGFloat(cg.height)
-        var out = r
-        out.size.height = out.size.width * imgAspect / cropAspect
-        if out.size.height > 1 { out.size.height = 1; out.size.width = cropAspect / imgAspect }
-        out.origin.y = min(out.origin.y, 1 - out.size.height)
-        out.origin.x = min(out.origin.x, 1 - out.size.width)
-        return out
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -11570,7 +11725,7 @@ final class PreviewPaneView: NSView {
         // subviews and are left alone
         NSBezierPath(rect: bounds).addClip()
 
-        let path = model?.imagePath ?? ""
+        let path = cropMode ? cropImagePath : (model?.imagePath ?? "")
         let screen = self.screen
         if cropMode {
             // The whole picture, fit, with the crop rect over it.
@@ -11611,7 +11766,7 @@ final class PreviewPaneView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        if cropMode, cachePath == (model?.imagePath ?? ""), let cg = cacheImage {
+        if cropMode, cachePath == cropImagePath, let cg = cacheImage {
             let fit = cropFit(cg)
             cropDrag = (cropHandleHit(p, cropScreenRect(fit)), p, cropRect)
             return
@@ -11654,7 +11809,7 @@ final class PreviewPaneView: NSView {
     override func mouseDragged(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         if let d = cropDrag, let cg = cacheImage {
-            updateCrop(d, p, cropFit(cg))
+            updateCrop(d, p, cropFit(cg), command: event.modifierFlags.contains(.command))
             return
         }
         guard dragging else { return }
@@ -11918,6 +12073,8 @@ final class PaletteCanvasView: NSView {
 
     // The wallpaper editor's crop mode lives on the central preview.
     func setCropMode(_ on: Bool) { preview.cropMode = on }
+    func setCropSource(_ path: String) { preview.cropSourcePath = path }
+    func setCropImageSize(_ size: CGSize) { preview.cropImageSize = size }
     func setCrop(_ rect: CGRect, aspect: CGFloat) { preview.setCrop(rect, aspect: aspect) }
     func syncCrop(_ rect: CGRect) { preview.cropRect = rect }
     var onCropChange: ((CGRect) -> Void)? {
@@ -12561,6 +12718,8 @@ final class ThemeEditor {
         // otherwise. The palette's own extraction path is separate and may use
         // the media even when this does not.
         let path = editSource.isEmpty ? model.imagePath : editSource
+        // Crop mode must show the same picture the recipe is applied to.
+        root.paletteCanvas.setCropSource(path)
         guard path != editBasePath else { return }
         editBasePath = path
         editBaseGeneration += 1
@@ -12576,7 +12735,12 @@ final class ThemeEditor {
             DispatchQueue.main.async {
                 guard let self, self.editBaseGeneration == gen else { return }
                 self.editBase = ci
-                if let ci { self.root.wallpaperEditor.setOriginalSize(ci.extent.size) }
+                if let ci {
+                    self.root.wallpaperEditor.setOriginalSize(ci.extent.size)
+                    self.root.paletteCanvas.setCropImageSize(ci.extent.size)
+                } else {
+                    self.root.paletteCanvas.setCropImageSize(.zero)
+                }
                 if let hist {
                     self.root.wallpaperEditor.setHistogram(hist.lum, hist.r, hist.g, hist.b)
                 }
@@ -18489,6 +18653,149 @@ func editorStateSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--image-editor-selftest") {
     exit(editorStateSelfTest() == 0 ? 0 : 1)
+}
+
+// The crop handles' geometry, independent of AppKit: every side and corner
+// resizes on its own axis, Command holds the crop's ratio, and a ratio preset
+// follows a vertical drag instead of deriving height from width.
+func cropGeometrySelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    let imageAspect = 16.0 / 9.0
+    let full = CGRect(x: 0, y: 0, width: 1, height: 1)
+
+    // A free top-right corner drag moves both axes.
+    let corner = cropRectAfterDrag(mode: 2, start: CGPoint(x: 1, y: 0),
+                                   end: CGPoint(x: 0.4, y: 0.3), orig: full,
+                                   imageAspect: imageAspect, holdAspect: nil)
+    check("free corner resizes both axes", corner.width < 1 && corner.height < 1)
+
+    // A free bottom-edge drag changes height only.
+    let bottom = cropRectAfterDrag(mode: 7, start: CGPoint(x: 1, y: 1),
+                                   end: CGPoint(x: 1, y: 0.4), orig: full,
+                                   imageAspect: imageAspect, holdAspect: nil)
+    check("the bottom edge resizes vertically",
+          abs(bottom.width - 1) < 0.0001 && bottom.height < 1)
+
+    // A free left-edge drag changes width only.
+    let left = cropRectAfterDrag(mode: 8, start: CGPoint(x: 0, y: 1),
+                                 end: CGPoint(x: 0.4, y: 1), orig: full,
+                                 imageAspect: imageAspect, holdAspect: nil)
+    check("the left edge resizes horizontally",
+          abs(left.height - 1) < 0.0001 && left.width < 1)
+
+    // Command keeps the original crop's pixel ratio on a corner and an edge.
+    let wide = CGRect(x: 0, y: 0, width: 0.8, height: 0.5)
+    let wideAspect = (wide.width * imageAspect) / wide.height
+    let heldCorner = cropRectAfterDrag(mode: 3, start: CGPoint(x: 0.8, y: 0.5),
+                                       end: CGPoint(x: 0.5, y: 0.4), orig: wide,
+                                       imageAspect: imageAspect, holdAspect: wideAspect)
+    check("Command holds the ratio on a corner",
+          abs((heldCorner.width * imageAspect) / heldCorner.height - wideAspect) < 0.001)
+    let heldEdge = cropRectAfterDrag(mode: 5, start: CGPoint(x: 0.4, y: 0.5),
+                                     end: CGPoint(x: 0.4, y: 0.8), orig: wide,
+                                     imageAspect: imageAspect, holdAspect: wideAspect)
+    check("Command holds the ratio on an edge",
+          abs((heldEdge.width * imageAspect) / heldEdge.height - wideAspect) < 0.001)
+
+    // A 1:1 preset keeps square pixels when the bottom edge is dragged: the
+    // old code derived height from width, so a vertical drag did nothing.
+    let square = cropRectAfterDrag(mode: 7, start: CGPoint(x: 1, y: 0.5),
+                                   end: CGPoint(x: 1, y: 0.2), orig: full,
+                                   imageAspect: imageAspect, holdAspect: 1)
+    check("a 1:1 preset follows a vertical drag",
+          abs((square.width * imageAspect) / square.height - 1) < 0.001)
+
+    // Nothing leaves the picture.
+    let outside = cropRectAfterDrag(mode: 3, start: CGPoint(x: 0.9, y: 0.9),
+                                    end: CGPoint(x: 5, y: 5), orig: full,
+                                    imageAspect: imageAspect, holdAspect: nil)
+    check("a drag is clamped to the picture",
+          outside.minX >= 0 && outside.minY >= 0
+              && outside.maxX <= 1.0001 && outside.maxY <= 1.0001)
+
+    // The dots must act as the corner they sit on: the hit test's mode order
+    // and the resize code's mode order agree (the old order made every dot
+    // behave as the opposite corner).
+    let fit = NSRect(x: 10, y: 20, width: 200, height: 100)
+    let points = cropHandlePoints(fit)
+    func mode(at p: NSPoint) -> Int? {
+        points.first { abs($0.point.x - p.x) < 0.001 && abs($0.point.y - p.y) < 0.001 }?.mode
+    }
+    check("the four dots map to their own corners",
+          mode(at: NSPoint(x: 10, y: 120)) == 1
+              && mode(at: NSPoint(x: 210, y: 120)) == 2
+              && mode(at: NSPoint(x: 210, y: 20)) == 3
+              && mode(at: NSPoint(x: 10, y: 20)) == 4)
+    check("the edge bars map to their own sides",
+          mode(at: NSPoint(x: 110, y: 120)) == 5
+              && mode(at: NSPoint(x: 210, y: 70)) == 6
+              && mode(at: NSPoint(x: 110, y: 20)) == 7
+              && mode(at: NSPoint(x: 10, y: 70)) == 8)
+
+    // Each corner grows from the opposite one.
+    let topLeft = cropRectAfterDrag(mode: 1, start: CGPoint(x: 0, y: 0),
+                                    end: CGPoint(x: 0.2, y: 0.2), orig: full,
+                                    imageAspect: imageAspect, holdAspect: nil)
+    check("the top-left corner keeps the bottom-right",
+          abs(topLeft.maxX - 1) < 0.0001 && abs(topLeft.maxY - 1) < 0.0001)
+    let bottomRight = cropRectAfterDrag(mode: 3, start: CGPoint(x: 1, y: 1),
+                                        end: CGPoint(x: 0.8, y: 0.8), orig: full,
+                                        imageAspect: imageAspect, holdAspect: nil)
+    check("the bottom-right corner keeps the top-left",
+          abs(bottomRight.minX) < 0.0001 && abs(bottomRight.minY) < 0.0001)
+
+    // Centre snapping: each axis on its own, and only inside the threshold.
+    let nearCentre = CGRect(x: 0.245, y: 0.245, width: 0.5, height: 0.5)
+    let snapped = cropRectAfterDrag(mode: 0, start: CGPoint(x: 0.5, y: 0.5),
+                                    end: CGPoint(x: 0.51, y: 0.51), orig: nearCentre,
+                                    imageAspect: imageAspect, holdAspect: nil,
+                                    snapX: 0.02, snapY: 0.02)
+    check("a near-centre drag snaps both axes",
+          abs(snapped.midX - 0.5) < 0.0001 && abs(snapped.midY - 0.5) < 0.0001)
+    let farFromCentre = cropRectAfterDrag(mode: 0, start: CGPoint(x: 0.5, y: 0.5),
+                                          end: CGPoint(x: 0.56, y: 0.5), orig: nearCentre,
+                                          imageAspect: imageAspect, holdAspect: nil,
+                                          snapX: 0.02, snapY: 0.02)
+    check("a drag outside the threshold keeps its place",
+          abs(farFromCentre.midX - 0.5) > 0.03)
+    let xOnly = cropRectAfterDrag(mode: 0, start: CGPoint(x: 0.5, y: 0.5),
+                                  end: CGPoint(x: 0.51, y: 0.2), orig: nearCentre,
+                                  imageAspect: imageAspect, holdAspect: nil,
+                                  snapX: 0.02, snapY: 0.02)
+    check("the two axes snap independently",
+          abs(xOnly.midX - 0.5) < 0.0001 && abs(xOnly.midY - 0.5) > 0.03)
+    let centred = CGRect(x: 0.24, y: 0.24, width: 0.5, height: 0.5)
+    let grown = cropRectAfterDrag(mode: 3, start: CGPoint(x: 0.74, y: 0.74),
+                                  end: CGPoint(x: 0.77, y: 0.77), orig: centred,
+                                  imageAspect: imageAspect, holdAspect: nil,
+                                  snapX: 0.02, snapY: 0.02)
+    check("a near-centre resize snaps too",
+          abs(grown.midX - 0.5) < 0.0001 && abs(grown.midY - 0.5) < 0.0001
+              && abs(grown.width - 0.53) < 0.0001)
+
+    // The pixel-size readout uses the source, not the preview thumbnail.
+    let sourceSize = CGSize(width: 3439, height: 1439)
+    let fullPixels = cropPixelSize(full, imageSize: sourceSize)
+    check("the full crop reads as the source size",
+          Int(fullPixels.width) == 3439 && Int(fullPixels.height) == 1439)
+    let partPixels = cropPixelSize(CGRect(x: 0.25, y: 0.5, width: 0.5, height: 0.25),
+                                   imageSize: sourceSize)
+    check("a crop's size rounds to source pixels",
+          Int(partPixels.width) == 1720 && Int(partPixels.height) == 360)
+    check("a missing source size draws no readout",
+          cropPixelSize(full, imageSize: .zero) == .zero)
+
+    print(failures == 0 ? "crop geometry selftest: all checks passed"
+                        : "crop geometry selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--crop-geometry-selftest") {
+    exit(cropGeometrySelfTest() == 0 ? 0 : 1)
 }
 
 // The colour-filter presets: one per main hue, each a black-and-white recipe
