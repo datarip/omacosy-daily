@@ -3538,6 +3538,21 @@ func nextDuplicateName(_ base: String) -> String {
     return "\(base) #\(maxN + 1)"
 }
 
+// The suggested name for a downscaled copy. An edition uses its title; a raw
+// wallpaper uses its file name, so the copy still reads as the same picture.
+func downscaleCopyName(for cell: ThemeCell, ext: String) -> String {
+    let base: String
+    if cell.editionID != nil {
+        base = cell.title
+    } else {
+        base = ((cell.wallpaper as NSString).lastPathComponent as NSString).deletingPathExtension
+    }
+    let safe = base.replacingOccurrences(of: "/", with: "-")
+        .replacingOccurrences(of: ":", with: "-")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return "\(safe.isEmpty ? "Wallpaper" : safe) 4K.\(ext)"
+}
+
 // The edition's own snapshot wins; the recorded source is the fallback. A
 // record with neither left in place cannot be applied, so it gets no cell.
 func editionImage(_ e: ThemeEdition) -> String? {
@@ -3974,6 +3989,8 @@ final class ThemeGridView: NSView {
     var onToggleSelect: ((Int) -> Void)?
     // right-click "Duplicate Theme" on a named edition
     var onDuplicate: ((ThemeCell) -> Void)?
+    // right-click "Downscale a Copy…" on a custom wallpaper or edition
+    var onDownscale: ((ThemeCell) -> Void)?
     // right-click "Set as Day/Night Theme" on any cell; the tab owns the
     // command. key is "day" or "night".
     var onSetDayNight: ((ThemeCell, String) -> Void)?
@@ -4351,8 +4368,9 @@ final class ThemeGridView: NSView {
 
     // Right-click opens a small themed popup at the click (an NSMenu is a
     // grey system panel). Every cell can be made the day or the night theme;
-    // a named edition additionally offers Duplicate Theme. A check marks the
-    // half this cell already holds.
+    // a named edition additionally offers Duplicate Theme, and every custom
+    // cell can save a downscaled copy. A check marks the half this cell
+    // already holds.
     override func rightMouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         guard let i = cellFrames.first(where: { $0.value.contains(p) })?.key,
@@ -4365,13 +4383,21 @@ final class ThemeGridView: NSView {
         let dayItem = (dayNightSpecNames(dayNight.day, cell) ? check : "") + "Set as Day Theme"
         let nightItem = (dayNightSpecNames(dayNight.night, cell) ? check : "") + "Set as Night Theme"
         var items = [dayItem, nightItem]
-        if cell.editionID != nil { items.append("Duplicate Theme") }
-        ContextMenu.show(items: items, at: NSEvent.mouseLocation) { [weak self] index in
-            switch index {
-            case 0: self?.onSetDayNight?(cell, "day")
-            case 1: self?.onSetDayNight?(cell, "night")
-            default: self?.onDuplicate?(cell)
-            }
+        var actions: [() -> Void] = [
+            { [weak self] in self?.onSetDayNight?(cell, "day") },
+            { [weak self] in self?.onSetDayNight?(cell, "night") },
+        ]
+        if cell.editionID != nil {
+            items.append("Duplicate Theme")
+            actions.append { [weak self] in self?.onDuplicate?(cell) }
+        }
+        if cell.isCustom {
+            items.append("Downscale a Copy…")
+            actions.append { [weak self] in self?.onDownscale?(cell) }
+        }
+        ContextMenu.show(items: items, at: NSEvent.mouseLocation) { index in
+            guard actions.indices.contains(index) else { return }
+            actions[index]()
         }
     }
 
@@ -4521,6 +4547,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
         }
         grid.onToggleSelect = { [weak self] i in self?.toggleCell(i) }
         grid.onDuplicate = { [weak self] cell in self?.duplicate(cell) }
+        grid.onDownscale = { [weak self] cell in self?.downscaleCopy(cell) }
         grid.onSetDayNight = { [weak self] cell, key in self?.setDayNight(cell, key: key) }
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(visibleChanged),
@@ -4696,6 +4723,52 @@ final class ThemesTabView: NSView, ScrollStepTab {
             DispatchQueue.main.async {
                 self?.status = "Duplicated \(name)"
                 self?.reload()
+            }
+        }
+    }
+
+    // Right-click Downscale a Copy…: write a 4K copy of the picture the cell
+    // shows. The original is never touched, and a copy saved into the
+    // wallpaper folder joins the gallery when reload() reads the folder.
+    private func downscaleCopy(_ cell: ThemeCell) {
+        let source = cell.wallpaper
+        guard FileManager.default.fileExists(atPath: source) else {
+            status = "Error: The wallpaper file is missing"
+            needsDisplay = true
+            return
+        }
+        let srcExt = (source as NSString).pathExtension.lowercased()
+        let ext = ["jpg", "jpeg", "png"].contains(srcExt) ? srcExt : "jpg"
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = downscaleCopyName(for: cell, ext: ext)
+        panel.directoryURL = URL(fileURLWithPath: wallpapersDir(), isDirectory: true)
+        panel.prompt = "Save Copy"
+        panel.message = "A 4K copy is written; the original is left unchanged."
+        panel.allowedContentTypes = [.jpeg, .png]
+        panel.canCreateDirectories = true
+        guard let window = window else { return }
+        panel.beginSheetModal(for: window) { [weak self] resp in
+            guard let self, resp == .OK, let url = panel.url else { return }
+            guard canonicalPath(url.path) != canonicalPath(source) else {
+                self.status = "Error: Choose a different name for the copy"
+                self.needsDisplay = true
+                return
+            }
+            self.status = "Saving a 4K copy…"
+            self.needsDisplay = true
+            DispatchQueue.global().async { [weak self] in
+                guard let self else { return }
+                let (code, out) = shell("\(themecoreBin()) image downscale \(shellQuote(source)) "
+                    + "--out \(shellQuote(url.path)) --max 3840 2>&1")
+                DispatchQueue.main.async {
+                    if code == 0 {
+                        self.status = "Saved \(url.lastPathComponent)"
+                        self.reload()
+                    } else {
+                        self.status = "Error: " + themecoreMessage(out, fallback: "The copy was not saved")
+                        self.needsDisplay = true
+                    }
+                }
             }
         }
     }

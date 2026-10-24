@@ -37,8 +37,11 @@ arrows and Return is only ever a close. Each Method row's 16-square strip
 comes from the engine: the generated modes share one image sample — not one
 extraction per row — and Magic runs its own analysis beside them, so an
 edited theme's Magic row fills as well as a raw wallpaper's. A strip that
-arrives late fills in on the open card rather than waiting for a reopen. The
-centre pane's toolbar toggles the mock **menu bar**, the **terminal**, the
+arrives late fills in on the open card rather than waiting for a reopen. A
+picture above the engine's 40-megapixel decode cap is sampled from an
+ImageIO thumbnail instead of a full-size frame, so an 8K wallpaper still
+fills every Method row. The centre pane's toolbar toggles the mock
+**menu bar**, the **terminal**, the
 focus **ring** and a fake
 **cheat sheet** (the one surface that shows Muted as the descriptions,
 Label as the keys and Accent as the headings). The mock terminal, the
@@ -135,9 +138,21 @@ the grid's own order — the saved editions A→Z first, then the `Wallpaper #N`
 cells — and wraps, so the keyboard and the grid never disagree. Right-click
 any card for **Set as Day Theme** / **Set as Night Theme**: the macOS
 appearance then picks between them, and a check marks the half a card already
-holds; a named edition adds **Duplicate Theme** to the same menu. The hover
-**trash** asks before removing:
-an edition's trash deletes just the record, while a raw wallpaper's trash moves
+holds; a named edition adds **Duplicate Theme** to the same menu, and every
+custom card adds **Downscale a Copy…**, which writes a copy with a 3840 px
+long side (4K) and leaves the original where it is. The save panel starts in
+your wallpaper folder, so saving there adds the copy as a new `Wallpaper #N`
+cell; the picture is decoded at the target size, so an 8K source is never
+loaded whole. The Wallpaper Editor still renders at full resolution, which is
+why this is the way to edit a picture the editor's own limit refuses. The same
+copy is one command:
+
+```sh
+omacosy-themecore image downscale PICTURE --out COPY.jpg   # --max defaults to 3840
+```
+
+The hover **trash** asks before
+removing: an edition's trash deletes just the record, while a raw wallpaper's trash moves
 the picture to the Finder Trash and, as a separate choice, can delete the
 editions built from it. Nothing is ever hard-deleted.
 

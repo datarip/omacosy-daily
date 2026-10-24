@@ -54,6 +54,7 @@
 //   omacosy-themecore image histogram <path> [--json]
 //   omacosy-themecore image render <path> [--filters JSON|@FILE] [--preset NAME]
 //                                           [--out FILE] [--max N] [--quality Q] [--json]
+//   omacosy-themecore image downscale <path> --out FILE [--max N] [--quality Q] [--json]
 //   omacosy-themecore image auto levels|contrast|white-balance <path> [--json]
 //   omacosy-themecore image presets [--json]
 //   omacosy-themecore version [--json]
@@ -3734,6 +3735,30 @@ struct SampleResult {
     var digest: String
 }
 
+// Sampling and the histogram only need a few hundred pixels. Above the
+// pixel cap, ask ImageIO to downsample while it decodes; an 8K photo then
+// costs a thumbnail buffer instead of a ~180 MB full-size one. Under the cap
+// the full frame still goes through the old path, so recorded fixtures stay
+// byte-identical.
+func imageForSampling(source: CGImageSource, width: Int, height: Int,
+                      maxPixel: Int, url: URL) throws -> CGImage {
+    if width * height > Extract.maxImagePixels {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            kCGImageSourceCreateThumbnailWithTransform: false,
+        ]
+        guard let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            throw ThemeError(message: "cannot decode image: \(url.path)")
+        }
+        return thumb
+    }
+    guard let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+        throw ThemeError(message: "cannot decode image: \(url.path)")
+    }
+    return cg
+}
+
 // Decode the image, scale it to 400 px on the long side, and take every
 // step-th pixel (up to 50 000). The bitmap is an sRGB context, so an embedded
 // profile is converted, never read raw — the 22/255 trap of derive.swift.
@@ -3748,13 +3773,11 @@ func sampleImage(url: URL) throws -> SampleResult {
         throw ThemeError(message: "cannot read image: \(url.path)")
     }
     guard width > 0, height > 0,
-          width <= Extract.maxImageDimension, height <= Extract.maxImageDimension,
-          width * height <= Extract.maxImagePixels else {
+          width <= Extract.maxImageDimension, height <= Extract.maxImageDimension else {
         throw ThemeError(message: "unsafe image dimensions \(width)x\(height)")
     }
-    guard let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-        throw ThemeError(message: "cannot decode image: \(url.path)")
-    }
+    let cg = try imageForSampling(source: source, width: width, height: height,
+                                  maxPixel: Extract.imageScaleSize, url: url)
 
     let dw: Int, dh: Int
     if width >= height {
@@ -3836,13 +3859,14 @@ func imageHistogram(url: URL, maxWidth: Int = 512) throws -> [Int] {
         throw ThemeError(message: "cannot read image: \(url.path)")
     }
     guard width > 0, height > 0,
-          width <= Extract.maxImageDimension, height <= Extract.maxImageDimension,
-          width * height <= Extract.maxImagePixels else {
+          width <= Extract.maxImageDimension, height <= Extract.maxImageDimension else {
         throw ThemeError(message: "unsafe image dimensions \(width)x\(height)")
     }
-    guard let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-        throw ThemeError(message: "cannot decode image: \(url.path)")
-    }
+    let longSide = width >= height
+        ? maxWidth
+        : max(maxWidth, Int((Double(height) * Double(maxWidth) / Double(width)).rounded()))
+    let cg = try imageForSampling(source: source, width: width, height: height,
+                                  maxPixel: longSide, url: url)
 
     let dw = min(width, maxWidth)
     let dh = max(1, Int((Double(height) * Double(dw) / Double(width)).rounded()))
@@ -4436,6 +4460,57 @@ enum ImagePipeline {
             out[dst..<(dst + w * 4)] = image.pixels[src..<(src + w * 4)]
         }
         return RGBAImage(width: w, height: h, pixels: out)
+    }
+
+    // A downscaled copy, decoded at the target size. Unlike `render`, this
+    // never allocates the full-resolution frame, so an 8K source works
+    // without raising the editor's pixel cap.
+    static func downscale(url: URL, to dest: URL, maxPixel: Int,
+                          jpegQuality: Double = 0.92) throws -> (width: Int, height: Int) {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int,
+              let height = props[kCGImagePropertyPixelHeight] as? Int else {
+            throw ThemeError(message: "cannot read image: \(url.path)")
+        }
+        guard width > 0, height > 0,
+              width <= Extract.maxImageDimension, height <= Extract.maxImageDimension else {
+            throw ThemeError(message: "unsafe image dimensions \(width)x\(height)")
+        }
+        let longSide = max(width, height)
+        let target = max(1, min(maxPixel, longSide))
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: target,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        guard let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            throw ThemeError(message: "cannot decode image: \(url.path)")
+        }
+        let ext = dest.pathExtension.lowercased()
+        let isJPEG = ext == "jpg" || ext == "jpeg"
+        let type: CFString
+        if isJPEG {
+            type = "public.jpeg" as CFString
+        } else if ext == "png" {
+            type = "public.png" as CFString
+        } else if let sourceType = CGImageSourceGetType(source),
+                  ext == url.pathExtension.lowercased() {
+            type = sourceType
+        } else {
+            throw ThemeError(message: "image downscale writes .jpg or .png (got .\(ext))")
+        }
+        guard let out = CGImageDestinationCreateWithURL(dest as CFURL, type, 1, nil) else {
+            throw ThemeError(message: "cannot write \(dest.path)")
+        }
+        let writeOptions: [CFString: Any] = isJPEG
+            ? [kCGImageDestinationLossyCompressionQuality: jpegQuality] : [:]
+        CGImageDestinationAddImage(out, thumb, writeOptions as CFDictionary)
+        guard CGImageDestinationFinalize(out) else {
+            try? FileManager.default.removeItem(at: dest)
+            throw ThemeError(message: "cannot write \(dest.path)")
+        }
+        return (thumb.width, thumb.height)
     }
 
     // Resample with the system resampler. Aether's is the browser's (a
@@ -7674,6 +7749,7 @@ func usage() -> Never {
            omacosy-themecore image histogram <path> [--json]
            omacosy-themecore image render <path> [--filters JSON|@FILE] [--preset NAME]
                                            [--out FILE] [--max N] [--quality Q] [--json]
+           omacosy-themecore image downscale <path> --out FILE [--max N] [--quality Q] [--json]
            omacosy-themecore image auto levels|contrast|white-balance <path> [--json]
            omacosy-themecore image presets [--json]
            omacosy-themecore image presets custom list [--json]
@@ -9439,6 +9515,38 @@ case "image":
             try ImagePipeline.encode(image, to: URL(fileURLWithPath: out), jpegQuality: quality)
             if jsonOut {
                 printJSON(["source": path, "out": out, "width": image.width, "height": image.height,
+                           "bytes": (try? FileManager.default.attributesOfItem(atPath: out)[.size] as? Int) ?? 0])
+            }
+            print(out)
+            exit(0)
+        } catch { themeError(error) }
+
+    // Write a downscaled copy of an image. The source is never modified;
+    // --out is required, as with `render`.
+    case "downscale":
+        do {
+            guard let raw = args.first else { throw ThemeError(message: "image downscale needs a path") }
+            args.removeFirst()
+            let outRaw = takeFlag("--out")
+            let maxRaw = takeFlag("--max")
+            let quality = takeNumber("--quality") ?? 0.92
+            noExtraArguments()
+            guard let outRaw else { throw ThemeError(message: "image downscale needs --out FILE") }
+            let maxPixel = maxRaw.flatMap { Int($0) } ?? 3840
+            guard maxPixel > 0 else { fail("--max must be greater than zero") }
+            guard quality > 0, quality <= 1 else { fail("--quality must be between 0 and 1") }
+            let path = Wallpapers.resolved(raw)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {
+                throw ThemeError(message: "no such image: \(path)")
+            }
+            let out = Wallpapers.resolved(outRaw)
+            let size = try ImagePipeline.downscale(url: URL(fileURLWithPath: path),
+                                                   to: URL(fileURLWithPath: out),
+                                                   maxPixel: maxPixel,
+                                                   jpegQuality: quality)
+            if jsonOut {
+                printJSON(["source": path, "out": out, "width": size.width, "height": size.height,
                            "bytes": (try? FileManager.default.attributesOfItem(atPath: out)[.size] as? Int) ?? 0])
             }
             print(out)

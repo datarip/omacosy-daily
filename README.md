@@ -820,6 +820,14 @@ terminal configs — and **Import** reads one back, or a `colors.toml` or a
 Base16 scheme; a name already in your library is offered Rename or Replace
 ([docs/theme-studio.md](docs/theme-studio.md)).
 
+Right-click any card for **Set as Day Theme** / **Set as Night Theme**; a
+saved edition also offers **Duplicate Theme**, and every wallpaper or edition
+offers **Downscale a Copy…**, which saves a 3840 px long-side (4K) copy and
+leaves the original alone. The copy starts in your wallpaper folder, so saving
+it there adds another `Wallpaper #N` card. Very large pictures need the copy
+for the Wallpaper Editor, which works at full resolution; the Palette
+Builder's Method strips work from a thumbnail and need no copy.
+
 **How the colors are chosen.** The bar's own background keeps the
 measurement omacosy already makes to match the real macOS menu bar — a
 34-point strip across the top of the picture. Everything else reads the
