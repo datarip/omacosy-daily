@@ -241,10 +241,26 @@ bookmark: the black 0.5 pill with a 1 px white border at 0.14, the outline
 star (`\u{f006}`, white) while hovered, and the filled star (`\u{f005}`,
 `palette.accent`) once set. It stays visible while set, and selection mode
 hides it because a click there ticks the card instead. Starred editions lead
-the **Custom Themes** block, A→Z within each group. The star's bottom-bar
-confirmation is transient: a tab re-show or dashboard reopen clears it, while
-any other status is left alone. Stock and `Wallpaper #N` cards have no record,
-so they never show one.
+the **Custom Themes** block, A→Z within each group. The star is the
+confirmation; there is no separate notification. Stock and `Wallpaper #N`
+cards have no record, so they never show one.
+
+**The Themes filter row.** A fixed 34 pt strip between the tab strip and the
+gallery, with the three `LabeledCheckView`s (18 pt box, 6 pt gap, Regular 12
+label, 16 pt between controls) centred horizontally.
+
+**The Themes bottom panel.** A solid `palette.barBG` bar, 76 pt tall, with no
+hairline. It has two rows: the muted Regular 11 **Color** label, the nine
+20 × 20 swatches with 6 pt gaps and the `WHDropdown` Sort (170 × 24), 20 pt
+after the swatches, as one combined group centred in the strip; below it, the
+**Select** / **Done** button (96 × 24) centred, with **Delete N** 8 pt to its
+left while a selection is live. A muted **Clear** text action sits at the far
+right only while a swatch is selected. Selected swatches use the 2 pt
+`palette.accent` ring; unselected use 1 pt `palette.muted` at 0.5. The bar is
+vertically centred: 20 pt above the colour row and the modal's own 20 pt card
+padding below Select.
+A section with no matching cards is omitted, and an empty result draws one
+centred Regular 12 `palette.muted` line in the gallery.
 
 **The gallery jump arrows** — the Themes gallery and the Wallpapers tab's
 **Bookmarked** view — are 30 pt squares, 12 pt inside the scroll area's

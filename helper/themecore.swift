@@ -7732,6 +7732,7 @@ func usage() -> Never {
            omacosy-themecore wallpaper rename <old> <new> [--json]
            omacosy-themecore wallpaper trash <path> [--json]
            omacosy-themecore palette extract <image> [--mode ID] [--light] [--no-cache] [--json]
+           omacosy-themecore palette dominant <image> [--count N] [--json]
            omacosy-themecore palette strips <image> [--light] [--no-cache] [--json]
            omacosy-themecore palette generate --colors CSV [--counts CSV|--weights CSV]
                                            [--mode ID] [--light] [--normalize] [--json]
@@ -9033,6 +9034,42 @@ case "palette":
                 printJSON(["path": path, "mode": mode, "light": light, "colors": palette])
             }
             palette.forEach { print($0) }
+            exit(0)
+        } catch { themeError(error) }
+
+    case "dominant":
+        do {
+            guard let raw = args.first else {
+                throw ThemeError(message: "palette dominant needs an image path")
+            }
+            args.removeFirst()
+            var count = 24
+            if let rawCount = takeFlag("--count") {
+                guard let n = Int(rawCount), n >= 1, n <= Extract.dominantColorsToExtract else {
+                    fail("--count must be a whole number from 1 to \(Extract.dominantColorsToExtract)")
+                }
+                count = n
+            }
+            noExtraArguments()
+            let path = Wallpapers.resolved(raw)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir),
+                  !isDir.boolValue else {
+                throw ThemeError(message: "no such image: \(path)")
+            }
+            let extracted = try extractDominantColors(
+                url: URL(fileURLWithPath: path), count: Extract.dominantColorsToExtract)
+            let total = Double(extracted.counts.reduce(0, +))
+            let colors = Array(extracted.colors.prefix(count))
+            let weights = extracted.counts.prefix(count).map {
+                total > 0 ? Double($0) / total : 0
+            }
+            if jsonOut {
+                printJSON(["path": path, "colors": colors, "weights": weights])
+            }
+            for (i, color) in colors.enumerated() {
+                print("\(color) \(String(format: "%.4f", weights[i]))")
+            }
             exit(0)
         } catch { themeError(error) }
 

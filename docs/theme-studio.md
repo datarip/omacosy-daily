@@ -160,15 +160,68 @@ A saved edition also carries a **star** in the top-left of its card — the same
 slot the Wallpapers tab gives its bookmark. Clicking it sets `favorite = true`
 in that edition's TOML record (a second click clears it), and the star stays
 visible in the accent colour while it is set. Hovering an unstarred edition
-offers the outline star, favourites sort to the front of **Custom Themes**
-(A→Z within each group), and the footer's Added/Removed line clears when the
-dashboard reopens or the tab is shown again. Stock themes and `Wallpaper #N`
-cells have no record of their own, so they show no star. The same flag is one
+offers the outline star, and favourites sort to the front of **Custom Themes**
+(A→Z within each group). The star itself is the confirmation — there is no
+separate notification. Stock themes and `Wallpaper #N` cells have no record of
+their own, so they show no star. The same flag is one
 command:
 
 ```sh
 omacosy-themecore theme favorite <id>          # --off clears it
 ```
+
+## Sorting, filtering and sections
+
+The Themes tab has a fixed filter row between the tab strip and the grid:
+
+- **Section row.** **Omarchy Themes**, **Custom Themes** and **Auto Themes**
+  checkboxes, centred. All three sections start ticked; unticking one hides its
+  block.
+
+Below the gallery, the footer has two rows:
+
+- **Colour row.** The **Color** caption and the nine wallhaven swatches — Red,
+  Orange, Yellow, Green, Blue, Purple, Black, Gray, White — and **Sort** sit
+  together as one centred group (they are all about colour). The swatches are
+  always visible and multi-select, with a **Clear** action once something is
+  chosen.
+- **Selection row.** **Select** (or **Done**) centred, with **Delete N** beside
+  it while a selection is live. There is no status/notification line; the
+  star, the Active pill and the cards themselves are the feedback.
+
+The footer is vertically centred in its strip: the 20 pt top gap matches the
+modal's own 20 pt bottom card padding, with no hairline.
+
+**Sort** is **Alphabetical** (the default), **Accent**, or **Dominant**.
+Custom Themes keep their favourites first, then sort inside each group; Auto
+Themes keep `Wallpaper #1…N` order when Alphabetical. Accent uses the theme's
+real UI accent (stock `colors.toml` accent, a custom record's extended accent,
+or the derived theme's `ACCENT`); Dominant uses the wallpaper's own extracted
+dominant colour. Both order by hue around the wheel with low-saturation
+colours last. **Omarchy Themes are fixed and are not sorted.**
+
+**Filter** is cumulative OR: a theme is shown when **any** selected colour
+appears among its **wallpaper's** dominant colours, not the generated theme
+palette. The dominant extraction returns colours with perceptual weights; the
+top bucket always counts, and further buckets join it when they cover at least
+15% of the weighted colours (up to four). A 10% syntax-green accent therefore
+does not make a red wallpaper answer a Green filter. Sections with no matching
+cards are hidden; if every section is unticked the tab says so, and if the
+filters exclude everything it shows its own empty line.
+
+Dominant summaries are cached by image path and modification time in
+`~/.local/state/omacosy/dashboard/dominants/`. The first time a new picture is
+seen, four at a time are indexed in the background and the gallery refreshes
+when the batch lands. The raw extraction is also available directly:
+
+```sh
+omacosy-themecore palette dominant PICTURE --json --count 24
+```
+
+
+Sort, the colour filter and the three section checks are remembered across
+reopens in `~/.local/state/omacosy/dashboard/themes-view.json`. A missing or
+damaged file falls back to Alphabetical, all sections and no colour filter.
 
 ## Exporting a theme
 

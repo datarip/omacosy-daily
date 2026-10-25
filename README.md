@@ -401,16 +401,29 @@ with seven tabs:
   carries a `· N variation(s)` badge. A saved variation can be starred from
   the card's top-left corner — the same slot the Wallpapers tab gives its
   bookmark — which turns **favourite** on in that variation's TOML record
-  and keeps the star visible; favourites sort to the front of **Custom
-  Themes**, and the bottom bar's confirmation line clears when you leave
-  and return to the tab; stock and `Wallpaper #N` cards have no record of their
-  own, so they show no star. Hovering a card shows its pill —
-  **Edit** reopens a saved variation, **Customize** starts a new one from
-  a wallpaper in the Theme Editor — and a small **trash**. The trash asks
-  before removing: the wallpaper **file goes to the Finder Trash**, and its
-  saved variations can be deleted at the same time. A floating arrow in the
-  gallery's bottom-right corner jumps straight to the far end in the
-  direction you last scrolled.
+  and keeps the star visible; the star itself is the confirmation, and
+  favourites sort to the front of **Custom Themes**; stock and `Wallpaper
+  #N` cards have no record of their own, so they show no star. Hovering a card shows its pill — **Edit** reopens a
+  saved variation, **Customize** starts a new one from a wallpaper in the
+  Theme Editor — and a small **trash**. The trash asks before removing: the
+  wallpaper **file goes to the Finder Trash**, and its saved variations can
+  be deleted at the same time. A floating arrow in the gallery's
+  bottom-right corner jumps straight to the far end in the direction you
+  last scrolled.
+
+  A fixed filter row above the grid centres the **Omarchy Themes**, **Custom
+  Themes** and **Auto Themes** checkboxes. Below the gallery, the footer has
+  two rows: the **Color** caption and nine wallhaven swatches grouped with
+  **Sort** (**Alphabetical**, **Accent**, or **Dominant** by the wallpaper's
+  own perceived colour, with neutrals last and Omarchy fixed), then **Select** /
+  **Done** centred, with **Delete N** beside it while selecting. The swatches
+  are multi-select and keep themes whose **wallpaper** contains any selected
+  dominant colour. The footer is vertically centred in its strip: a 20 pt gap
+  above the colour row matches the modal's 20 pt bottom padding. A colour counts as dominant when it
+  covers at least 15% of the wallpaper's weighted dominant colours (the top
+  colour always counts), so a small syntax accent does not make a red picture
+  answer Green. Unticking a section hides it, sections with no match are
+  hidden, and the choices are remembered between visits.
 - **Wallpapers** — browses **wallhaven.cc**: a search row (query, sorting,
   order), category and purity chips, a resolution dropdown, **More Filters**
   (colour and ratio), S/M/L cards and a results count. It fetches three pages
@@ -432,8 +445,8 @@ with seven tabs:
 - **Storage** — the local wallpapers folder (where it is, a button that opens
   it, **Add Images**, **Set Folder**) and a **Thumbnail Cache** row with its
   size, a **Clear Cache** button and a button that opens the cache folder.
-  Clearing also drops the dashboard's colour-strip cache; both rebuild as the
-  tabs are opened again.
+  Clearing also drops the dashboard's colour-strip and wallpaper-dominant
+  caches; all rebuild as the tabs are opened again.
 - **API Keys** — the wallhaven.cc API key, masked, stored locally.
 - **Update** — `omacosy-update --check`, with the install button behind it.
 
