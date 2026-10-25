@@ -5046,8 +5046,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
     private let selectButton = ButtonView()
     private let deleteButton = ButtonView()
     private var selectionMode = false
-    // the three-row bottom panel: sections + Sort, the always-visible
-    // colour filter, then the centred Select/Delete row
+    // the bottom panel: the colour swatches + Sort, then Select/Delete
     private let bottomBand: CGFloat = 76
     private let headerH: CGFloat = 34
     private let rowH: CGFloat = 24
