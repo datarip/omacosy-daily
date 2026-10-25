@@ -13230,10 +13230,14 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
     func setName(_ name: String) { nameField.stringValue = name }
 
     // The name field's colours are properties, not drawing, so a palette
-    // change has to set them again or the header keeps the old theme.
+    // change has to set them again or the header keeps the old theme. While
+    // the field has the keyboard AppKit draws the value in the shared field
+    // editor, which keeps the text colour it got when it took focus — set
+    // that too, or the name stays readable only in the old theme's colours.
     func refreshNameField() {
         nameField.textColor = palette.label
         nameField.backgroundColor = palette.itemBG.withAlphaComponent(nameEditable ? 0.5 : 0.25)
+        (nameField.currentEditor() as? NSTextView)?.textColor = palette.label
     }
 
     @objc private func nameReturn() { window?.makeFirstResponder(self) }
@@ -13284,7 +13288,6 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
         if open {
             nameField.isEditable = true
             nameField.isSelectable = true
-            nameField.backgroundColor = palette.itemBG.withAlphaComponent(0.5)
             window?.makeFirstResponder(nameField)
             // focus without selecting: a select-all highlight over the
             // label colour is unreadable — park the caret at the end
@@ -13298,10 +13301,13 @@ final class ThemeEditorView: NSView, NSTextFieldDelegate {
             }
             nameField.isEditable = false
             nameField.isSelectable = false
-            nameField.backgroundColor = palette.itemBG.withAlphaComponent(0.25)
         }
+        refreshNameField()
         needsDisplay = true
     }
+
+    // test door: open the name field exactly as the pen does
+    func debugSetNameEditing(_ on: Bool) { setPenOpen(on) }
 
     override func layout() {
         super.layout()
@@ -14597,6 +14603,7 @@ final class ThemeEditor {
         p.muted = c("muted", applied.muted)
         palette = p
         refreshSelectionColors()
+        root.refreshNameField()
         markTreeNeedsDisplay(root)
         if let dash = window.parent as? DashboardWindow, let v = dash.contentView {
             markTreeNeedsDisplay(v)
@@ -20287,6 +20294,63 @@ func windowCornerSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--window-corner-selftest") {
     exit(windowCornerSelfTest() == 0 ? 0 : 1)
+}
+
+// The theme title is an NSTextField, so its colours are properties rather
+// than drawing. A draft palette change refreshed every surface except the
+// name, and while the field had the keyboard AppKit painted the value in the
+// shared field editor with the colour it got when the field took focus. Both
+// paths have to follow the palette, or a light/dark draft leaves the title
+// unreadable against its own box until the theme is saved and the editor
+// rebuilt.
+func themeNameFieldSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    func hex(_ color: NSColor?) -> String? { color.flatMap(hexString(from:)) }
+    let saved = palette
+    defer { palette = saved }
+
+    var dark = Palette()
+    dark.label = nsColor(fromHex: "#ffffff")
+    dark.itemBG = nsColor(fromHex: "#101010")
+    palette = dark
+    let view = ThemeEditorView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
+    let win = NSWindow(contentRect: view.frame, styleMask: .borderless,
+                       backing: .buffered, defer: false)
+    win.contentView = view
+    view.setName("Flower Box")
+    view.debugSetNameEditing(true)
+    guard let editor = view.nameField.currentEditor() as? NSTextView else {
+        check("the name field takes the keyboard", false)
+        print(failures == 0 ? "theme name field selftest: all checks passed"
+                            : "theme name field selftest: \(failures) failed")
+        return failures
+    }
+    check("the resting field uses the applied palette",
+          hex(view.nameField.textColor) == "#ffffff")
+    check("the live editor starts on the applied palette",
+          hex(editor.textColor) == "#ffffff")
+
+    var light = Palette()
+    light.label = nsColor(fromHex: "#000000")
+    light.itemBG = nsColor(fromHex: "#f0f0f0")
+    palette = light
+    view.refreshNameField()
+    check("the name follows a palette change", hex(view.nameField.textColor) == "#000000")
+    check("the field box follows a palette change",
+          hex(view.nameField.backgroundColor) == "#f0f0f0")
+    check("the live editor text follows a palette change", hex(editor.textColor) == "#000000")
+    view.debugSetNameEditing(false)
+    print(failures == 0 ? "theme name field selftest: all checks passed"
+                        : "theme name field selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--theme-name-field-selftest") {
+    exit(themeNameFieldSelfTest() == 0 ? 0 : 1)
 }
 
 // The preview's AA pill and the Accessibility table's summary are one tally;

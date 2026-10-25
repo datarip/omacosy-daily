@@ -33,7 +33,10 @@ The editor previews the theme you are building **live**: its own background,
 text, pills and accent follow the draft as you transform the palette, before
 you apply; the **Method** and **Presets** dropdowns apply the highlighted
 row at once as you walk them with ↑ and ↓, so the preview follows the
-arrows and Return is only ever a close. Each Method row's 16-square strip
+arrows and Return is only ever a close. That includes the theme's own title
+field: a draft palette recolours the name text and its box, even while the
+name is still being typed, instead of keeping the applied theme's colours
+until the theme is saved. Each Method row's 16-square strip
 comes from the engine: the generated modes share one image sample — not one
 extraction per row — and Magic runs its own analysis beside them, so an
 edited theme's Magic row fills as well as a raw wallpaper's. A strip that
