@@ -398,7 +398,13 @@ with seven tabs:
   theme of its own), so the two custom kinds read as separate lists.
   The theme in use carries a green **Active** pill, each saved variation
   gets a named card of its own, and its picture
-  carries a `· N variation(s)` badge. Hovering a card shows its pill —
+  carries a `· N variation(s)` badge. A saved variation can be starred from
+  the card's top-left corner — the same slot the Wallpapers tab gives its
+  bookmark — which turns **favourite** on in that variation's TOML record
+  and keeps the star visible; favourites sort to the front of **Custom
+  Themes**, and the bottom bar's confirmation line clears when you leave
+  and return to the tab; stock and `Wallpaper #N` cards have no record of their
+  own, so they show no star. Hovering a card shows its pill —
   **Edit** reopens a saved variation, **Customize** starts a new one from
   a wallpaper in the Theme Editor — and a small **trash**. The trash asks
   before removing: the wallpaper **file goes to the Finder Trash**, and its

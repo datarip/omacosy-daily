@@ -3368,10 +3368,13 @@ struct ThemeCell: Equatable {
     // a raw wallpaper with editions: how many variations hang off its source
     var variations: Int
     var storedColors: [NSColor]
+    // A named edition's record flag. Stock and raw cells have no record to
+    // store it in, so they always read false and show no star.
+    var favorite: Bool
 
     init(logical: String, wallpaper: String, title: String, isCustom: Bool,
          paletteFile: String, editionID: String? = nil, variations: Int = 0,
-         storedColors: [NSColor] = []) {
+         storedColors: [NSColor] = [], favorite: Bool = false) {
         self.logical = logical
         self.wallpaper = wallpaper
         self.title = title
@@ -3380,6 +3383,7 @@ struct ThemeCell: Equatable {
         self.editionID = editionID
         self.variations = variations
         self.storedColors = storedColors
+        self.favorite = favorite
     }
 }
 
@@ -3502,6 +3506,7 @@ struct ThemeEdition {
     let id: String
     let name: String
     let primary: Bool
+    let favorite: Bool
     let sourcePath: String?
     let media: String?
     let colors: [NSColor]
@@ -3521,6 +3526,7 @@ func allEditions() -> [ThemeEdition] {
         let hexes = palette["colors"] as? [String] ?? []
         return ThemeEdition(id: id, name: name,
                             primary: (row["primary"] as? Bool) ?? false,
+                            favorite: (row["favorite"] as? Bool) ?? false,
                             sourcePath: wall["path"] as? String,
                             media: wall["media"] as? String,
                             colors: hexes.compactMap(hexColor))
@@ -3564,6 +3570,16 @@ func editionImage(_ e: ThemeEdition) -> String? {
     return nil
 }
 
+// The Custom Themes order: starred editions first, then A→Z. The name is the
+// tie-breaker so the shelf never reshuffles between two identical titles.
+func orderedEditions(_ editions: [ThemeEdition]) -> [ThemeEdition] {
+    editions.sorted {
+        if $0.favorite != $1.favorite { return $0.favorite }
+        let cmp = $0.name.localizedCaseInsensitiveCompare($1.name)
+        return cmp == .orderedSame ? $0.id < $1.id : cmp == .orderedAscending
+    }
+}
+
 // Every wallpaper in the configured folder is an auto-theme
 // (`Wallpaper #N`); named editions always sit on top.
 func customVariants(_ dir: String) -> [ThemeCell] {
@@ -3587,18 +3603,15 @@ func customVariants(_ dir: String) -> [ThemeCell] {
     }
 
     var out: [ThemeCell] = []
-    // named editions A→Z on top; the raw entries stay below in today's
-    // lexicographic order and are numbered over the full sorted list
-    let sorted = editions.sorted {
-        let cmp = $0.name.localizedCaseInsensitiveCompare($1.name)
-        return cmp == .orderedSame ? $0.id < $1.id : cmp == .orderedAscending
-    }
-    for e in sorted {
+    // favourites first, then named editions A→Z; the raw entries stay below
+    // in today's lexicographic order and are numbered over the full sorted list
+    for e in orderedEditions(editions) {
         guard let img = editionImage(e) else { continue }
         if let src = e.sourcePath, hidden(src) { continue }
         out.append(ThemeCell(logical: "custom", wallpaper: img, title: e.name,
                              isCustom: true, paletteFile: "",
-                             editionID: e.id, storedColors: e.colors))
+                             editionID: e.id, storedColors: e.colors,
+                             favorite: e.favorite))
     }
     for (i, f) in visibleFiles.enumerated() {
         let p = dir + "/" + f
@@ -3982,6 +3995,8 @@ final class ThemeGridView: NSView {
     var onApplied: ((String) -> Void)?
     // the Edit pill's click: opens the Theme Editor on this cell
     var onEdit: ((ThemeCell) -> Void)?
+    // the star's click: on/off; only a named edition has a record to write
+    var onFavorite: ((ThemeCell, Bool) -> Void)?
     // bulk selection: custom cells only. The tab owns the Select toggle and
     // the Delete bar; the grid draws and hit-tests the checkboxes.
     var selectionMode = false { didSet { needsDisplay = true } }
@@ -4000,7 +4015,8 @@ final class ThemeGridView: NSView {
     // Off-screen review/test only: the gallery's titled blocks, in order.
     func debugSectionTitles() -> [String] { headers.map { $0.1 } }
     func debugSeparatorCount() -> Int { separators.count }
-    // Off-screen review only.
+    // Off-screen review/test only.
+    func debugFavoriteShown(_ i: Int) -> Bool? { favoriteShown(i) }
     func debugSetHover(_ i: Int?) { hoveredIndex = i; needsDisplay = true }
     private var hoveredIndex: Int?
     private var hoverTracking: NSTrackingArea?
@@ -4206,6 +4222,13 @@ final class ThemeGridView: NSView {
             thumb.stroke()
         }
 
+        // the favourite star, top-left, in the Wallpapers grid's bookmark
+        // slot: always shown once set, and offered on hover until then
+        if let on = favoriteShown(i) {
+            overlayIconButton(on ? "\u{f005}" : "\u{f006}", in: favoriteRect(f),
+                              tint: on ? palette.accent : .white, fillAlpha: 0.5)
+        }
+
         let render = renders[i]
         let title = render?.title ?? cells[i].title
         let badge = render?.badge ?? ""
@@ -4331,6 +4354,28 @@ final class ThemeGridView: NSView {
                       y: thumbRect.maxY - pillInset - s, width: s, height: s)
     }
 
+    // The star takes the Wallpapers grid's bookmark slot: top-left of the
+    // thumbnail, the same 24 pt button with the same 8 pt inset.
+    private func favoriteRect(_ f: NSRect) -> NSRect {
+        let thumbRect = NSRect(x: f.minX, y: f.minY + cellPaletteH + cellLabelH + cellThumbGap,
+                               width: f.width, height: f.height - cellPaletteH - cellLabelH - cellThumbGap)
+        let s: CGFloat = 24
+        return NSRect(x: thumbRect.minX + pillInset,
+                      y: thumbRect.maxY - pillInset - s, width: s, height: s)
+    }
+
+    // nil when the cell has no star (stock and raw cells have no record) and
+    // while the gallery is selecting, since a click there ticks the cell
+    // rather than toggling the star. Otherwise the current flag when set, and
+    // false while that edition is hovered — the same "always on once saved,
+    // offered on hover" rule the Wallpapers grid uses for its bookmark.
+    private func favoriteShown(_ i: Int) -> Bool? {
+        guard cells.indices.contains(i), cells[i].editionID != nil else { return nil }
+        if selectionMode { return nil }
+        if cells[i].favorite { return true }
+        return i == hoveredIndex ? false : nil
+    }
+
     private func drawAspectFill(_ img: NSImage, in rect: NSRect) {
         let imgA = img.size.width / max(img.size.height, 1)
         let rectA = rect.width / max(rect.height, 1)
@@ -4352,6 +4397,12 @@ final class ThemeGridView: NSView {
             // in selection mode a click anywhere on a custom cell toggles it
             if selectionMode {
                 if c.isCustom { onToggleSelect?(i) }
+                return
+            }
+            // a visible star takes the click before the Edit pill or the
+            // apply, so the thumbnail itself still applies the theme
+            if let on = favoriteShown(i), favoriteRect(f).contains(p) {
+                onFavorite?(c, !on)
                 return
             }
             // a visible Edit/Customize pill takes the click; anywhere else
@@ -4496,6 +4547,9 @@ final class ThemesTabView: NSView, ScrollStepTab {
     // the same 54pt bottom bar as Options and Workspaces
     private let bottomBand: CGFloat = 54
     private var status = "" { didSet { needsDisplay = true; needsLayout = true } }
+    // The last status was the star's own line, so leaving and returning to
+    // the tab can clear it without touching any other message.
+    private var statusIsFavorite = false
     // layout() sets this (truncated to fit left of the centred buttons);
     // draw() renders it
     private var statusShown = ""
@@ -4505,6 +4559,13 @@ final class ThemesTabView: NSView, ScrollStepTab {
     // and the user is looking at the cell they just acted on.
     private var pendingTopScroll = true
     var onApplied: (() -> Void)?
+
+    // Every status goes through here so `statusIsFavorite` is never left
+    // behind by a later message (an apply, a delete, an error).
+    private func setStatus(_ text: String, favorite: Bool = false) {
+        statusIsFavorite = favorite
+        status = text
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -4531,7 +4592,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
         deleteButton.onClick = { [weak self] in self?.confirmDeleteSelection() }
         addSubview(deleteButton)
         grid.onApplied = { [weak self] title in
-            self?.status = "Applied \(title)"
+            self?.setStatus("Applied \(title)")
             self?.needsDisplay = true
             self?.reload()
             self?.onApplied?()
@@ -4539,12 +4600,13 @@ final class ThemesTabView: NSView, ScrollStepTab {
         grid.onEdit = { [weak self] cell in
             guard let self, let w = self.window else { return }
             ThemeEditor.present(cell: cell, from: w) { [weak self] message in
-                self?.status = message
+                self?.setStatus(message)
                 self?.needsDisplay = true
                 self?.reload()
                 self?.onApplied?()
             }
         }
+        grid.onFavorite = { [weak self] cell, on in self?.setFavorite(cell, on: on) }
         grid.onToggleSelect = { [weak self] i in self?.toggleCell(i) }
         grid.onDuplicate = { [weak self] cell in self?.duplicate(cell) }
         grid.onDownscale = { [weak self] cell in self?.downscaleCopy(cell) }
@@ -4565,17 +4627,29 @@ final class ThemesTabView: NSView, ScrollStepTab {
         super.viewDidMoveToWindow()
         if window != nil {
             pendingTopScroll = true
+            clearFavoriteStatus()
             reload()
         } else {
             exitSelection()
         }
     }
 
+    // The star's confirmation is a one-visit line: the dashboard reopening
+    // (RootView.resetTabsOnShow) and this tab being shown again both drop it.
+    // Only that line is cleared; an apply, a delete or an error stays put.
+    func clearFavoriteStatus() {
+        guard statusIsFavorite else { return }
+        setStatus("")
+    }
+
     // Off-screen review only.
     func debugHoverFirstCustom() {
         if let i = grid.cells.firstIndex(where: { $0.isCustom }) { grid.debugSetHover(i) }
     }
-    func debugSetStatus(_ s: String) { status = s; needsDisplay = true }
+    func debugSetStatus(_ s: String) { setStatus(s); needsDisplay = true }
+    func debugSetFavoriteStatus(_ s: String) { setStatus(s, favorite: true); needsDisplay = true }
+    func debugStatusText() -> String { status }
+    func debugClearFavoriteStatus() { clearFavoriteStatus() }
     func debugSelectFirstCustom(_ n: Int) {
         selectionMode = true
         grid.selectionMode = true
@@ -4705,7 +4779,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
                 }
                 DispatchQueue.main.async {
                     self.exitSelection()
-                    self.status = "Deleted \(count) item\(count == 1 ? "" : "s")"
+                    self.setStatus("Deleted \(count) item\(count == 1 ? "" : "s")")
                     self.reload()
                 }
             }
@@ -4716,13 +4790,35 @@ final class ThemesTabView: NSView, ScrollStepTab {
     private func duplicate(_ cell: ThemeCell) {
         guard let id = cell.editionID else { return }
         let name = nextDuplicateName(cell.title)
-        status = "Duplicating \(cell.title)…"
+        setStatus("Duplicating \(cell.title)…")
         needsDisplay = true
         DispatchQueue.global().async { [weak self] in
             _ = shell("\(HOME)/.local/bin/omacosy-themecore theme duplicate \(shellQuote(id)) --name \(shellQuote(name)) 2>&1")
             DispatchQueue.main.async {
-                self?.status = "Duplicated \(name)"
+                self?.setStatus("Duplicated \(name)")
                 self?.reload()
+            }
+        }
+    }
+
+    // The star: write the edition's own record flag through the engine, so
+    // the TOML and the CLI's `theme list` agree with the icon. A raw wallpaper
+    // and a stock theme have no record, so the grid never offers them a star.
+    private func setFavorite(_ cell: ThemeCell, on: Bool) {
+        guard let id = cell.editionID else { return }
+        setStatus(on ? "Adding \(cell.title) to Favorites…" : "Removing \(cell.title) from Favorites…",
+                  favorite: true)
+        needsDisplay = true
+        let flag = on ? "" : " --off"
+        DispatchQueue.global().async { [weak self] in
+            let (code, out) = shell("\(themecoreBin()) theme favorite \(shellQuote(id))\(flag) 2>&1")
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.setStatus(code == 0
+                    ? (on ? "Added \(cell.title) to Favorites" : "Removed \(cell.title) from Favorites")
+                    : "Error: " + themecoreMessage(out, fallback: "The favorite was not saved"),
+                    favorite: code == 0)
+                self.reload()
             }
         }
     }
@@ -4733,7 +4829,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
     private func downscaleCopy(_ cell: ThemeCell) {
         let source = cell.wallpaper
         guard FileManager.default.fileExists(atPath: source) else {
-            status = "Error: The wallpaper file is missing"
+            setStatus("Error: The wallpaper file is missing")
             needsDisplay = true
             return
         }
@@ -4750,11 +4846,11 @@ final class ThemesTabView: NSView, ScrollStepTab {
         panel.beginSheetModal(for: window) { [weak self] resp in
             guard let self, resp == .OK, let url = panel.url else { return }
             guard canonicalPath(url.path) != canonicalPath(source) else {
-                self.status = "Error: Choose a different name for the copy"
+                self.setStatus("Error: Choose a different name for the copy")
                 self.needsDisplay = true
                 return
             }
-            self.status = "Saving a 4K copy…"
+            self.setStatus("Saving a 4K copy…")
             self.needsDisplay = true
             DispatchQueue.global().async { [weak self] in
                 guard let self else { return }
@@ -4762,10 +4858,10 @@ final class ThemesTabView: NSView, ScrollStepTab {
                     + "--out \(shellQuote(url.path)) --max 3840 2>&1")
                 DispatchQueue.main.async {
                     if code == 0 {
-                        self.status = "Saved \(url.lastPathComponent)"
+                        self.setStatus("Saved \(url.lastPathComponent)")
                         self.reload()
                     } else {
-                        self.status = "Error: " + themecoreMessage(out, fallback: "The copy was not saved")
+                        self.setStatus("Error: " + themecoreMessage(out, fallback: "The copy was not saved"))
                         self.needsDisplay = true
                     }
                 }
@@ -4780,7 +4876,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
         let isDay = key == "day"
         let label = isDay ? "Day" : "Night"
         let spec = dayNightSpec(for: cell)
-        status = "Setting \(label) Theme…"
+        setStatus("Setting \(label) Theme…")
         needsDisplay = true
         DispatchQueue.global().async { [weak self] in
             let custom = "\(HOME)/.local/bin/omacosy-custom-theme"
@@ -4800,7 +4896,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
                     + (appliesNow ? " — applied" : " — follows the macOS appearance")
             }
             DispatchQueue.main.async {
-                self?.status = message
+                self?.setStatus(message)
                 self?.reload()
             }
         }
@@ -15208,6 +15304,16 @@ func whGlyphInkBounds(_ s: String, _ font: NSFont) -> CGRect {
     return union.isNull ? .zero : union
 }
 
+// A small rounded icon button laid over a thumbnail: the Wallpapers grid's
+// bookmark, check and download, and the Themes gallery's favourite star.
+func overlayIconButton(_ glyph: String, in r: NSRect, tint: NSColor, fillAlpha: CGFloat) {
+    let box = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
+    NSColor(srgbRed: 0.05, green: 0.05, blue: 0.07, alpha: fillAlpha).setFill()
+    box.fill()
+    NSColor.white.withAlphaComponent(0.14).setStroke(); box.lineWidth = 1; box.stroke()
+    whDrawGlyphCentered(glyph, in: r, color: tint, size: 12)
+}
+
 // Centres a glyph on the centre of its ink, so a square (checkbox), an arrow
 // (download) and a bookmark all sit identically inside their pill.
 func whDrawGlyphCentered(_ glyph: String, in r: NSRect, color: NSColor, size: CGFloat) {
@@ -15411,14 +15517,6 @@ final class WHGridView: NSView {
         return (bookmark, check, download)
     }
 
-    private func iconButton(_ glyph: String, in r: NSRect, tint: NSColor, fillAlpha: CGFloat) {
-        let box = NSBezierPath(roundedRect: r, xRadius: windowCornerRadius(6), yRadius: windowCornerRadius(6))
-        NSColor(srgbRed: 0.05, green: 0.05, blue: 0.07, alpha: fillAlpha).setFill()
-        box.fill()
-        NSColor.white.withAlphaComponent(0.14).setStroke(); box.lineWidth = 1; box.stroke()
-        whDrawGlyphCentered(glyph, in: r, color: tint, size: 12)
-    }
-
     private func drawCard(_ i: Int, _ f: NSRect) {
         let w = cards[i]
         let t = thumbRect(f)
@@ -15455,12 +15553,12 @@ final class WHGridView: NSView {
         // bookmark: always shown once bookmarked, in the theme accent
         let r = hotRects(f)
         if isBookmarked || showOverlays {
-            iconButton("\u{f02e}", in: r.bookmark, tint: isBookmarked ? palette.accent : .white, fillAlpha: 0.5)
+            overlayIconButton("\u{f02e}", in: r.bookmark, tint: isBookmarked ? palette.accent : .white, fillAlpha: 0.5)
         }
         if showOverlays {
-            iconButton(isSelected ? "\u{f00c}" : "\u{f096}", in: r.check,
-                       tint: isSelected ? palette.accent : .white, fillAlpha: 0.5)
-            iconButton("\u{f019}", in: r.download, tint: .white, fillAlpha: 0.5)
+            overlayIconButton(isSelected ? "\u{f00c}" : "\u{f096}", in: r.check,
+                              tint: isSelected ? palette.accent : .white, fillAlpha: 0.5)
+            overlayIconButton("\u{f019}", in: r.download, tint: .white, fillAlpha: 0.5)
         }
 
         if isDownloaded {
@@ -18068,6 +18166,7 @@ final class RootView: NSView {
     // a previous visit
     func resetTabsOnShow() {
         workspaces.resetToSaved()
+        themes.clearFavoriteStatus()
     }
 
     // the window forwards every left click here before dispatch
@@ -18077,6 +18176,7 @@ final class RootView: NSView {
 
     func showTab(_ i: Int) {
         selected = i
+        if i == 2 { themes.clearFavoriteStatus() }
         for v in tabViews { v.removeFromSuperview() }
         let v = tabViews[i]
         v.frame = contentFrame
@@ -18981,6 +19081,81 @@ func themeSectionsSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--themes-sections-selftest") {
     exit(themeSectionsSelfTest() == 0 ? 0 : 1)
+}
+
+// Only a named edition has a record, so only it can carry the star. Drive
+// every cell kind through the visibility rule: saved flag, hover, and the
+// selection mode where a click ticks the cell instead of toggling the star.
+func themesFavoriteSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    let favorite = ThemeCell(logical: "custom", wallpaper: "/tmp/favorite.png",
+                             title: "Favorite Edition", isCustom: true,
+                             paletteFile: "", editionID: "favorite-edition",
+                             favorite: true)
+    let plain = ThemeCell(logical: "custom", wallpaper: "/tmp/plain.png",
+                          title: "Plain Edition", isCustom: true,
+                          paletteFile: "", editionID: "plain-edition")
+    let seed = ThemeCell(logical: "custom", wallpaper: "/tmp/seed.png",
+                         title: "Wallpaper #1", isCustom: true, paletteFile: "")
+    let stock = ThemeCell(logical: "gruvbox", wallpaper: "/tmp/stock.webp",
+                          title: "Gruvbox — 2 Flower", isCustom: false,
+                          paletteFile: "/tmp/colors.toml")
+    let grid = ThemeGridView(frame: NSRect(x: 0, y: 0, width: 860, height: 720))
+    grid.cells = [favorite, plain, seed, stock]
+    grid.rebuild()
+    check("a saved edition shows its filled star", grid.debugFavoriteShown(0) == true)
+    check("an unset edition shows no star at rest", grid.debugFavoriteShown(1) == nil)
+    grid.debugSetHover(1)
+    check("hovering an edition offers the star", grid.debugFavoriteShown(1) == false)
+    grid.debugSetHover(0)
+    check("a saved edition keeps its star while hovered", grid.debugFavoriteShown(0) == true)
+    check("a raw wallpaper never has a star", grid.debugFavoriteShown(2) == nil)
+    check("a stock theme never has a star", grid.debugFavoriteShown(3) == nil)
+    grid.selectionMode = true
+    check("selection mode hides the star", grid.debugFavoriteShown(0) == nil)
+
+    let alpha = ThemeEdition(id: "alpha", name: "Alpha", primary: false,
+                             favorite: true, sourcePath: nil, media: nil, colors: [])
+    let zed = ThemeEdition(id: "zed", name: "Zed", primary: false,
+                           favorite: true, sourcePath: nil, media: nil, colors: [])
+    let bravo = ThemeEdition(id: "bravo", name: "Bravo", primary: false,
+                             favorite: false, sourcePath: nil, media: nil, colors: [])
+    let delta = ThemeEdition(id: "delta", name: "Delta", primary: false,
+                             favorite: false, sourcePath: nil, media: nil, colors: [])
+    check("favourites lead the Custom Themes order, then A→Z",
+          orderedEditions([bravo, zed, delta, alpha]).map { $0.id }
+            == ["alpha", "zed", "bravo", "delta"])
+
+    let tab = ThemesTabView(frame: NSRect(x: 0, y: 0, width: 860, height: 720))
+    tab.debugSetFavoriteStatus("Added Sunset Drive to Favorites")
+    check("the favourite status is shown", tab.debugStatusText() == "Added Sunset Drive to Favorites")
+    tab.debugClearFavoriteStatus()
+    check("clearing drops the favourite status", tab.debugStatusText().isEmpty)
+    tab.debugSetFavoriteStatus("Added Sunset Drive to Favorites")
+    tab.debugSetStatus("Applied Sunset Drive")
+    tab.debugClearFavoriteStatus()
+    check("a later status is not mistaken for the favourite one",
+          tab.debugStatusText() == "Applied Sunset Drive")
+
+    let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 720),
+                       styleMask: .borderless, backing: .buffered, defer: false)
+    win.contentView = tab
+    tab.debugSetFavoriteStatus("Added Sunset Drive to Favorites")
+    win.contentView = NSView(frame: win.contentView?.frame ?? .zero)
+    win.contentView = tab
+    check("re-showing the tab clears the favourite status", tab.debugStatusText().isEmpty)
+
+    print(failures == 0 ? "themes-favorite selftest: all checks passed"
+                        : "themes-favorite selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--themes-favorite-selftest") {
+    exit(themesFavoriteSelfTest() == 0 ? 0 : 1)
 }
 
 // The Themes gallery must open at the top when the tab is (re)shown, and must

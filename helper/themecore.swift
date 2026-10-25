@@ -7719,6 +7719,7 @@ func usage() -> Never {
            omacosy-themecore theme save [<file>|-] [--id ID] [--name NAME] [--replace] [--json] [--media-from FILE] [--edited]
            omacosy-themecore theme delete <id> [--json]
            omacosy-themecore theme rename <id> <new name> [--json]
+           omacosy-themecore theme favorite <id> [--on|--off] [--json]
            omacosy-themecore theme duplicate <id> [--id ID] [--name NAME] [--json]
            omacosy-themecore theme migrate [--dry-run] [--json]
            omacosy-themecore theme import <file> [--id ID] [--name NAME] [--format json|toml|colors-toml|base16] [--replace|--rename] [--json]
@@ -8665,6 +8666,30 @@ case "theme":
             exit(0)
         } catch { themeError(error) }
 
+    case "favorite":
+        do {
+            guard let id = args.first else {
+                throw ThemeError(message: "theme favorite needs an id")
+            }
+            args.removeFirst()
+            let off = takeBool("--off")
+            let onFlag = takeBool("--on")
+            noExtraArguments()
+            if off && onFlag {
+                throw ThemeError(message: "--on and --off cannot be combined")
+            }
+            var theme = try library.load(id: id)
+            let want = !off
+            if theme.favorite != want {
+                theme.favorite = want
+                theme.updated = isoNow()
+                try library.write(theme)
+            }
+            if jsonOut { printJSON(["id": id, "favorite": want]) }
+            print("\(want ? "favorited" : "unfavorited") \(id)")
+            exit(0)
+        } catch { themeError(error) }
+
     case "duplicate":
         do {
             guard let id = args.first else { throw ThemeError(message: "theme duplicate needs an id") }
@@ -8700,6 +8725,9 @@ case "theme":
             copy.created = isoNow()
             copy.updated = copy.created
             copy.primary = false
+            // The star is the user's mark on the original, not part of the
+            // theme's look, so it does not come along with a copy.
+            copy.favorite = false
             try library.write(copy)
             if let path = copy.wallpaper.path { try library.normalizePrimary(forPath: path) }
             if jsonOut { printJSON(["duplicated": id, "id": copy.id, "name": copy.name]) }

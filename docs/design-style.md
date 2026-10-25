@@ -235,6 +235,17 @@ card. A block with no cells is left out, and the first block opens with no
 rule above it. Between blocks a 1 px `palette.muted` hairline at 0.25 sits
 22 pt after the previous block and 22 pt before the next heading.
 
+**The favourite star.** A saved edition's card carries a 24 pt overlay button
+at its top-left, the same slot and 8 pt inset as the Wallpapers grid's
+bookmark: the black 0.5 pill with a 1 px white border at 0.14, the outline
+star (`\u{f006}`, white) while hovered, and the filled star (`\u{f005}`,
+`palette.accent`) once set. It stays visible while set, and selection mode
+hides it because a click there ticks the card instead. Starred editions lead
+the **Custom Themes** block, A→Z within each group. The star's bottom-bar
+confirmation is transient: a tab re-show or dashboard reopen clears it, while
+any other status is left alone. Stock and `Wallpaper #N` cards have no record,
+so they never show one.
+
 **The gallery jump arrows** — the Themes gallery and the Wallpapers tab's
 **Bookmarked** view — are 30 pt squares, 12 pt inside the scroll area's
 bottom-right corner. Each is `palette.barBG` at 0.92 with a 1 px

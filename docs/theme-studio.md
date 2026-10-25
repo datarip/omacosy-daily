@@ -156,6 +156,20 @@ removing: an edition's trash deletes just the record, while a raw wallpaper's tr
 the picture to the Finder Trash and, as a separate choice, can delete the
 editions built from it. Nothing is ever hard-deleted.
 
+A saved edition also carries a **star** in the top-left of its card — the same
+slot the Wallpapers tab gives its bookmark. Clicking it sets `favorite = true`
+in that edition's TOML record (a second click clears it), and the star stays
+visible in the accent colour while it is set. Hovering an unstarred edition
+offers the outline star, favourites sort to the front of **Custom Themes**
+(A→Z within each group), and the footer's Added/Removed line clears when the
+dashboard reopens or the tab is shown again. Stock themes and `Wallpaper #N`
+cells have no record of their own, so they show no star. The same flag is one
+command:
+
+```sh
+omacosy-themecore theme favorite <id>          # --off clears it
+```
+
 ## Exporting a theme
 
 **From the editor.** Press **Export** in the footer. A folder picker opens; the
