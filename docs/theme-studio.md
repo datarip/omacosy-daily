@@ -108,6 +108,8 @@ matching element — the tone curve, a slider row — comes out the same width a
 the same distance from its heading on either side. The palette groups its data
 under **Curves**, an **Adjustments** block of sliders and a framed
 **Accessibility** table; each tone curve carries a scoped **Reset Curve**.
+The editor window stays hidden until the draft palette's roles are ready, so
+opening a theme never paints the applied palette first and then swaps.
 
 The whole system — the spacing scale, the type sizes, the frames and the
 colour roles — is written down in [design-style.md](design-style.md). The code
@@ -210,12 +212,14 @@ own background colour, not the wallpaper picture. For a stock or exported `color
 Wallpapers cell it is the derived theme's own `colors.toml` background,
 falling back to the bar background. In particular it is **not** the 16-colour
 strip's ANSI black, which is a shade of the background and made light themes
-read as dark. The **Mode** control is a generation setting, not the
-classifier: **Auto** means "resolve from the palette", and the editor shows
-`Mode → Dark` or `Mode → Light` beside the heading. Choosing **Dark** or
-**Light** pins the generation mode; when the resolved half does not change it
-leaves the palette, the adjustments, the curve and the pinned colours
-untouched. Day and Night are not theme properties; they show the one card
+read as dark. A raw **All Wallpapers** draft stays on **Auto** and the editor
+shows `Auto → Light` or `Auto → Dark` beside the heading, following the palette
+the preview is actually rendering. **Saving it as a custom theme pins the mode
+to the palette's light/dark**, so reopening it shows **Dark** or **Light**
+selected with no arrow. Choosing a non-Magic **Method** or a **Preset** pins it
+immediately as well. Choosing **Dark** or **Light** by hand pins it too; when
+the resolved half does not change, pinning leaves the palette, the
+adjustments, the curve and the pinned colours untouched. Day and Night are not theme properties; they show the one card
 assigned as the day theme or the night theme in
 `~/.config/omacosy/themes.conf`. A brand-new wallpaper with no derived palette
 yet is derived in the background and then joins Light and Dark; until then it

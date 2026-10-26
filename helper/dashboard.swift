@@ -8232,6 +8232,10 @@ final class PaletteModel {
     private(set) var method = "magic"
     private(set) var mode = "auto"
     private(set) var resolvedMode = "dark"
+    var previewIsLight: Bool {
+        let colors = finalColors.count == 16 ? finalColors : baseColors
+        return isLightBackground(colors.first.flatMap(hexColor)) == true
+    }
     // classic | grouped | neighboring | expressive
     private(set) var syntax = "classic"
     // token -> hex for the mock terminal, from `palette syntax`
@@ -8400,7 +8404,7 @@ final class PaletteModel {
         sourceIsPreset = false
         mode = "auto"
         baseColors = colors
-        resolvedMode = isLightBackground(colors.first.flatMap(hexColor)) == true ? "light" : "dark"
+        updateResolvedMode(colors)
         // Aether's setPalette at extraction: the UI colours derive from the
         // new palette, and the accent is its ANSI blue slot. For Magic the
         // accent is the wallpaper's own role accent (`palette magic --roles`)
@@ -8446,8 +8450,8 @@ final class PaletteModel {
             }
         }
         method = (pal["method"] as? String) ?? "magic"
-        mode = (pal["mode"] as? String) ?? "auto"
-        resolvedMode = isLightBackground(baseColors.first.flatMap(hexColor)) == true ? "light" : "dark"
+        updateResolvedMode(baseColors)
+        mode = resolvedMode
         syntax = (pal["syntax"] as? String) ?? "classic"
         if !["classic", "grouped", "neighboring", "expressive"].contains(syntax) {
             syntax = "classic"
@@ -8638,7 +8642,6 @@ final class PaletteModel {
         var next = colors
         for i in locked where i < 16 { next[i] = baseColors[i] }
         baseColors = next
-        resolveModeFromPalette()
         // a whole-palette swap also resets the sliders and the curve, like
         // Aether's setPalette
         curve = []
@@ -8646,6 +8649,8 @@ final class PaletteModel {
         resetExtended(next)
         sourceName = name
         sourceIsPreset = true
+        updateResolvedMode(next)
+        mode = resolvedMode
         edited()
         update()
         refreshRender()
@@ -8682,12 +8687,13 @@ final class PaletteModel {
                 var next = colors
                 for i in self.locked where i < 16 { next[i] = self.baseColors[i] }
                 self.baseColors = next
-                self.resolveModeFromPalette()
                 self.curve = []
                 self.adjustments = EditorAdjustments()
                 self.resetExtended(next)
                 self.sourceName = label
                 self.sourceIsPreset = false
+                self.updateResolvedMode(next)
+                self.mode = self.resolvedMode
                 self.edited()
                 self.update()
                 self.refreshRender()
@@ -8701,9 +8707,10 @@ final class PaletteModel {
         method = value
         sourceName = nil
         sourceIsPreset = false
+        if value == "magic" { mode = "auto" }
         edited()
         update()
-        regenerate()
+        regenerate(pinMode: value != "magic")
     }
 
     func setMode(_ index: Int) {
@@ -8903,9 +8910,10 @@ final class PaletteModel {
     }
     private func edited() { onUserEdit?() }
 
-    private func resolveModeFromPalette() {
-        guard mode == "auto" else { return }
-        resolvedMode = isLightBackground(baseColors.first.flatMap(hexColor)) == true ? "light" : "dark"
+    private func updateResolvedMode(_ colors: [String]? = nil) {
+        let source = colors ?? (finalColors.count == 16 ? finalColors : baseColors)
+        guard let first = source.first.flatMap(hexColor) else { return }
+        resolvedMode = isLightBackground(first) == true ? "light" : "dark"
     }
 
     private func defaultExtended(_ colors: [String], accent: String?) -> [String: String] {
@@ -9117,7 +9125,7 @@ final class PaletteModel {
         loadStrips()
     }
 
-    private func regenerate() {
+    private func regenerate(pinMode: Bool = false) {
         guard !extractSource.isEmpty, baseColors.count == 16 else { return }
         paletteGeneration += 1
         let gen = paletteGeneration
@@ -9152,7 +9160,8 @@ final class PaletteModel {
                 var next = colors
                 for i in lockedNow where i < 16 { next[i] = previous[i] }
                 self.baseColors = next
-                self.resolveModeFromPalette()
+                self.updateResolvedMode(next)
+                if pinMode && self.method != "magic" { self.mode = self.resolvedMode }
                 // re-extraction is a whole-palette swap: sliders and curve
                 // reset, like Aether's setPalette
                 self.curve = []
@@ -9207,6 +9216,8 @@ final class PaletteModel {
                 var final = colors
                 for i in self.locked where i < 16 { final[i] = self.baseColors[i] }
                 self.finalColors = final
+                self.updateResolvedMode(final)
+                if self.mode != "auto" { self.mode = self.resolvedMode }
                 if !ext.isEmpty { self.finalExtended = ext }
                 self.rebuildHistogram(final)
                 self.update()
@@ -11373,7 +11384,7 @@ final class PaletteBuilderView: NSView {
         doc.modeSeg.index = model.mode == "light" ? 2 : (model.mode == "dark" ? 1 : 0)
         doc.modeSeg.needsDisplay = true
         doc.modeHint = model.mode == "auto"
-            ? "→ \(model.resolvedMode.capitalized)" : ""
+            ? "Auto → \(model.previewIsLight ? "Light" : "Dark")" : ""
         doc.curveView.points = model.curve
         doc.curveView.histogram = model.histogram
         for slider in doc.sliders {
@@ -13572,6 +13583,11 @@ final class ThemeEditor {
     // The applied theme's palette, saved while the editor previews the draft
     // so it can be put back when the editor closes.
     private var appliedPalette: Palette?
+    // The window stays hidden until the first draft palette (its roles) is
+    // ready, so the editor never paints the applied theme and then swaps.
+    private var shown = false
+    private var showFallback: DispatchWorkItem?
+    private weak var dashboard: DashboardWindow?
 
     private init(subject: EditorSubject, size: NSSize, status: ((String) -> Void)?) {
         self.subject = subject
@@ -13707,6 +13723,7 @@ final class ThemeEditor {
             if self.applyProgressActive, self.model.paletteGeneration != self.applyProgressGeneration {
                 self.completeApplyProgress()
             }
+            if !self.shown, !self.model.roles.isEmpty { self.reveal() }
         }
         model.onUserEdit = { [weak self] in
             guard let self else { return }
@@ -14041,11 +14058,8 @@ final class ThemeEditor {
         let h = min(800, frame.height - 80)
         let editor = ThemeEditor(subject: subject, size: NSSize(width: w, height: h), status: status)
         current = editor
+        editor.dashboard = dash
         editor.window.setFrameOrigin(NSPoint(x: frame.midX - w / 2, y: frame.midY - h / 2))
-        // the editor owns the session: outside clicks and the toggle key
-        // must not dismiss the dashboard until the editor is closed
-        dash.hideSuppressed = true
-        dash.addChildWindow(editor.window, ordered: .above)
         editor.show()
     }
 
@@ -14189,7 +14203,8 @@ final class ThemeEditor {
         // along exactly when the user pinned them
         var extended: [String: String] = [:]
         for (key, hex) in model.extendedHex { extended[key] = hex }
-        return ["method": model.method, "mode": model.mode, "resolvedMode": model.resolvedMode,
+        let resolved = model.previewIsLight ? "light" : "dark"
+        return ["method": model.method, "mode": resolved, "resolvedMode": resolved,
                 "syntax": model.syntax,
                 "colors": model.baseColors, "extended": extended,
                 "locked": model.locked.sorted(),
@@ -14572,10 +14587,21 @@ final class ThemeEditor {
         }
     }
 
-    private func show() {
+    private func reveal() {
+        guard !shown, ThemeEditor.current === self else { return }
+        shown = true
+        showFallback?.cancel()
+        root.layoutSubtreeIfNeeded()
+        if let dash = dashboard {
+            dash.hideSuppressed = true
+            dash.addChildWindow(window, ordered: .above)
+        }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(root)
+    }
+
+    private func show() {
         // Esc, wherever focus sits in the editor; the dashboard's own
         // monitors ignore an Esc aimed at another window
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] e in
@@ -14608,7 +14634,7 @@ final class ThemeEditor {
         // the dashboard behind it, or another app — is outside.
         outsideMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
-            guard let self, let w = e.window else { return e }
+            guard let self, self.window.isVisible, let w = e.window else { return e }
             if w === self.window || w === NSColorPanel.shared { return e }
             if w is NSPanel || w.parent === self.window { return e }
             self.close()
@@ -14623,6 +14649,9 @@ final class ThemeEditor {
             if NSColorPanel.shared.isVisible { return }
             self.close(reactivate: false)
         }
+        let fallback = DispatchWorkItem { [weak self] in self?.reveal() }
+        showFallback = fallback
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: fallback)
         loadSubject()
     }
 
@@ -14759,7 +14788,7 @@ final class ThemeEditor {
         refreshSelectionColors()
         root.refreshNameField()
         markTreeNeedsDisplay(root)
-        if let dash = window.parent as? DashboardWindow, let v = dash.contentView {
+        if let dash = dashboard, let v = dash.contentView {
             markTreeNeedsDisplay(v)
         }
     }
@@ -14773,7 +14802,7 @@ final class ThemeEditor {
         // theme's back before the dashboard takes over
         palette = loadPalette()
         refreshSelectionColors()
-        if let dash = window.parent as? DashboardWindow, let v = dash.contentView {
+        if let dash = dashboard, let v = dash.contentView {
             markTreeNeedsDisplay(v)
         }
         if let k = keyMonitor { NSEvent.removeMonitor(k); keyMonitor = nil }
@@ -14782,7 +14811,7 @@ final class ThemeEditor {
         NSColorPanel.shared.setTarget(nil)
         NSColorPanel.shared.orderOut(nil)
         model.teardown()
-        if let dash = window.parent as? DashboardWindow {
+        if let dash = dashboard {
             dash.hideSuppressed = false
             dash.removeChildWindow(window)
             if reactivate {
@@ -19704,6 +19733,64 @@ func editorStateSelfTest() -> Int {
 
 if CommandLine.arguments.contains("--image-editor-selftest") {
     exit(editorStateSelfTest() == 0 ? 0 : 1)
+}
+
+// The editor's Mode follows the code palette. An auto draft stays Auto and
+// resolves from the palette background; a saved non-Magic edition pins the
+// resolved half, so reopening shows Dark/Light rather than Auto.
+func editorModeSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    palette = loadPalette()
+    let light = ["#fdf6e3", "#dc322f", "#859900", "#b58900",
+                 "#268bd2", "#d33682", "#2aa198", "#657b83",
+                 "#eee8d5", "#cb4b16", "#93a1a1", "#839496",
+                 "#657b83", "#6c71c4", "#586e75", "#073642"]
+    let dark = ["#1e1e2e", "#f38ba8", "#a6e3a1", "#f9e2af",
+                "#89b4fa", "#f5c2e7", "#94e2d5", "#cdd6f4",
+                "#45475a", "#f38ba8", "#a6e3a1", "#f9e2af",
+                "#89b4fa", "#f5c2e7", "#94e2d5", "#bac2de"]
+    let draftLight = PaletteModel()
+    draftLight.seedDraft(image: "/tmp/light.png", colors: light, accent: nil)
+    check("a light auto draft stays Auto and resolves Light",
+          draftLight.mode == "auto" && draftLight.resolvedMode == "light"
+              && draftLight.previewIsLight)
+    let draftDark = PaletteModel()
+    draftDark.seedDraft(image: "/tmp/dark.png", colors: dark, accent: nil)
+    check("a dark auto draft stays Auto and resolves Dark",
+          draftDark.mode == "auto" && draftDark.resolvedMode == "dark"
+              && !draftDark.previewIsLight)
+
+    let magic: [String: Any] = ["palette": ["colors": light, "method": "magic",
+                                           "mode": "auto"]]
+    let magicEdition = PaletteModel()
+    magicEdition.seedEdition(record: magic, image: "/tmp/light.png")
+    check("a saved Magic edition pins the palette mode",
+          magicEdition.mode == "light" && magicEdition.resolvedMode == "light")
+
+    let generated: [String: Any] = ["palette": ["colors": light, "method": "bright",
+                                               "mode": "auto"]]
+    let generatedEdition = PaletteModel()
+    generatedEdition.seedEdition(record: generated, image: "/tmp/light.png")
+    check("a non-Magic edition pins the palette mode",
+          generatedEdition.mode == "light" && generatedEdition.resolvedMode == "light")
+
+    let preset = PaletteModel()
+    preset.seedDraft(image: "/tmp/light.png", colors: light, accent: nil)
+    preset.applyPreset("Test", colors: dark)
+    check("a preset pins the mode from its own palette",
+          preset.mode == "dark" && preset.resolvedMode == "dark")
+
+    print(failures == 0 ? "editor-mode selftest: all checks passed"
+                        : "editor-mode selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--editor-mode-selftest") {
+    exit(editorModeSelfTest() == 0 ? 0 : 1)
 }
 
 // The crop handles' geometry, independent of AppKit: every side and corner
