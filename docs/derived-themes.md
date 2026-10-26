@@ -59,7 +59,7 @@ A theme is a directory. The shipped ones live in `themes/`:
 ```
 themes/osaka-jade/
 ├── backgrounds/        the wallpapers
-├── colors.toml         omarchy's 22-colour palette, for terminals
+├── colors.toml         omarchy's 22-colour palette plus `mode` (auto is the default)
 ├── sketchybar.sh       the bar's colours
 └── borders.sh          the focus ring's colour
 ```

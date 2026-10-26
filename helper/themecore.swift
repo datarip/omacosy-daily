@@ -5165,12 +5165,15 @@ func importFormat(_ flag: String?, path: String?, data: Data) throws -> String {
 
 // A flat omarchy colors.toml (background, foreground, color0..color15, the
 // selection pair, accent and cursor). Missing ANSI slots fall back to the
-// background/foreground so a sparse file still imports.
-func parseColorsToml(_ data: Data, label: String) throws -> (colors: [String], extended: Extended) {
+// background/foreground so a sparse file still imports. `mode` is ours:
+// auto (default), dark or light, so a light-looking palette can declare a
+// dark terminal theme.
+func parseColorsToml(_ data: Data, label: String) throws -> (colors: [String], extended: Extended, mode: String) {
     guard let text = String(data: data, encoding: .utf8) else {
         throw ThemeError(message: "\(label): not valid UTF-8")
     }
     var map: [String: String] = [:]
+    var mode = "auto"
     for raw in text.split(separator: "\n") {
         let line = raw.trimmingCharacters(in: .whitespaces)
         guard !line.isEmpty, !line.hasPrefix("#") else { continue }
@@ -5179,6 +5182,11 @@ func parseColorsToml(_ data: Data, label: String) throws -> (colors: [String], e
         let key = String(parts[0]).trimmingCharacters(in: .whitespaces)
         let value = String(parts[1]).trimmingCharacters(in: CharacterSet(charactersIn: " \"'\t"))
         let clean = value.split(separator: " ").first.map(String.init) ?? value
+        if key == "mode" {
+            let m = clean.lowercased()
+            if ["auto", "dark", "light"].contains(m) { mode = m }
+            continue
+        }
         guard let hex = normalizedColorHex(clean) else { continue }
         map[key] = hex
     }
@@ -5197,13 +5205,13 @@ func parseColorsToml(_ data: Data, label: String) throws -> (colors: [String], e
                             cursor: map["cursor"] ?? colors[7],
                             selectionForeground: map["selection_foreground"] ?? bg,
                             selectionBackground: map["selection_background"] ?? fg)
-    return (colors, extended)
+    return (colors, extended, mode)
 }
 
 // A base16 scheme (base00..base0F), mapped to the 16 ANSI slots the way
 // base16-shell does, so an imported community scheme lands where a terminal
 // expects it. Reads the flat `base0A: "#rrggbb"` lines; no full YAML parser.
-func parseBase16(_ data: Data, label: String) throws -> (colors: [String], extended: Extended) {
+func parseBase16(_ data: Data, label: String) throws -> (colors: [String], extended: Extended, mode: String) {
     guard let text = String(data: data, encoding: .utf8) else {
         throw ThemeError(message: "\(label): not valid UTF-8")
     }
@@ -5229,17 +5237,20 @@ func parseBase16(_ data: Data, label: String) throws -> (colors: [String], exten
                             cursor: base("5") ?? b05,
                             selectionForeground: b00,
                             selectionBackground: base("2") ?? base("3") ?? b05)
-    return (colors, extended)
+    return (colors, extended, "auto")
 }
 
-// An imported palette becomes a theme like any other: light/dark from the
-// background's luminance, the method left as "import".
-func themeFromPalette(_ palette: (colors: [String], extended: Extended),
+// An imported palette becomes a theme like any other. An explicit `mode`
+// wins; auto falls back to the background's luminance. The method is left as
+// "import".
+func themeFromPalette(_ palette: (colors: [String], extended: Extended, mode: String),
                       id: String, name: String) -> Theme {
-    let light = ColorMath.relativeLuminance(palette.colors[0]) > 0.5
-    let mode = light ? "light" : "dark"
+    let mode = ["auto", "dark", "light"].contains(palette.mode) ? palette.mode : "auto"
+    let light = mode == "light"
+        || (mode == "auto" && ColorMath.relativeLuminance(palette.colors[0]) > 0.5)
+    let resolvedMode = light ? "light" : "dark"
     var theme = Theme(id: id, name: name,
-                      palette: Palette16(method: "import", mode: mode, resolvedMode: mode,
+                      palette: Palette16(method: "import", mode: mode, resolvedMode: resolvedMode,
                                          colors: palette.colors, extended: palette.extended))
     theme.created = isoNow()
     theme.updated = theme.created
@@ -7006,7 +7017,7 @@ enum TemplateEngine {
 //
 //   sketchybar.sh   the bar palette (barRoles + the semantic trio)
 //   borders.sh      the focus ring's two colours
-//   colors.toml     omarchy's 22-key palette, for the terminal pipeline
+//   colors.toml     omarchy's 22-key palette plus mode, for the terminal pipeline
 //   backgrounds/    one symlink to the edition's own image
 //   preview.png     a small thumbnail of that image
 //
@@ -7053,10 +7064,13 @@ enum Materialise {
         return overrides
     }
 
-    // Omarchy's 22-key palette, written verbatim next to a materialised theme
-    // and into an export bundle where a flat colors.toml is expected.
-    static func colorsToml(_ rendered: (colors: [String], extended: Extended)) -> String {
+    // Omarchy's 22-key palette plus our `mode` (auto, dark or light), written
+    // next to a materialised theme and into an export bundle where a flat
+    // colors.toml is expected.
+    static func colorsToml(_ rendered: (colors: [String], extended: Extended),
+                           mode: String = "auto") -> String {
         var toml = ""
+        toml += "mode = \"\(["auto", "dark", "light"].contains(mode) ? mode : "auto")\"\n"
         toml += "accent = \"\(rendered.extended.accent)\"\n"
         toml += "cursor = \"\(rendered.extended.cursor)\"\n"
         toml += "foreground = \"\(rendered.colors[7])\"\n"
@@ -7218,7 +7232,7 @@ enum Materialise {
         bd += "export ACTIVE_COLOR=\(argb(ring))\n"
         bd += "export INACTIVE_COLOR=\(argb(pill))\n"
 
-        let toml = colorsToml(rendered)
+        let toml = colorsToml(rendered, mode: theme.palette.resolvedMode)
 
         try sb.write(to: dir.appendingPathComponent("sketchybar.sh"), atomically: true, encoding: .utf8)
         try bd.write(to: dir.appendingPathComponent("borders.sh"), atomically: true, encoding: .utf8)
@@ -7877,7 +7891,7 @@ func exportBundle(_ theme: Theme, to path: String, templates: String?) throws ->
                                      to: URL(fileURLWithPath: dir + "/\(theme.id).toml"))
 
     let rendered = theme.palette.rendered()
-    try Materialise.colorsToml(rendered)
+    try Materialise.colorsToml(rendered, mode: theme.palette.resolvedMode)
         .write(toFile: dir + "/colors.toml", atomically: true, encoding: .utf8)
 
     let overrides = Materialise.overridesEnv(theme)

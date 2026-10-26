@@ -3446,23 +3446,89 @@ enum ThemesSortMode: String, CaseIterable {
     }
 }
 
+enum ThemesAppearanceFilter: String, CaseIterable {
+    case all
+    case omarchy
+    case custom
+    case auto
+    case favorite
+    case light
+    case dark
+    case day
+    case night
+
+    var label: String {
+        switch self {
+        case .all: return "All Themes"
+        case .omarchy: return "Omarchy Themes"
+        case .custom: return "Custom Themes"
+        case .auto: return "All Wallpapers"
+        case .favorite: return "Favorite Themes"
+        case .light: return "Light Themes"
+        case .dark: return "Dark Themes"
+        case .day: return "Day Theme"
+        case .night: return "Night Theme"
+        }
+    }
+
+    var buttonLabel: String {
+        switch self {
+        case .all: return "Filter: All"
+        case .omarchy: return "Filter: Omarchy"
+        case .custom: return "Filter: Custom"
+        case .auto: return "Filter: Wallpapers"
+        case .favorite: return "Filter: Favorites"
+        case .light: return "Filter: Light"
+        case .dark: return "Filter: Dark"
+        case .day: return "Filter: Day"
+        case .night: return "Filter: Night"
+        }
+    }
+}
+
 // The Themes tab's remembered view. A missing or unreadable file falls back
-// to Alphabetical, every section visible and no colour filter.
+// to Alphabetical, All Themes and no colour filter.
 struct ThemesViewPrefs: Codable, Equatable {
     var sort = ThemesSortMode.alphabetical.rawValue
-    var sections: [String: Bool] = ["stock": true, "custom": true, "auto": true]
+    var appearance = ThemesAppearanceFilter.all.rawValue
     var colors: [String] = []
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case sort, appearance, colors
+    }
+
+    private enum LegacyKeys: String, CodingKey {
+        case sections
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sort = try c.decodeIfPresent(String.self, forKey: .sort) ?? sort
+        appearance = try c.decodeIfPresent(String.self, forKey: .appearance) ?? appearance
+        colors = try c.decodeIfPresent([String].self, forKey: .colors) ?? colors
+        if (ThemesAppearanceFilter(rawValue: appearance) ?? .all) == .all {
+            let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+            if let sections = try legacy.decodeIfPresent([String: Bool].self, forKey: .sections) {
+                let on = [("omarchy", "stock"), ("custom", "custom"), ("auto", "auto")]
+                    .filter { sections[$0.1] ?? true }
+                    .map { $0.0 }
+                if on.count == 1 { appearance = on[0] }
+            }
+        }
+    }
 
     func normalized() -> ThemesViewPrefs {
         var p = self
         if ThemesSortMode(rawValue: p.sort) == nil {
             p.sort = ThemesSortMode.alphabetical.rawValue
         }
+        if ThemesAppearanceFilter(rawValue: p.appearance) == nil {
+            p.appearance = ThemesAppearanceFilter.all.rawValue
+        }
         let known = Set(ThemeColorBucket.allCases.map { $0.rawValue })
         p.colors = Array(Set(p.colors.filter { known.contains($0) })).sorted()
-        for key in ["stock", "custom", "auto"] where p.sections[key] == nil {
-            p.sections[key] = true
-        }
         return p
     }
 
@@ -3513,12 +3579,13 @@ struct ThemeCell: Equatable {
     var accentHex: String?
     var dominantHex: String?
     var dominantBuckets: Set<ThemeColorBucket>
+    var isLight: Bool?
 
     init(logical: String, wallpaper: String, title: String, isCustom: Bool,
          paletteFile: String, editionID: String? = nil, variations: Int = 0,
          storedColors: [NSColor] = [], favorite: Bool = false,
          accentHex: String? = nil, dominantHex: String? = nil,
-         dominantBuckets: Set<ThemeColorBucket> = []) {
+         dominantBuckets: Set<ThemeColorBucket> = [], isLight: Bool? = nil) {
         self.logical = logical
         self.wallpaper = wallpaper
         self.title = title
@@ -3531,6 +3598,7 @@ struct ThemeCell: Equatable {
         self.accentHex = accentHex
         self.dominantHex = dominantHex
         self.dominantBuckets = dominantBuckets
+        self.isLight = isLight
     }
 }
 
@@ -3565,6 +3633,7 @@ func stockVariants() -> [ThemeCell] {
     for t in themes {
         let colors = themesDir + "/" + t + "/colors.toml"
         guard FileManager.default.fileExists(atPath: colors) else { continue }
+        let isLight = isLightBackground(colorsTomlBackground(colors))
         let bg = themesDir + "/" + t + "/backgrounds"
         let files = ((try? FileManager.default.contentsOfDirectory(atPath: bg)) ?? [])
             .filter { isImageFile($0) }.sorted()
@@ -3575,7 +3644,8 @@ func stockVariants() -> [ThemeCell] {
                                  title: "\(prettyThemeName(t)) — \(prettyWallName(f))",
                                  isCustom: false, paletteFile: colors,
                                  dominantHex: dominant.representative,
-                                 dominantBuckets: dominant.buckets))
+                                 dominantBuckets: dominant.buckets,
+                                 isLight: isLight))
         }
     }
     return out
@@ -3662,6 +3732,7 @@ struct ThemeEdition {
     let media: String?
     let colors: [NSColor]
     let accent: String?
+    var resolvedMode: String? = nil
 }
 
 // What the editor and the grid need from the record store: id, name,
@@ -3679,13 +3750,15 @@ func allEditions() -> [ThemeEdition] {
         let extended = palette["extended"] as? [String: Any] ?? [:]
         let accent = (extended["accent"] as? String)
             ?? (hexes.indices.contains(4) ? hexes[4] : nil)
+        let resolvedMode = palette["resolvedMode"] as? String
         return ThemeEdition(id: id, name: name,
                             primary: (row["primary"] as? Bool) ?? false,
                             favorite: (row["favorite"] as? Bool) ?? false,
                             sourcePath: wall["path"] as? String,
                             media: wall["media"] as? String,
                             colors: hexes.compactMap(hexColor),
-                            accent: accent)
+                            accent: accent,
+                            resolvedMode: resolvedMode)
     }
 }
 
@@ -3766,19 +3839,21 @@ func customVariants(_ dir: String, withMetadata: Bool = true) -> [ThemeCell] {
         if let src = e.sourcePath, hidden(src) { continue }
         let dominant = withMetadata ? themeDominantMeta(img)
                                     : DominantSummary(representative: nil, buckets: [])
+        let isLight = isLightBackground(e.colors.first)
         out.append(ThemeCell(logical: "custom", wallpaper: img, title: e.name,
                              isCustom: true, paletteFile: "",
                              editionID: e.id, storedColors: e.colors,
                              favorite: e.favorite, accentHex: e.accent,
                              dominantHex: dominant.representative,
-                             dominantBuckets: dominant.buckets))
+                             dominantBuckets: dominant.buckets,
+                             isLight: isLight))
     }
     for (i, f) in visibleFiles.enumerated() {
         let p = dir + "/" + f
         // The accent/dominant reads are only needed once the tab is on
         // screen. Building the shelf at app launch skips them, so the
         // dashboard opens without touching 700 caches it may never display.
-        let meta = withMetadata ? themePaletteMeta(p) : ThemePaletteMeta(accent: nil)
+        let meta = withMetadata ? themePaletteMeta(p) : ThemePaletteMeta(accent: nil, isLight: nil)
         let dominant = withMetadata ? themeDominantMeta(p)
                                     : DominantSummary(representative: nil, buckets: [])
         out.append(ThemeCell(logical: "custom", wallpaper: p,
@@ -3786,7 +3861,8 @@ func customVariants(_ dir: String, withMetadata: Bool = true) -> [ThemeCell] {
                              variations: bySource[canonicalPath(p), default: 0],
                              accentHex: meta.accent,
                              dominantHex: dominant.representative,
-                             dominantBuckets: dominant.buckets))
+                             dominantBuckets: dominant.buckets,
+                             isLight: meta.isLight))
     }
     return out
 }
@@ -3965,6 +4041,38 @@ func relativeLuminance(_ c: NSColor) -> CGFloat {
     return 0.2126 * lin(s.redComponent) + 0.7152 * lin(s.greenComponent) + 0.0722 * lin(s.blueComponent)
 }
 
+func colorsTomlValue(_ path: String, key wanted: String) -> String? {
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+    for line in text.split(separator: "\n") {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard let eq = t.firstIndex(of: "=") else { continue }
+        guard t[..<eq].trimmingCharacters(in: .whitespaces) == wanted else { continue }
+        var v = t[t.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+        v = v.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        return v
+    }
+    return nil
+}
+
+func colorsTomlBackground(_ path: String) -> NSColor? {
+    colorsTomlValue(path, key: "background").flatMap(hexColor)
+}
+
+func isLightBackground(_ color: NSColor?) -> Bool? {
+    guard let color else { return nil }
+    return relativeLuminance(color) > 0.5
+}
+
+func themeDirectoryBackground(_ dir: String) -> NSColor? {
+    if let bg = colorsTomlBackground(dir + "/colors.toml") { return bg }
+    return parseSketchybar(dir + "/sketchybar.sh").first
+}
+
+func themeCodeBackground(_ wallpaper: String) -> NSColor? {
+    guard let dir = derivedThemeDir(wallpaper) else { return nil }
+    return themeDirectoryBackground(dir)
+}
+
 func parseColorsToml(_ path: String) -> [NSColor] {
     guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
     var map: [String: String] = [:]
@@ -4084,6 +4192,7 @@ func cachedCustomPalette(_ wallpaper: String) -> [NSColor] {
 // so no wallpaper is re-extracted here.
 struct ThemePaletteMeta {
     let accent: String?
+    let isLight: Bool?
 }
 
 private var themePaletteMetaCache: [String: ThemePaletteMeta] = [:]
@@ -4148,7 +4257,8 @@ func themePaletteMeta(_ wallpaper: String) -> ThemePaletteMeta {
     let palette = cachedPaletteFromDisk(wallpaper) ?? []
     let accent = derivedAccentHex(wallpaper)
         ?? (palette.indices.contains(4) ? hexString(from: palette[4]) : nil)
-    let meta = ThemePaletteMeta(accent: accent)
+    let meta = ThemePaletteMeta(accent: accent,
+                                isLight: isLightBackground(themeCodeBackground(wallpaper)))
     if let key { themePaletteMetaCache[key] = meta }
     return meta
 }
@@ -4329,6 +4439,7 @@ final class ThemeGridView: NSView {
     // the theme currently applied, drawn with an "Active" pill
     var active: ActiveTheme? { didSet { needsDisplay = true } }
     var customDir: String?
+    var minContentHeight: CGFloat = 0
     var thumbs: [Int: NSImage] = [:]
     var palettes: [Int: [NSColor]] = [:]
     var cellFrames: [Int: NSRect] = [:]
@@ -4379,6 +4490,7 @@ final class ThemeGridView: NSView {
     var dayNight: (day: String, night: String) = ("", "")
     // Off-screen review/test only: the gallery's titled blocks, in order.
     func debugSectionTitles() -> [String] { headers.map { $0.1 } }
+    func debugCellFrame(_ i: Int) -> NSRect? { cellFrames[i] }
     func debugSeparatorCount() -> Int { separators.count }
     // Off-screen review/test only.
     func debugFavoriteShown(_ i: Int) -> Bool? { favoriteShown(i) }
@@ -4447,16 +4559,17 @@ final class ThemeGridView: NSView {
         // Every wallpaper is an auto-theme, so the custom blocks show whenever
         // there is anything to show — no switch state gates them. Custom
         // `ThemeCell`s are the named editions; the rest are the raw seed
-        // wallpapers whose auto themes they are built from.
+        // wallpapers whose themes they are built from.
         let stockIdx = cells.indices.filter { !cells[$0].isCustom }
         let editedIdx = cells.indices.filter { cells[$0].isCustom && cells[$0].editionID != nil }
         let seedIdx = cells.indices.filter { cells[$0].isCustom && cells[$0].editionID == nil }
         placeSection("Omarchy Themes", stockIdx, separated: false)
         placeSection("Custom Themes", editedIdx, separated: placedSection)
-        placeSection("Auto Themes", seedIdx, separated: placedSection)
+        placeSection("All Wallpapers", seedIdx, separated: placedSection)
 
-        // convert top-coords to non-flipped bottom coords
-        let contentH = max(top + 8, 200)
+        // convert top-coords to non-flipped bottom coords; a short result
+        // still fills the viewport so its cards sit at the top
+        let contentH = max(top + 8, 200, minContentHeight)
         func flip(_ r: NSRect) -> NSRect {
             NSRect(x: r.origin.x, y: contentH - r.origin.y - r.height, width: r.width, height: r.height)
         }
@@ -4899,41 +5012,6 @@ final class ThemesPanelBackground: NSView {
     }
 }
 
-// A section checkbox with its label, drawn in the house style. The box and
-// the label are one control; the label is not a separate hit target.
-final class LabeledCheckView: NSView {
-    var title = "" { didSet { needsDisplay = true } }
-    var isOn = true { didSet { needsDisplay = true } }
-    var onChange: ((Bool) -> Void)?
-    private lazy var font = nerdFont("Regular", 12)
-
-    func sizeThatFits() -> NSSize {
-        NSSize(width: 24 + advance(title, font), height: 24)
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let box = NSRect(x: 0, y: (bounds.height - 18) / 2, width: 18, height: 18)
-        let r = NSBezierPath(roundedRect: box, xRadius: windowCornerRadius(4), yRadius: windowCornerRadius(4))
-        if isOn {
-            palette.accent.setFill(); r.fill()
-            whDrawGlyphCentered("\u{f00c}", in: box, color: palette.barBG, size: 12)
-        } else {
-            palette.itemBG.withAlphaComponent(0.4).setFill(); r.fill()
-            palette.muted.withAlphaComponent(0.5).setStroke()
-            r.lineWidth = 1; r.stroke()
-        }
-        drawMidLeft(title, font, palette.label, x: 24,
-                    midTop: bounds.height / 2, height: bounds.height)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        isOn.toggle()
-        onChange?(isOn)
-    }
-    override var acceptsFirstResponder: Bool { false }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-}
-
 // The always-visible colour row: the wallhaven swatches, multi-select. The
 // group (the Color label plus nine swatches) is centred, while Clear sits at
 // the far right and appears only when something is selected.
@@ -5032,8 +5110,8 @@ final class ThemesTabView: NSView, ScrollStepTab {
         selectButton.needsDisplay = true
         deleteButton.needsDisplay = true
         jumpButton.needsDisplay = true
-        for check in [sectionStock, sectionCustom, sectionAuto] { check.needsDisplay = true }
         sortButton.needsDisplay = true
+        appearanceButton.needsDisplay = true
         colorFilter.needsDisplay = true
     }
     private let scroller = CustomScroller()
@@ -5048,12 +5126,10 @@ final class ThemesTabView: NSView, ScrollStepTab {
     private var selectionMode = false
     // the bottom panel: the colour swatches + Sort, then Select/Delete
     private let bottomBand: CGFloat = 76
-    private let headerH: CGFloat = 34
+    private let headerH: CGFloat = 12
     private let rowH: CGFloat = 24
-    private let sectionStock = LabeledCheckView()
-    private let sectionCustom = LabeledCheckView()
-    private let sectionAuto = LabeledCheckView()
     private let sortButton = WHDropdown()
+    private let appearanceButton = WHDropdown()
     private let colorFilter = ThemeColorFilterView()
     private var prefs = loadThemesViewPrefs()
     private var prefsWritesEnabled = true
@@ -5066,6 +5142,8 @@ final class ThemesTabView: NSView, ScrollStepTab {
         return q
     }()
     private var dominantIndexRunning = false
+    private var backgroundIndexRunning = false
+    private var backgroundIndexFailures: Set<String> = []
     private var status = "" { didSet { needsDisplay = true; needsLayout = true } }
     // Kept for the debug/selftest door; the UI no longer prints statuses.
     private var statusIsFavorite = false
@@ -5113,19 +5191,6 @@ final class ThemesTabView: NSView, ScrollStepTab {
         deleteButton.onClick = { [weak self] in self?.confirmDeleteSelection() }
         addSubview(deleteButton)
 
-        sectionStock.title = "Omarchy Themes"
-        sectionCustom.title = "Custom Themes"
-        sectionAuto.title = "Auto Themes"
-        sectionStock.isOn = prefs.sections["stock"] ?? true
-        sectionCustom.isOn = prefs.sections["custom"] ?? true
-        sectionAuto.isOn = prefs.sections["auto"] ?? true
-        sectionStock.onChange = { [weak self] on in self?.setSection("stock", on) }
-        sectionCustom.onChange = { [weak self] on in self?.setSection("custom", on) }
-        sectionAuto.onChange = { [weak self] on in self?.setSection("auto", on) }
-        addSubview(sectionStock)
-        addSubview(sectionCustom)
-        addSubview(sectionAuto)
-
         let mode = ThemesSortMode(rawValue: prefs.sort) ?? .alphabetical
         sortButton.items = ThemesSortMode.allCases.map { $0.label }
         sortButton.selectedIndex = ThemesSortMode.allCases.firstIndex(of: mode) ?? 0
@@ -5135,12 +5200,22 @@ final class ThemesTabView: NSView, ScrollStepTab {
         sortButton.menuWidth = 240
         sortButton.onPick = { [weak self] i in self?.setSort(i) }
 
+        let appearance = ThemesAppearanceFilter(rawValue: prefs.appearance) ?? .all
+        appearanceButton.items = ThemesAppearanceFilter.allCases.map { $0.label }
+        appearanceButton.selectedIndex = ThemesAppearanceFilter.allCases.firstIndex(of: appearance) ?? 0
+        appearanceButton.title = appearance.buttonLabel
+        appearanceButton.toolTip = "Filter by Appearance"
+        appearanceButton.controlWidth = 170
+        appearanceButton.menuWidth = 220
+        appearanceButton.onPick = { [weak self] i in self?.setAppearance(i) }
+
         colorFilter.selected = Set(prefs.colors.compactMap(ThemeColorBucket.init(rawValue:)))
         colorFilter.onChange = { [weak self] set in self?.setColors(set) }
         addSubview(colorFilter)
         // Above the full-width colour view, or its hit test would swallow
-        // every click on the Sort dropdown.
+        // every click on the dropdowns.
         addSubview(sortButton)
+        addSubview(appearanceButton)
 
         grid.onApplied = { [weak self] title in
             self?.setStatus("Applied \(title)")
@@ -5204,12 +5279,14 @@ final class ThemesTabView: NSView, ScrollStepTab {
     func debugClearFavoriteStatus() { clearFavoriteStatus() }
     func debugDisablePrefsWrite() { prefsWritesEnabled = false }
     func debugSetAllCells(_ cells: [ThemeCell]) { allCells = cells; applyView() }
-    func debugSetSection(_ key: String, _ on: Bool) { setSection(key, on) }
     func debugSetSort(_ mode: ThemesSortMode) {
         if let i = ThemesSortMode.allCases.firstIndex(of: mode) { setSort(i) }
     }
     func debugSetColors(_ set: Set<ThemeColorBucket>) { setColors(set) }
     func debugVisibleTitles() -> [String] { grid.cells.map { $0.title } }
+    func debugGridContentHeight() -> CGFloat { grid.frame.height }
+    func debugClipHeight() -> CGFloat { scroll.contentSize.height }
+    func debugCellFrame(_ i: Int) -> NSRect? { grid.debugCellFrame(i) }
     func debugVisibleCounts() -> (stock: Int, custom: Int, auto: Int) {
         (grid.cells.filter { !$0.isCustom }.count,
          grid.cells.filter { $0.isCustom && $0.editionID != nil }.count,
@@ -5218,6 +5295,14 @@ final class ThemesTabView: NSView, ScrollStepTab {
     func debugEmptyMessage() -> String? { grid.emptyMessage }
     func debugPrefs() -> ThemesViewPrefs { prefs }
     func debugSortLabel() -> String { sortButton.title }
+    func debugAppearanceLabel() -> String { appearanceButton.title }
+    func debugSetAppearance(_ mode: ThemesAppearanceFilter) {
+        if let i = ThemesAppearanceFilter.allCases.firstIndex(of: mode) { setAppearance(i) }
+    }
+    func debugSetDayNight(day: String, night: String) {
+        grid.dayNight = (day, night)
+        applyView()
+    }
     func debugSelectedColors() -> Set<ThemeColorBucket> { colorFilter.selected }
     func debugSelectFirstCustom(_ n: Int) {
         selectionMode = true
@@ -5531,21 +5616,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
         updateJumpButton()
     }
 
-    // --- sort, colour filter and sections ----------------------------------
-
-    private func setSection(_ key: String, _ on: Bool) {
-        prefs.sections[key] = on
-        switch key {
-        case "stock": sectionStock.isOn = on
-        case "custom": sectionCustom.isOn = on
-        case "auto": sectionAuto.isOn = on
-        default: break
-        }
-        if prefsWritesEnabled { saveThemesViewPrefs(prefs) }
-        exitSelection()
-        applyView()
-        needsDisplay = true
-    }
+    // --- sort, colour filter and scopes ------------------------------------
 
     private func setSort(_ index: Int) {
         let modes = ThemesSortMode.allCases
@@ -5560,23 +5631,52 @@ final class ThemesTabView: NSView, ScrollStepTab {
         needsDisplay = true
     }
 
+    private func setAppearance(_ index: Int) {
+        let modes = ThemesAppearanceFilter.allCases
+        guard modes.indices.contains(index) else { return }
+        let mode = modes[index]
+        prefs.appearance = mode.rawValue
+        appearanceButton.selectedIndex = index
+        appearanceButton.title = mode.buttonLabel
+        if prefsWritesEnabled { saveThemesViewPrefs(prefs) }
+        exitSelection()
+        pendingTopScroll = true
+        applyView()
+        needsDisplay = true
+    }
+
     private func setColors(_ set: Set<ThemeColorBucket>) {
         colorFilter.selected = set
         prefs.colors = set.map { $0.rawValue }.sorted()
         if prefsWritesEnabled { saveThemesViewPrefs(prefs) }
         exitSelection()
+        pendingTopScroll = true
         applyView()
         needsDisplay = true
     }
 
     private func applyView() {
         var cells = allCells
-        let stockOn = prefs.sections["stock"] ?? true
-        let customOn = prefs.sections["custom"] ?? true
-        let autoOn = prefs.sections["auto"] ?? true
-        if !stockOn { cells = cells.filter { $0.isCustom } }
-        if !customOn { cells = cells.filter { !($0.isCustom && $0.editionID != nil) } }
-        if !autoOn { cells = cells.filter { !($0.isCustom && $0.editionID == nil) } }
+        switch ThemesAppearanceFilter(rawValue: prefs.appearance) ?? .all {
+        case .all:
+            break
+        case .omarchy:
+            cells = cells.filter { !$0.isCustom }
+        case .custom:
+            cells = cells.filter { $0.isCustom && $0.editionID != nil }
+        case .auto:
+            cells = cells.filter { $0.isCustom && $0.editionID == nil }
+        case .favorite:
+            cells = cells.filter { $0.favorite }
+        case .light:
+            cells = cells.filter { $0.isLight == true }
+        case .dark:
+            cells = cells.filter { $0.isLight == false }
+        case .day:
+            cells = cells.filter { dayNightSpecNames(grid.dayNight.day, $0) }
+        case .night:
+            cells = cells.filter { dayNightSpecNames(grid.dayNight.night, $0) }
+        }
         let buckets = Set(prefs.colors.compactMap(ThemeColorBucket.init(rawValue:)))
         if !buckets.isEmpty {
             cells = cells.filter { !$0.dominantBuckets.isDisjoint(with: buckets) }
@@ -5591,9 +5691,7 @@ final class ThemesTabView: NSView, ScrollStepTab {
             + sortedForDisplay(auto, mode: mode, favoritesFirst: false)
         setVisibleCells(visible)
 
-        if !stockOn && !customOn && !autoOn {
-            grid.emptyMessage = "No sections selected. Tick a section to show its themes."
-        } else if visible.isEmpty {
+        if visible.isEmpty {
             grid.emptyMessage = "No themes match these filters."
         } else {
             grid.emptyMessage = nil
@@ -5694,6 +5792,40 @@ final class ThemesTabView: NSView, ScrollStepTab {
         grid.customDir = dir
         applyView()
         startDominantIndexIfNeeded(fresh)
+        startBackgroundIndexIfNeeded(fresh)
+    }
+
+    // A raw cell's light/dark comes from the derived theme's own palette
+    // background. Derive the few that have none yet in the background, then
+    // reload so a Light/Dark filter can see them.
+    private func startBackgroundIndexIfNeeded(_ cells: [ThemeCell]) {
+        guard window != nil, !backgroundIndexRunning else { return }
+        let missing = Set(cells.filter {
+            $0.isCustom && $0.editionID == nil && $0.isLight == nil
+                && !backgroundIndexFailures.contains($0.wallpaper)
+        }.map { $0.wallpaper })
+        guard !missing.isEmpty else { return }
+        backgroundIndexRunning = true
+        let done = BlockOperation()
+        for path in missing {
+            let op = BlockOperation { [weak self] in
+                _ = customPalette(path)
+                if themeCodeBackground(path) == nil {
+                    DispatchQueue.main.async {
+                        self?.backgroundIndexFailures.insert(path)
+                    }
+                }
+            }
+            done.addDependency(op)
+            dominantQueue.addOperation(op)
+        }
+        done.completionBlock = { [weak self] in
+            DispatchQueue.main.async {
+                self?.backgroundIndexRunning = false
+                self?.reload()
+            }
+        }
+        dominantQueue.addOperation(done)
     }
 
     // The dominant cache is filled lazily, four images at a time, so a new
@@ -5743,20 +5875,6 @@ final class ThemesTabView: NSView, ScrollStepTab {
                                   width: jumpSize, height: jumpSize)
         panelBG.frame = NSRect(x: 0, y: 0, width: bounds.width, height: band)
 
-        // The category checks sit in their own strip between the tabs and the
-        // grid, centred. The bottom panel is the colour+Sort row and Select.
-        let checks = [sectionStock, sectionCustom, sectionAuto]
-        let checkSizes = checks.map { $0.sizeThatFits() }
-        let checksW = checkSizes.reduce(0) { $0 + $1.width }
-            + CGFloat(max(0, checks.count - 1)) * 16
-        let checkGroupX = max(0, (bounds.width - checksW) / 2)
-        let checkY = bounds.height - headerH + (headerH - rowH) / 2
-        var checkX = checkGroupX
-        for (check, size) in zip(checks, checkSizes) {
-            check.frame = NSRect(x: checkX, y: checkY, width: size.width, height: rowH)
-            checkX += size.width + 16
-        }
-
         let selectY: CGFloat = 0
         let colorY = selectY + rowH + 8
         let buttonW: CGFloat = 96
@@ -5770,16 +5888,19 @@ final class ThemesTabView: NSView, ScrollStepTab {
                                         width: buttonW, height: rowH)
         }
 
-        // Swatches and Sort are both about colour, so they share the row and
-        // are centred as one combined group.
+        // Swatches and the two dropdowns share the row as one centred group.
         let sortW: CGFloat = 170
+        let appearanceW: CGFloat = 170
         let colorGap: CGFloat = 20
-        let combinedW = colorFilter.groupWidth + colorGap + sortW
+        let dropdownGap: CGFloat = 12
+        let combinedW = colorFilter.groupWidth + colorGap + sortW + dropdownGap + appearanceW
         let combinedX = max(0, (bounds.width - combinedW) / 2)
         colorFilter.groupOffset = combinedX + colorFilter.groupWidth / 2 - bounds.width / 2
         colorFilter.frame = NSRect(x: 0, y: colorY, width: bounds.width, height: rowH)
-        sortButton.frame = NSRect(x: combinedX + colorFilter.groupWidth + colorGap, y: colorY,
-                                  width: sortW, height: rowH)
+        let sortX = combinedX + colorFilter.groupWidth + colorGap
+        sortButton.frame = NSRect(x: sortX, y: colorY, width: sortW, height: rowH)
+        appearanceButton.frame = NSRect(x: sortX + sortW + dropdownGap, y: colorY,
+                                        width: appearanceW, height: rowH)
 
         let w = scroll.contentSize.width
         if w > 0 {
@@ -5787,12 +5908,17 @@ final class ThemesTabView: NSView, ScrollStepTab {
                 grid.frame.size.width = w
                 needsGridRebuild = true
             }
+            let clipH = scroll.contentSize.height
+            if abs(grid.minContentHeight - clipH) > 0.5 {
+                grid.minContentHeight = clipH
+                needsGridRebuild = true
+            }
             if needsGridRebuild {
                 grid.rebuild()
                 needsGridRebuild = false
             }
             if grid.cells.isEmpty {
-                let h = max(200, scroll.contentSize.height)
+                let h = max(200, clipH)
                 if abs(grid.frame.height - h) > 0.5 {
                     grid.frame.size.height = h
                     grid.needsDisplay = true
@@ -8082,6 +8208,10 @@ struct EditorAdjustments {
     }
 }
 
+func modeChangeReExtractsPalette(method: String, previous: String, next: String) -> Bool {
+    method != "magic" && previous != next
+}
+
 // The editor's shared state. Both columns read it; its setters run the
 // engine calls. It mirrors Aether's theme store — a base palette, the four
 // extended colours, the 12 adjustments, the tone curve, locks and the
@@ -8264,13 +8394,13 @@ final class PaletteModel {
 
     // --- seeding ------------------------------------------------------------
 
-    func seedDraft(image: String, colors: [String], accent: String?, resolved: String) {
+    func seedDraft(image: String, colors: [String], accent: String?) {
         imagePath = image
         method = "magic"
         sourceIsPreset = false
         mode = "auto"
-        resolvedMode = resolved == "light" ? "light" : "dark"
         baseColors = colors
+        resolvedMode = isLightBackground(colors.first.flatMap(hexColor)) == true ? "light" : "dark"
         // Aether's setPalette at extraction: the UI colours derive from the
         // new palette, and the accent is its ANSI blue slot. For Magic the
         // accent is the wallpaper's own role accent (`palette magic --roles`)
@@ -8317,7 +8447,7 @@ final class PaletteModel {
         }
         method = (pal["method"] as? String) ?? "magic"
         mode = (pal["mode"] as? String) ?? "auto"
-        resolvedMode = (pal["resolvedMode"] as? String) ?? "dark"
+        resolvedMode = isLightBackground(baseColors.first.flatMap(hexColor)) == true ? "light" : "dark"
         syntax = (pal["syntax"] as? String) ?? "classic"
         if !["classic", "grouped", "neighboring", "expressive"].contains(syntax) {
             syntax = "classic"
@@ -8508,6 +8638,7 @@ final class PaletteModel {
         var next = colors
         for i in locked where i < 16 { next[i] = baseColors[i] }
         baseColors = next
+        resolveModeFromPalette()
         // a whole-palette swap also resets the sliders and the curve, like
         // Aether's setPalette
         curve = []
@@ -8551,6 +8682,7 @@ final class PaletteModel {
                 var next = colors
                 for i in self.locked where i < 16 { next[i] = self.baseColors[i] }
                 self.baseColors = next
+                self.resolveModeFromPalette()
                 self.curve = []
                 self.adjustments = EditorAdjustments()
                 self.resetExtended(next)
@@ -8578,6 +8710,7 @@ final class PaletteModel {
         let names = ["auto", "dark", "light"]
         let newMode = names[max(0, min(2, index))]
         guard newMode != mode else { return }
+        pushHistory(nil)
         mode = newMode
         edited()
         update()
@@ -8585,6 +8718,7 @@ final class PaletteModel {
             paletteGeneration += 1
             let gen = paletteGeneration
             let q = shellQuote(extractSource)
+            let previous = resolvedMode
             DispatchQueue.global().async { [weak self] in
                 guard let self else { return }
                 let (code, out) = self.themecore("palette suggest-mode \(q)")
@@ -8594,14 +8728,22 @@ final class PaletteModel {
                     guard self.paletteGeneration == gen else { return }
                     self.resolvedMode = resolved
                     self.update()
-                    if self.method != "magic" { self.regenerate() }
-                    else { self.refreshRender() }
+                    if modeChangeReExtractsPalette(method: self.method, previous: previous, next: resolved) {
+                        self.regenerate()
+                    } else {
+                        self.refreshRender()
+                    }
                     self.loadStrips()
                 }
             }
         } else {
+            let previous = resolvedMode
             resolvedMode = newMode
-            if method != "magic" { regenerate() } else { refreshRender() }
+            if modeChangeReExtractsPalette(method: method, previous: previous, next: newMode) {
+                regenerate()
+            } else {
+                refreshRender()
+            }
             loadStrips()
         }
     }
@@ -8760,6 +8902,11 @@ final class PaletteModel {
         MethodPicker.refreshStrips()
     }
     private func edited() { onUserEdit?() }
+
+    private func resolveModeFromPalette() {
+        guard mode == "auto" else { return }
+        resolvedMode = isLightBackground(baseColors.first.flatMap(hexColor)) == true ? "light" : "dark"
+    }
 
     private func defaultExtended(_ colors: [String], accent: String?) -> [String: String] {
         paletteExtendedDefaults(colors, accent: accent)
@@ -9005,6 +9152,7 @@ final class PaletteModel {
                 var next = colors
                 for i in lockedNow where i < 16 { next[i] = previous[i] }
                 self.baseColors = next
+                self.resolveModeFromPalette()
                 // re-extraction is a whole-palette swap: sliders and curve
                 // reset, like Aether's setPalette
                 self.curve = []
@@ -11224,6 +11372,8 @@ final class PaletteBuilderView: NSView {
         doc.contrast = model.contrastRows()
         doc.modeSeg.index = model.mode == "light" ? 2 : (model.mode == "dark" ? 1 : 0)
         doc.modeSeg.needsDisplay = true
+        doc.modeHint = model.mode == "auto"
+            ? "→ \(model.resolvedMode.capitalized)" : ""
         doc.curveView.points = model.curve
         doc.curveView.histogram = model.histogram
         for slider in doc.sliders {
@@ -11324,6 +11474,7 @@ final class PaletteBuilderView: NSView {
 final class PaletteBuilderDoc: NSView {
     let methodButton = PopupButtonView()
     let modeSeg = SegmentedView()
+    var modeHint = "" { didSet { needsDisplay = true } }
     let inspector = ColorInspectorView()
     let curveView = CurveEditorView()
     let curveResetButton = ButtonView()
@@ -11396,6 +11547,7 @@ final class PaletteBuilderDoc: NSView {
         addSubview(gradientEndWell)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
+
 
     private var contentW: CGFloat { max(0, bounds.width - insetL - insetR) }
 
@@ -11508,6 +11660,13 @@ final class PaletteBuilderDoc: NSView {
     override func draw(_ dirtyRect: NSRect) {
         drawMidLeft("Mode", nerdFont("Bold", 12), palette.accent,
                     x: insetL, midTop: modeTop + 16, height: bounds.height)
+        if !modeHint.isEmpty {
+            let f = nerdFont("Regular", 10)
+            let hx = insetL + advance("Mode", nerdFont("Bold", 12)) + 6
+            drawMidLeft(truncate(modeHint, f, max(0, modeSeg.frame.minX - hx - 8)),
+                        f, palette.muted, x: hx, midTop: modeTop + 16,
+                        height: bounds.height)
+        }
         drawMidLeft("Method", nerdFont("Bold", 12), palette.accent,
                     x: insetL, midTop: methodTop + 16, height: bounds.height)
         drawMidLeft("Presets", nerdFont("Bold", 12), palette.accent,
@@ -14536,7 +14695,6 @@ final class ThemeEditor {
                     var byIndex: [Int: String] = [:]
                     var accent: String? = nil
                     var background: String? = nil
-                    var resolved = "dark"
                     if tc == 0, let text = try? String(contentsOfFile: envFile, encoding: .utf8) {
                         for line in text.split(separator: "\n") {
                             let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
@@ -14548,8 +14706,6 @@ final class ThemeEditor {
                                 background = value
                             } else if parts[0] == "OMACOSY_ACCENT" {
                                 accent = value
-                            } else if parts[0] == "OMACOSY_IS_DARK" {
-                                resolved = value == "1" ? "dark" : "light"
                             }
                         }
                     }
@@ -14559,7 +14715,7 @@ final class ThemeEditor {
                     if colors.count == 16 {
                         DispatchQueue.main.async {
                             self.model.seedDraft(image: wallpaper, colors: colors,
-                                                 accent: accent, resolved: resolved)
+                                                 accent: accent)
                         }
                         return
                     }
@@ -14570,17 +14726,15 @@ final class ThemeEditor {
                 let (c, o) = shell("\(themecoreBin()) palette magic \(q) --roles --json 2>/dev/null")
                 var colors: [String] = []
                 var accent: String?
-                var resolved = "dark"
                 if c == 0, let d = o.data(using: .utf8),
                    let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
                     colors = obj["colors"] as? [String] ?? []
                     accent = obj["accent"] as? String
-                    resolved = (obj["ladder"] as? String) == "light" ? "light" : "dark"
                 }
                 DispatchQueue.main.async {
                     guard colors.count == 16 else { return }
                     self.model.seedDraft(image: wallpaper, colors: colors,
-                                         accent: accent, resolved: resolved)
+                                         accent: accent)
                 }
             }
         }
@@ -19833,7 +19987,7 @@ if CommandLine.arguments.contains("--day-night-selftest") {
 }
 
 // The Themes gallery splits the custom half into a Custom Themes block and
-// an Auto Themes block, each with its own rule and heading. Drive the layout
+// an All Wallpapers block, each with its own rule and heading. Drive the layout
 // with synthetic cells so every mix of the three kinds is checked off-screen.
 func themeSectionsSelfTest() -> Int {
     var failures = 0
@@ -19857,17 +20011,17 @@ func themeSectionsSelfTest() -> Int {
     }
 
     let all = layout([stock, edited, seed])
-    check("all three kinds get a block", all.0 == ["Omarchy Themes", "Custom Themes", "Auto Themes"])
+    check("all three kinds get a block", all.0 == ["Omarchy Themes", "Custom Themes", "All Wallpapers"])
     check("all three kinds get two rules", all.1 == 2)
     check("stock alone gets no rule", layout([stock]).0 == ["Omarchy Themes"] && layout([stock]).1 == 0)
     check("an edition alone gets no rule", layout([edited]).0 == ["Custom Themes"] && layout([edited]).1 == 0)
-    check("a seed alone gets no rule", layout([seed]).0 == ["Auto Themes"] && layout([seed]).1 == 0)
+    check("a seed alone gets no rule", layout([seed]).0 == ["All Wallpapers"] && layout([seed]).1 == 0)
     let noStock = layout([edited, seed])
     check("edited and seed still split without stock",
-          noStock.0 == ["Custom Themes", "Auto Themes"] && noStock.1 == 1)
+          noStock.0 == ["Custom Themes", "All Wallpapers"] && noStock.1 == 1)
     let noEdited = layout([stock, seed])
     check("stock and seed are separated by one rule",
-          noEdited.0 == ["Omarchy Themes", "Auto Themes"] && noEdited.1 == 1)
+          noEdited.0 == ["Omarchy Themes", "All Wallpapers"] && noEdited.1 == 1)
     let empty = layout([])
     check("an empty gallery has no headings", empty.0.isEmpty && empty.1 == 0)
 
@@ -19967,13 +20121,13 @@ func themesViewSelfTest() -> Int {
     func cell(_ title: String, stock: Bool = false,
               edition: String? = nil, favorite: Bool = false,
               accent: String, dominant: String,
-              dominantBuckets: Set<ThemeColorBucket>) -> ThemeCell {
+              dominantBuckets: Set<ThemeColorBucket>, isLight: Bool? = nil) -> ThemeCell {
         ThemeCell(logical: stock ? "stock" : "custom",
                   wallpaper: "/tmp/\(title.replacingOccurrences(of: " ", with: "-")).png",
                   title: title, isCustom: !stock, paletteFile: "",
                   editionID: edition, favorite: favorite,
                   accentHex: accent, dominantHex: dominant,
-                  dominantBuckets: dominantBuckets)
+                  dominantBuckets: dominantBuckets, isLight: isLight)
     }
 
     let buckets: [(String, ThemeColorBucket)] = [
@@ -19985,6 +20139,26 @@ func themesViewSelfTest() -> Int {
         check("\(want.label) maps to its bucket",
               hexColor(hex).map { themeColorBucket(for: $0) } == want)
     }
+
+    check("a pale background reads as light",
+          isLightBackground(hexColor("fdf6e3")) == true)
+    check("a dark background reads as dark",
+          isLightBackground(hexColor("1e1e2e")) == false)
+    check("a missing background is unknown", isLightBackground(nil) == nil)
+    let themeDir = NSTemporaryDirectory()
+        + "omacosy-theme-dir-\(UUID().uuidString)"
+    try? FileManager.default.createDirectory(atPath: themeDir,
+                                             withIntermediateDirectories: true)
+    try? "background = \"#fdf6e3\"\nforeground = \"#000000\"\n"
+        .write(toFile: themeDir + "/colors.toml", atomically: true, encoding: .utf8)
+    check("a theme directory's palette background is read",
+          isLightBackground(themeDirectoryBackground(themeDir)) == true)
+    try? FileManager.default.removeItem(atPath: themeDir + "/colors.toml")
+    try? "#!/usr/bin/env bash\nexport BAR_BG_SOLID=0xff1e1e2e\n"
+        .write(toFile: themeDir + "/sketchybar.sh", atomically: true, encoding: .utf8)
+    check("the bar background is the fallback",
+          isLightBackground(themeDirectoryBackground(themeDir)) == false)
+    try? FileManager.default.removeItem(atPath: themeDir)
 
     let mixed = themeDominantSummary(colors: ["#DC1414", "#000000", "#06A200"],
                                      weights: [0.70, 0.25, 0.05])
@@ -20005,38 +20179,53 @@ func themesViewSelfTest() -> Int {
         + "omacosy-themes-view-\(UUID().uuidString).json"
     var saved = ThemesViewPrefs()
     saved.sort = ThemesSortMode.accent.rawValue
-    saved.sections["stock"] = false
+    saved.appearance = ThemesAppearanceFilter.night.rawValue
     saved.colors = ["red", "not-a-colour"]
     saved.save(to: path)
     let loaded = ThemesViewPrefs.load(from: path)
     check("view preferences round-trip",
-          loaded.sort == "accent" && loaded.sections["stock"] == false
+          loaded.sort == "accent" && loaded.appearance == "night"
               && loaded.colors == ["red"])
     try? FileManager.default.removeItem(atPath: path)
     check("missing view preferences fall back to the defaults",
           ThemesViewPrefs.load(from: path) == ThemesViewPrefs())
+    let old = #"{"sort":"dominant","sections":{"stock":false,"custom":true,"auto":false},"colors":["red"]}"#
+    try? old.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
+    let oldLoaded = ThemesViewPrefs.load(from: path)
+    check("an older file with one section becomes that scope",
+          oldLoaded.sort == "dominant" && oldLoaded.appearance == "custom"
+              && oldLoaded.colors == ["red"])
+    try? FileManager.default.removeItem(atPath: path)
+    let oldMixed = #"{"sort":"dominant","sections":{"stock":false,"custom":true,"auto":true},"colors":[]}"#
+    try? oldMixed.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
+    check("an older multi-section file falls back to All Themes",
+          ThemesViewPrefs.load(from: path).appearance == "all")
+    try? FileManager.default.removeItem(atPath: path)
+    var badAppearance = ThemesViewPrefs()
+    badAppearance.appearance = "sepia"
+    check("an unknown appearance falls back to all themes",
+          badAppearance.normalized().appearance == ThemesAppearanceFilter.all.rawValue)
 
     let tab = ThemesTabView(frame: NSRect(x: 0, y: 0, width: 860, height: 720))
     tab.debugDisablePrefsWrite()
+    tab.debugSetAppearance(.all)
     let stockB = cell("Stock B", stock: true, accent: "#ff0000",
-                      dominant: "#ff0000", dominantBuckets: [.red])
+                      dominant: "#ff0000", dominantBuckets: [.red], isLight: false)
     let stockA = cell("Stock A", stock: true, accent: "#0000ff",
-                      dominant: "#0000ff", dominantBuckets: [.blue])
+                      dominant: "#0000ff", dominantBuckets: [.blue], isLight: true)
     let zulu = cell("Zulu", edition: "zulu", favorite: true,
                     accent: "#0000ff", dominant: "#0000ff",
-                    dominantBuckets: [.blue])
+                    dominantBuckets: [.blue], isLight: false)
     let alpha = cell("Alpha", edition: "alpha", accent: "#00ff00",
-                     dominant: "#ff0000", dominantBuckets: [.red])
+                     dominant: "#ff0000", dominantBuckets: [.red], isLight: true)
     let beta = cell("Beta", edition: "beta", accent: "#ff0000",
-                    dominant: "#00ff00", dominantBuckets: [.green])
+                    dominant: "#00ff00", dominantBuckets: [.green], isLight: false)
     let auto1 = cell("Wallpaper #1", accent: "#ffff00",
-                     dominant: "#ff0000", dominantBuckets: [.red])
+                     dominant: "#ff0000", dominantBuckets: [.red], isLight: true)
     let auto2 = cell("Wallpaper #2", accent: "#ff0000",
                      dominant: "#ffff00", dominantBuckets: [.yellow])
     tab.debugSetAllCells([stockB, stockA, zulu, alpha, beta, auto1, auto2])
-    tab.debugSetSection("stock", true)
-    tab.debugSetSection("custom", true)
-    tab.debugSetSection("auto", true)
+    tab.debugSetAppearance(.all)
     tab.debugSetColors([])
 
     tab.debugSetSort(.alphabetical)
@@ -20053,30 +20242,55 @@ func themesViewSelfTest() -> Int {
                                        "Alpha", "Beta", "Wallpaper #1", "Wallpaper #2"])
     check("the Sort label follows the choice", tab.debugSortLabel() == "Sort: Dominant")
 
-    tab.debugSetSection("stock", false)
+    check("pinning auto-dark to dark does not re-extract the palette",
+          !modeChangeReExtractsPalette(method: "neon", previous: "dark", next: "dark"))
+    check("a magic mode flip never re-extracts the palette",
+          !modeChangeReExtractsPalette(method: "magic", previous: "light", next: "dark"))
+    check("a real non-magic mode flip re-extracts the palette",
+          modeChangeReExtractsPalette(method: "neon", previous: "light", next: "dark"))
+
+    tab.debugSetSort(.alphabetical)
+    tab.debugSetAppearance(.light)
+    check("the light filter keeps only light backgrounds",
+          tab.debugVisibleTitles() == ["Stock A", "Alpha", "Wallpaper #1"])
+    tab.debugSetAppearance(.dark)
+    check("the dark filter keeps only dark backgrounds, and drops unknown ones",
+          tab.debugVisibleTitles() == ["Stock B", "Zulu", "Beta"])
+    check("the Filter label follows the choice", tab.debugAppearanceLabel() == "Filter: Dark")
+    tab.debugSetAppearance(.favorite)
+    check("the favorites filter keeps only starred editions",
+          tab.debugVisibleTitles() == ["Zulu"])
+    check("the Favorites label follows the choice",
+          tab.debugAppearanceLabel() == "Filter: Favorites")
+    tab.debugSetDayNight(day: "theme:alpha", night: "theme:zulu")
+    tab.debugSetAppearance(.day)
+    check("the day filter keeps the card set as the day theme",
+          tab.debugVisibleTitles() == ["Alpha"])
+    tab.debugSetAppearance(.night)
+    check("the night filter keeps the card set as the night theme",
+          tab.debugVisibleTitles() == ["Zulu"])
+    tab.debugSetAppearance(.all)
+    tab.debugSetDayNight(day: "", night: "")
+    check("All shows every card again",
+          tab.debugVisibleTitles() == ["Stock B", "Stock A", "Zulu",
+                                       "Alpha", "Beta", "Wallpaper #1", "Wallpaper #2"])
+
+    tab.debugSetAppearance(.omarchy)
     var counts = tab.debugVisibleCounts()
-    check("unchecking Omarchy hides only that section",
-          counts.stock == 0 && counts.custom == 3 && counts.auto == 2)
-    tab.debugSetSection("stock", true)
-    tab.debugSetSection("custom", false)
+    check("the Omarchy scope shows only stock themes",
+          counts.stock == 2 && counts.custom == 0 && counts.auto == 0
+              && tab.debugVisibleTitles() == ["Stock B", "Stock A"])
+    tab.debugSetAppearance(.custom)
     counts = tab.debugVisibleCounts()
-    check("unchecking Custom hides only that section",
-          counts.stock == 2 && counts.custom == 0 && counts.auto == 2)
-    tab.debugSetSection("custom", true)
-    tab.debugSetSection("auto", false)
+    check("the Custom scope shows only saved editions",
+          counts.stock == 0 && counts.custom == 3 && counts.auto == 0
+              && tab.debugVisibleTitles() == ["Zulu", "Alpha", "Beta"])
+    tab.debugSetAppearance(.auto)
     counts = tab.debugVisibleCounts()
-    check("unchecking Auto hides only that section",
-          counts.stock == 2 && counts.custom == 3 && counts.auto == 0)
-    tab.debugSetSection("auto", true)
-    tab.debugSetSection("stock", false)
-    tab.debugSetSection("custom", false)
-    tab.debugSetSection("auto", false)
-    check("all sections off gets the quiet empty state",
-          tab.debugVisibleTitles().isEmpty
-              && tab.debugEmptyMessage() == "No sections selected. Tick a section to show its themes.")
-    tab.debugSetSection("stock", true)
-    tab.debugSetSection("custom", true)
-    tab.debugSetSection("auto", true)
+    check("the All Wallpapers scope shows only raw wallpapers",
+          counts.stock == 0 && counts.custom == 0 && counts.auto == 2
+              && tab.debugVisibleTitles() == ["Wallpaper #1", "Wallpaper #2"])
+    tab.debugSetAppearance(.all)
 
     tab.debugSetColors([.red])
     check("one colour keeps every red card",
@@ -20093,10 +20307,10 @@ func themesViewSelfTest() -> Int {
 
     tab.debugSetColors([.red])
     tab.debugSetSort(.accent)
-    tab.debugSetSection("auto", false)
+    tab.debugSetAppearance(.auto)
     let prefs = tab.debugPrefs()
     check("the controls update the remembered preferences",
-          prefs.sort == "accent" && prefs.sections["auto"] == false
+          prefs.sort == "accent" && prefs.appearance == "auto"
               && prefs.colors == ["red"])
 
     print(failures == 0 ? "themes-view selftest: all checks passed"
@@ -20122,6 +20336,9 @@ func themesScrollSelfTest() -> Int {
     let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 720),
                        styleMask: .borderless, backing: .buffered, defer: false)
     let tab = ThemesTabView(frame: NSRect(x: 0, y: 0, width: 860, height: 720))
+    tab.debugDisablePrefsWrite()
+    tab.debugSetAppearance(.all)
+    tab.debugSetColors([])
     win.contentView = tab
     tab.layoutSubtreeIfNeeded()
     let top = tab.debugTopY()
@@ -20158,6 +20375,22 @@ func themesScrollSelfTest() -> Int {
     check("the up arrow jumps to the top", abs(tab.debugOriginY() - top) < 1)
     check("at the top, the arrow offers the bottom again",
           !tab.debugJumpHidden() && !tab.debugJumpUp())
+    tab.debugScrollToBottom()
+    tab.debugSetAppearance(.custom)
+    tab.layoutSubtreeIfNeeded()
+    check("a filter change jumps to the top of the filtered grid",
+          abs(tab.debugOriginY() - tab.debugTopY()) < 1)
+    let only = ThemeCell(logical: "custom", wallpaper: "/tmp/only.png",
+                         title: "Only Theme", isCustom: true, paletteFile: "",
+                         editionID: "only-theme", isLight: false)
+    tab.debugSetAllCells([only])
+    tab.debugSetAppearance(.custom)
+    tab.layoutSubtreeIfNeeded()
+    let contentH = tab.debugGridContentHeight()
+    check("a short result fills the viewport instead of sitting at the bottom",
+          contentH >= tab.debugClipHeight() - 0.5)
+    check("a short result's only card sits at the top",
+          tab.debugCellFrame(0).map { $0.maxY > contentH - 60 } == true)
     print(failures == 0 ? "themes-scroll selftest: all checks passed"
                         : "themes-scroll selftest: \(failures) failed")
     return failures

@@ -2,6 +2,7 @@ accent = "#cba6f7"
 cursor = "#f5e0dc"
 foreground = "#cdd6f4"
 background = "#1e1e2e"
+mode = "dark"
 selection_foreground = "#cdd6f4"
 selection_background = "#585b70"
 

@@ -25,7 +25,7 @@ accent for Magic — so any applied palette keeps Omacosy's chrome on theme. The
 desktop surface by itself.
 
 Magic's slot 0 is the wallpaper theme's own background — the same
-`OMACOSY_BG` the auto themes draw on, not the ANSI black one rung above it —
+`OMACOSY_BG` the wallpaper-derived themes draw on, not the ANSI black one rung above it —
 so its terminal preview is as deep as an Aether preset's instead of washing
 out over the wallpaper.
 
@@ -118,12 +118,12 @@ a new control should follow it rather than copy a number from somewhere else.
 
 Every picture in the wallpaper folder (set in the **Storage** tab) is already a
 theme of its own: the Themes
-tab shows each as a `Wallpaper #N` cell under the **Auto Themes** heading,
+tab shows each as a `Wallpaper #N` cell under the **All Wallpapers** heading,
 whose colours come from that picture (the same Magic extraction the raw cells
 use).
 **Customize** on a raw cell opens the editor on a new, unsaved theme; **Save**
 or **Apply & Save** stores it as a named **edition**, and from then on it sits
-in the **Custom Themes** section above the auto themes — a rule and a section
+in the **Custom Themes** section above the All Wallpapers cards — a rule and a section
 title keep the two apart — sorted A→Z, with its own name and card — **Edit**
 reopens it. With an untouched Magic palette the edition and the raw cell it
 came from write byte-identical desktop files; an edition is the picture's own
@@ -173,21 +173,15 @@ command:
 omacosy-themecore theme favorite <id>          # --off clears it
 ```
 
-## Sorting, filtering and sections
+## Sorting and filtering
 
-The Themes tab has a fixed filter row between the tab strip and the grid:
+The gallery runs from just under the tab strip to the footer; the footer has
+two rows:
 
-- **Section row.** **Omarchy Themes**, **Custom Themes** and **Auto Themes**
-  checkboxes, centred. All three sections start ticked; unticking one hides its
-  block.
-
-Below the gallery, the footer has two rows:
-
-- **Colour row.** The **Color** caption and the nine wallhaven swatches — Red,
-  Orange, Yellow, Green, Blue, Purple, Black, Gray, White — and **Sort** sit
-  together as one centred group (they are all about colour). The swatches are
-  always visible and multi-select, with a **Clear** action once something is
-  chosen.
+- **Colour row.** The **Color** caption, the nine wallhaven swatches — Red,
+  Orange, Yellow, Green, Blue, Purple, Black, Gray, White — **Sort** and
+  **Filter** sit together as one centred group. The swatches are always
+  visible and multi-select, with a **Clear** action once something is chosen.
 - **Selection row.** **Select** (or **Done**) centred, with **Delete N** beside
   it while a selection is live. There is no status/notification line; the
   star, the Active pill and the cards themselves are the feedback.
@@ -203,7 +197,31 @@ or the derived theme's `ACCENT`); Dominant uses the wallpaper's own extracted
 dominant colour. Both order by hue around the wheel with low-saturation
 colours last. **Omarchy Themes are fixed and are not sorted.**
 
-**Filter** is cumulative OR: a theme is shown when **any** selected colour
+**Filter** is one choice: **All Themes** (the default), **Omarchy Themes**,
+**Custom Themes**, **All Wallpapers**, **Favorite Themes**, **Light Themes**,
+**Dark Themes**, **Day Theme** or **Night Theme**. The three section scopes
+replace the old checkboxes, so Custom Themes and All Wallpapers are now
+alternatives rather than a combination. **Favorite Themes** keeps only the
+starred named editions; stock themes and `Wallpaper #N` cells have no record of
+their own, so they can never be favorites. Light
+and dark are read from the theme's **code palette background** — the palette's
+own background colour, not the wallpaper picture. For a stock or exported `colors.toml` that is its
+`background` key; for a saved edition it is `palette.colors[0]`; for an All
+Wallpapers cell it is the derived theme's own `colors.toml` background,
+falling back to the bar background. In particular it is **not** the 16-colour
+strip's ANSI black, which is a shade of the background and made light themes
+read as dark. The **Mode** control is a generation setting, not the
+classifier: **Auto** means "resolve from the palette", and the editor shows
+`Mode → Dark` or `Mode → Light` beside the heading. Choosing **Dark** or
+**Light** pins the generation mode; when the resolved half does not change it
+leaves the palette, the adjustments, the curve and the pinned colours
+untouched. Day and Night are not theme properties; they show the one card
+assigned as the day theme or the night theme in
+`~/.config/omacosy/themes.conf`. A brand-new wallpaper with no derived palette
+yet is derived in the background and then joins Light and Dark; until then it
+is left out. The filter combines with the colour filter.
+
+**Colour filter** is cumulative OR: a theme is shown when **any** selected colour
 appears among its **wallpaper's** dominant colours, not the generated theme
 palette. The dominant extraction returns colours with perceptual weights; the
 top bucket always counts, and further buckets join it when they cover at least
@@ -222,9 +240,15 @@ omacosy-themecore palette dominant PICTURE --json --count 24
 ```
 
 
-Sort, the colour filter and the three section checks are remembered across
-reopens in `~/.local/state/omacosy/dashboard/themes-view.json`. A missing or
-damaged file falls back to Alphabetical, all sections and no colour filter.
+Sort, the Filter and the colour filter are remembered across reopens in
+`~/.local/state/omacosy/dashboard/themes-view.json`. A missing or damaged file
+falls back to Alphabetical, All Themes and no colour filter. An older file
+that still holds the three section checks becomes a single scope when exactly
+one was ticked; any other combination falls back to **All Themes**. Changing
+the Filter or a colour swatch scrolls the gallery back to the top of the new
+result; applying a theme or saving an edit keeps the current viewport. A short
+result still fills the viewport, so a single Day/Night card sits at the top
+rather than at the bottom of an empty grid.
 
 ## Exporting a theme
 
@@ -251,7 +275,7 @@ A full bundle is 17 files (16 when the theme has no per-app overrides or syntax 
 | File | What it is |
 | --- | --- |
 | `<id>.toml` | the theme record — the same file Omacosy keeps in `~/.config/omacosy/themes/` (an older bundle's `<id>.json` imports too) |
-| `colors.toml` | the flat 22-key Omarchy palette |
+| `colors.toml` | the flat Omarchy palette plus its resolved `mode` (23 keys) |
 | `zed.json` | Zed theme |
 | `neovim.lua` | Neovim scheme (`omacom/aether.nvim`, LazyVim) |
 | `vscode-extension/` | a VS Code colour-theme extension (`package.json`, `themes/theme.json`) |
@@ -280,7 +304,10 @@ written into a bundle.
 **From the editor.** Press **Import** and pick a file. Three formats are read:
 
 - Omacosy's own theme record, TOML (and the JSON an older bundle carries);
-- a flat Omarchy `colors.toml` (the 22-key shape the stock themes use);
+- a flat Omarchy `colors.toml` (the 22-key shape the stock themes use, plus an
+  optional `mode = "auto" | "dark" | "light"` carrying the editor's generation
+  mode; omitted means auto. The appearance filter ignores it and reads the
+  palette's background);
 - a Base16 scheme (YAML). The format is sniffed from the content, so a
   correctly-named file needs no flag.
 

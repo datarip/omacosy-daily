@@ -177,8 +177,9 @@ Motion is rare, short, and always says that something arrived.
 ## Dropdowns
 
 A dropdown is never a native menu (the glass `NSMenu`): the Theme Editor's
-Method and Presets pickers, and the Wallpapers tab's **Sort Order** and
-**Aspect Ratio** pickers, all use one component.
+Method and Presets pickers, the Themes tab's **Sort** and **Filter**, and the
+Wallpapers tab's **Sort Order** and **Aspect Ratio** pickers, all use one
+component.
 
 - **The trigger** (`PopupButtonView`, `WHDropdown`) is a `windowCornerRadius(6)`
   box: `palette.itemBG` at 0.35, a 1 px `palette.muted` border at 0.35, the
@@ -228,8 +229,8 @@ puts the centre on 16). All are Bold 13 accent. A new tab must put its first
 title on the same 16 pt line.
 
 **The Themes gallery sections.** The gallery is one list of titled blocks:
-**Omarchy Themes**, then **Custom Themes** (the saved editions), then **Auto
-Themes** (the raw `Wallpaper #N` pictures whose auto themes they seed). Each
+**Omarchy Themes**, then **Custom Themes** (the saved editions), then **All
+Wallpapers** (the raw `Wallpaper #N` pictures). Each
 block is a Bold 13 accent heading on a 34 pt header, 8 pt above its first
 card. A block with no cells is left out, and the first block opens with no
 rule above it. Between blocks a 1 px `palette.muted` hairline at 0.25 sits
@@ -245,14 +246,12 @@ the **Custom Themes** block, A→Z within each group. The star is the
 confirmation; there is no separate notification. Stock and `Wallpaper #N`
 cards have no record, so they never show one.
 
-**The Themes filter row.** A fixed 34 pt strip between the tab strip and the
-gallery, with the three `LabeledCheckView`s (18 pt box, 6 pt gap, Regular 12
-label, 16 pt between controls) centred horizontally.
-
 **The Themes bottom panel.** A solid `palette.barBG` bar, 76 pt tall, with no
 hairline. It has two rows: the muted Regular 11 **Color** label, the nine
-20 × 20 swatches with 6 pt gaps and the `WHDropdown` Sort (170 × 24), 20 pt
-after the swatches, as one combined group centred in the strip; below it, the
+20 × 20 swatches with 6 pt gaps, the `WHDropdown` Sort (170 × 24) 20 pt after
+the swatches, and the `WHDropdown` Filter (170 × 24) 12 pt after Sort, as one
+combined group centred in the strip; the Filter also selects the
+Omarchy / Custom / All Wallpapers scope, so the old 34 pt top row is gone. Below it, the
 **Select** / **Done** button (96 × 24) centred, with **Delete N** 8 pt to its
 left while a selection is live. A muted **Clear** text action sits at the far
 right only while a swatch is selected. Selected swatches use the 2 pt

@@ -394,7 +394,7 @@ with seven tabs:
 - **Themes** — every theme as a card with its colours; click one to apply it.
   The stock themes sit under **Omarchy Themes**; a rule and a **Custom
   Themes** section follow with your saved variations, then a second rule and
-  **Auto Themes** with your own pictures as `Wallpaper #N` (each picture is a
+  **All Wallpapers** with your own pictures as `Wallpaper #N` (each picture is a
   theme of its own), so the two custom kinds read as separate lists.
   The theme in use carries a green **Active** pill, each saved variation
   gets a named card of its own, and its picture
@@ -411,19 +411,25 @@ with seven tabs:
   bottom-right corner jumps straight to the far end in the direction you
   last scrolled.
 
-  A fixed filter row above the grid centres the **Omarchy Themes**, **Custom
-  Themes** and **Auto Themes** checkboxes. Below the gallery, the footer has
-  two rows: the **Color** caption and nine wallhaven swatches grouped with
+  The gallery runs from just under the tabs to the footer, which has two
+  rows: the **Color** caption and nine wallhaven swatches grouped with
   **Sort** (**Alphabetical**, **Accent**, or **Dominant** by the wallpaper's
-  own perceived colour, with neutrals last and Omarchy fixed), then **Select** /
-  **Done** centred, with **Delete N** beside it while selecting. The swatches
+  own perceived colour, with neutrals last and Omarchy fixed) and **Filter**
+  (**All Themes**, **Omarchy Themes**, **Custom Themes**, **All Wallpapers**,
+  **Favorite Themes**, **Light Themes**, **Dark Themes**, **Day Theme**,
+  **Night Theme** — one at a time), then **Select** / **Done** centred, with
+  **Delete N** beside it while selecting. Favorites are the starred named
+  editions; light and dark come from the theme's **code palette background**
+  (the editor's Auto resolves to it and shows `Mode → Dark` or
+  `Mode → Light`), and Day and Night are the two cards assigned in
+  `themes.conf`. The swatches
   are multi-select and keep themes whose **wallpaper** contains any selected
   dominant colour. The footer is vertically centred in its strip: a 20 pt gap
   above the colour row matches the modal's 20 pt bottom padding. A colour counts as dominant when it
   covers at least 15% of the wallpaper's weighted dominant colours (the top
   colour always counts), so a small syntax accent does not make a red picture
-  answer Green. Unticking a section hides it, sections with no match are
-  hidden, and the choices are remembered between visits.
+  answer Green. The filter is one choice at a time; a section with no
+  matching card is hidden, and the choices are remembered between visits.
 - **Wallpapers** — browses **wallhaven.cc**: a search row (query, sorting,
   order), category and purity chips, a resolution dropdown, **More Filters**
   (colour and ratio), S/M/L cards and a results count. It fetches three pages
@@ -793,7 +799,8 @@ image you like. Switching themes restarts at the theme's first
 wallpaper.
 
 Themes: `tokyo-night`, `catppuccin`, `gruvbox`, `osaka-jade`. Each
-`themes/<name>/` holds `colors.toml` (omarchy's 22-color palette),
+`themes/<name>/` holds `colors.toml` (omarchy's 22-color palette plus a
+`mode = "auto" | "dark" | "light"` key, missing meaning auto),
 `sketchybar.sh` / `borders.sh` (bar and ring colors; the file keeps its
 omarchy name and format, and the ring uses the theme accent, omarchy's
 own convention), and `backgrounds/` (wallpapers from omarchy's
