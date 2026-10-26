@@ -300,6 +300,12 @@ a prompt, so the one on screen keeps the old colors. `omacosy-term-auto-theme` s
 SIGWINCH, and `zsh/zshrc` traps it, re-runs Starship's own precmd and redraws
 the line.
 
+The shipped prompt config raises Starship's 30 ms directory-scan limit to
+100 ms (`scan_timeout = 100`). The first prompt in a big folder otherwise gives
+up scanning and prints two WARN lines before drawing; the extra time is only
+spent on that first scan. The generated `starship.toml` inherits the value from
+`config/starship-omacosy.template.toml`.
+
 Two details that cost an afternoon, kept here so they are not learned twice:
 
 - A login shell is called `-zsh`, not `zsh`. A filter matching `zsh` or

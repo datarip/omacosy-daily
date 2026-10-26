@@ -22,6 +22,10 @@ $time\
 # Disable the blank line at the start of the prompt
 add_newline = false
 
+# Milliseconds to spend scanning the current directory before giving up.
+# The default 30 ms is too tight on large folders and prints a WARN line.
+scan_timeout = 100
+
 # You can also replace your username with a neat symbol like  to save some space
 [username]
 show_always = true

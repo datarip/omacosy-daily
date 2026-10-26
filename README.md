@@ -528,7 +528,7 @@ The keys and the daemons run these. You do not need to run them:
 | System glue | `omacosy-helper` (self-compiled) | `helper/main.swift` |
 | Your settings | `omacosy-settings` | `config/settings.template.conf` (live copy: `~/.config/omacosy/settings.conf`) |
 | Settings | `omacosy-dashboard` (self-compiled accessory app on Super+,; its wordmark intro is a native take on [ttfx](https://github.com/omacom/ttfx), MIT) | `helper/dashboard.swift`, `bin/omacosy-dashboard`, `helper/assets/omacosy-logo.*` |
-| Prompt | starship | `config/starship.toml` |
+| Prompt | starship (`scan_timeout = 100`, so a large folder does not warn before the first prompt) | `config/starship.toml` |
 | Shell | zsh | `zsh/zshrc` + your `~/.zshrc.local` |
 | CLI stack | fzf, eza, zoxide, ripgrep, bat, lazygit, btop | wired in `zsh/zshrc` |
 | More terminal tools, opt-in | `./install.sh --tui-tools` installs neovim, git-delta, tmux and fastfetch, the tools `omacosy-term-auto-theme` colours beyond the ones above. Only the missing ones are installed, and `uninstall.sh` removes what it added | `install.sh` |
