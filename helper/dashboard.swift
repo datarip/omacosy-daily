@@ -1493,31 +1493,72 @@ func iconForBundle(_ id: String) -> NSImage? {
     return img
 }
 
-func installedApps() -> [AppInfo] {
-    let dirs = ["/Applications", "/System/Applications", HOME + "/Applications"]
+// Where a Mac keeps its apps. Order matters: the walk takes the first copy
+// of a bundle id it meets, so a top-level app wins over the same app nested
+// in a vendor folder.
+func appShelfRoots() -> [String] {
+    ["/Applications", "/System/Applications", HOME + "/Applications"]
+}
+
+// A vendor's folder holds more than the app: an uninstaller, a licence
+// reader, a tool its installer needs. None of them is something anyone
+// tiles into a workspace, and Roland Cloud alone would add twenty.
+func isAppShelfNoise(bundleID: String, name: String) -> Bool {
+    let bid = bundleID.lowercased()
+    let n = name.lowercased()
+    return bid.contains("uninstall") || n.contains("uninstall")
+}
+
+// The app shelf, walked all the way down. One level was not enough: macOS
+// keeps Terminal and every other utility in /System/Applications/Utilities,
+// and installers from Python to KORG to Roland Cloud make their own folder.
+// A scan that stopped at the top level hid all of them, which read as apps
+// having gone missing. Every app inside an .app is a helper, never a shelf
+// entry, so the walk stops at the bundle. `includingRunning` adds whatever
+// is running from outside these roots — an external volume, a build folder —
+// so an app in use can never be missing from the list.
+func installedApps(in roots: [String] = appShelfRoots(),
+                   includingRunning: Bool = true) -> [AppInfo] {
+    let fm = FileManager.default
     var seen = Set<String>()
     var out: [AppInfo] = []
-    for dir in dirs {
-        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) else { continue }
-        for e in entries where e.hasSuffix(".app") {
-            let path = dir + "/" + e
-            let plist = path + "/Contents/Info.plist"
-            guard let d = NSDictionary(contentsOfFile: plist),
-                  let bid = d["CFBundleIdentifier"] as? String, !bid.isEmpty,
-                  !seen.contains(bid) else { continue }
-            seen.insert(bid)
-            let name = (d["CFBundleDisplayName"] as? String)
-                ?? (d["CFBundleName"] as? String)
-                ?? String(e.dropLast(4))
-            out.append(AppInfo(bundleID: bid, name: name, path: path))
+    func collect(_ path: String) {
+        let plist = path + "/Contents/Info.plist"
+        guard let d = NSDictionary(contentsOfFile: plist),
+              let bid = d["CFBundleIdentifier"] as? String, !bid.isEmpty,
+              !seen.contains(bid) else { return }
+        let name = (d["CFBundleDisplayName"] as? String)
+            ?? (d["CFBundleName"] as? String)
+            ?? ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+        guard !isAppShelfNoise(bundleID: bid, name: name) else { return }
+        seen.insert(bid)
+        out.append(AppInfo(bundleID: bid, name: name, path: path))
+    }
+    for root in roots {
+        guard let walk = fm.enumerator(atPath: root) else { continue }
+        while let rel = walk.nextObject() as? String {
+            guard rel.hasSuffix(".app") else { continue }
+            var isDir: ObjCBool = false
+            let path = root + "/" + rel
+            guard fm.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { continue }
+            walk.skipDescendants()
+            collect(path)
+        }
+    }
+    if includingRunning {
+        for app in NSWorkspace.shared.runningApplications
+        where app.activationPolicy == .regular {
+            guard let url = app.bundleURL else { continue }
+            collect(url.path)
         }
     }
     return out.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 }
 
 // The app shelf is read once, off the main thread. Reading every
-// Contents/Info.plist in /Applications blocked the modal's first paint; this
-// keeps the window responsive and hands the same list to every caller.
+// Contents/Info.plist under /Applications blocked the modal's first paint, and
+// the deeper walk reads no fewer of them; this keeps the window responsive
+// and hands the same list to every caller.
 final class AppCatalog {
     static let shared = AppCatalog()
     private(set) var apps: [AppInfo] = []
@@ -20930,6 +20971,71 @@ if CommandLine.arguments.contains("--workspace-names-selftest") {
     exit(workspaceNamesSelfTest() == 0 ? 0 : 1)
 }
 
+// The Add App picker's list is only ever this walk, so a wrong walk is
+// invisible until an app is missing from the dropdown. A temp tree stands in
+// for /Applications: a top-level app, the same app again deeper in a vendor
+// folder (the shallow copy must win), one app in a Utilities folder, another
+// in a vendor folder, an uninstaller, and the helpers inside an .app bundle.
+// `includingRunning` is off: the machine's own running apps are not part of
+// what this checks. Like the other doors it runs before the window opens.
+func appShelfSelfTest() -> Int {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) {
+        print("\(ok ? "PASS" : "FAIL")  \(name)")
+        if !ok { failures += 1 }
+    }
+    let tmp = NSTemporaryDirectory() + "omacosy-shelf-selftest-\(ProcessInfo.processInfo.processIdentifier)"
+    defer { try? FileManager.default.removeItem(atPath: tmp) }
+    @discardableResult
+    func makeApp(_ rel: String, id: String, name: String?) -> String {
+        let path = tmp + "/" + rel
+        try? FileManager.default.createDirectory(atPath: path + "/Contents",
+                                                withIntermediateDirectories: true)
+        var d: [String: Any] = ["CFBundleIdentifier": id]
+        if let name { d["CFBundleDisplayName"] = name }
+        (d as NSDictionary).write(toFile: path + "/Contents/Info.plist", atomically: true)
+        return path
+    }
+
+    let top = makeApp("Top.app", id: "test.top", name: nil)                 // falls back to the file name
+    _ = makeApp("Vendor/Top.app", id: "test.top", name: "Top Copy")         // deeper duplicate
+    let vendor = makeApp("Vendor/Vendor App.app", id: "test.vendor", name: nil)
+    let util = makeApp("Utilities/Tool.app", id: "test.tool", name: "Tool")
+    _ = makeApp("Vendor/Uninstall Vendor.app", id: "test.uninstall.vendor", name: "Uninstall Vendor")
+    // a helper inside a real app: never a shelf entry, and it must not
+    // swallow the walk of the folder around it
+    _ = makeApp("Top.app/Contents/Helpers/Helper.app", id: "test.helper", name: "Helper")
+    _ = makeApp("Top.app/Contents/Frameworks/Thing.app", id: "test.thing", name: "Thing")
+
+    let apps = installedApps(in: [tmp], includingRunning: false)
+    let ids = apps.map(\.bundleID)
+    check("the walk finds the app in a sub-folder", ids.contains("test.vendor"))
+    check("and the one in Utilities", ids.contains("test.tool"))
+    check("a helper inside an app is not an app", !ids.contains("test.helper"))
+    check("nor is a framework bundle inside it", !ids.contains("test.thing"))
+    check("an uninstaller is left out", !ids.contains("test.uninstall.vendor"))
+    check("each bundle id appears once", ids.count == Set(ids).count)
+    check("the shallow copy of a duplicate wins",
+          apps.first { $0.bundleID == "test.top" }?.path == top)
+    check("a display name wins over the file name",
+          apps.first { $0.bundleID == "test.tool" }?.name == "Tool")
+    check("an app with no display name falls back to its file name",
+          apps.first { $0.bundleID == "test.top" }?.name == "Top")
+    check("the list is sorted by name",
+          apps.map(\.name) == apps.map(\.name).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending })
+    check("a vendor app carries its full path", vendor.hasSuffix("Vendor App.app") && util.hasSuffix("Tool.app"))
+    check("a root that does not exist is skipped, not fatal",
+          installedApps(in: [tmp + "/nope", tmp], includingRunning: false).count == apps.count)
+
+    print(failures == 0 ? "app shelf selftest: all checks passed"
+                        : "app shelf selftest: \(failures) failed")
+    return failures
+}
+
+if CommandLine.arguments.contains("--app-shelf-selftest") {
+    exit(appShelfSelfTest() == 0 ? 0 : 1)
+}
+
 // The wallpaper editor's preview door (Phase 8b): render the in-process
 // CoreImage preview headlessly so its output can be compared, by hand, with
 // the engine's `image render --max 960`. `--blur` renders the wallpaper.blur
@@ -21119,6 +21225,38 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--contextmenu-
     guard let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
     try? png.write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
     print("wrote \(CommandLine.arguments[2])")
+    exit(0)
+}
+
+// Off-screen render of the Add App picker over the machine's real app shelf,
+// for layout review and for answering "is this app in the list?" without
+// opening the modal. A third argument filters it like the search field does.
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--app-picker-shot" {
+    app.setActivationPolicy(.accessory)
+    palette = loadPalette()
+    let shelf = installedApps()
+    let query = CommandLine.arguments.count >= 4 ? CommandLine.arguments[3].lowercased() : ""
+    let shown = query.isEmpty ? shelf : shelf.filter { $0.name.lowercased().contains(query) }
+    let v = PickerRoot(frame: NSRect(x: 0, y: 0, width: 340, height: 430))
+    v.showsSearch = true
+    v.list.apps = shown
+    v.search.placeholderString = "Search apps"
+    v.needsLayout = true
+    v.layoutSubtreeIfNeeded()
+    v.relayout()
+    // The list itself, top slice: the scroll view's document view loses its
+    // orientation when a capture goes through the clip view, so the rows are
+    // drawn into their own bitmap instead. Same reason the shot is not of the
+    // whole card — only the rows are being reviewed.
+    let slice = min(430, v.list.frame.height)
+    let rect = NSRect(x: 0, y: v.list.bounds.height - slice,
+                      width: v.list.bounds.width, height: slice)
+    guard let rep = v.list.bitmapImageRepForCachingDisplay(in: rect) else { exit(1) }
+    v.list.cacheDisplay(in: rect, to: rep)
+    guard let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
+    try? png.write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+    print("wrote \(CommandLine.arguments[2]) — shelf \(shelf.count), shown \(shown.count)"
+          + (query.isEmpty ? "" : " for \"\(query)\""))
     exit(0)
 }
 let delegate = AppDelegate()
