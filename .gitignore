@@ -5,7 +5,11 @@
 /omacosy-ffm.app/
 config/apps.local.conf
 config/aerospace/aerospace.toml
-config/omniwm/settings.toml
-config/omniwm/settings.toml.pre-v4
-config/omniwm/settings.toml.corrupt
+# config/omniwm/ is symlinked to the live OmniWM config directory, and the
+# app writes there as it runs: settings.toml, settings.toml.pre-v<N> on each
+# schema migration, shell/ since 0.8.0, and whatever it adds next. Ignore
+# the directory and allow-list only the one file this repo ships, so a new
+# OmniWM release cannot dirty the tree again.
+config/omniwm/*
+!config/omniwm/settings.template.toml
 /theme-media/
