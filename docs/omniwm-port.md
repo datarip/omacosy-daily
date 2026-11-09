@@ -215,6 +215,41 @@ own testing. Per-monitor gaps are also out: OmniWM has
 `[[monitorGapOverrides]]`, but `query displays` does not expose the
 display UUID the override needs, so the one global value stands.
 
+## 0.8.0 (upgraded 2026-11-08)
+
+Cask upgrade, app installed 17:48; the migration ran on the first launch
+after it, at 21:35. Settings went **schema 4 -> 5** with a
+`settings.toml.pre-v5` backup, and the app copied its new **shell** into
+the live config directory.
+
+Schema 5, from OmniWM's own `SettingsTOMLMigration.swift`: v4 added the
+`setWindowMark` / `removeWindowMark` hotkeys Unassigned; v5 renamed the
+six span hotkeys (`setContainerPrimarySpan.*` -> `resizeContainerPrimarySpan.shrink|grow`,
+and the same for the window primary/secondary spans) with bindings kept.
+The v5-only tables (`island`, `launcher`, `statusMenu`, `windowSwitcher`,
+`shellPermissions`, `keyboardModes`) are defaults in a file that predates
+them, so a v3 file still decodes — which is why an old template worked at
+all.
+
+The shell is a new directory beside the settings: `shell/default/`, 84
+Luau/Metal files copied byte-identical from the app's `ShellDefault`
+resource plus a generated `.manifest.json` that records which of them the
+user has not edited. 85 files, 464 KB. It is user-editable and will be
+refreshed by later OmniWM releases.
+
+Both land in the clone, because `~/.config/omniwm` is a symlink to
+`config/omniwm`. On `main`, where `settings.toml` is tracked, that makes
+the clone dirty and stops `omacosy-update` — upstream omacosy issue #43.
+On this fork only `settings.toml.pre-v5` and `shell/` appeared, as
+untracked files; `.gitignore` now ignores the whole directory and
+allow-lists the template, and upstream PR #100 does the same for `main`.
+The template itself now seeds **schema 5**, so a fresh install is not
+migrated on its first launch.
+
+A file *newer* than the running OmniWM is refused, not corrupted: 0.8.0's
+`SettingsFilePersistence` loads defaults and blocks writes. So an older
+OmniWM meeting a schema-5 seed ignores it rather than damaging it.
+
 ## 0.6.8 (upgraded 2026-09-08)
 
 How it broke first: 0.6.8 moved the cask from BarutSRB/tap to
