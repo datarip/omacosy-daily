@@ -89,6 +89,7 @@ The fixes this build offers upstream, and their state today.
 <!-- upstream-prs:start -->
 | PR | State | Title |
 | --- | --- | --- |
+| [#100](https://github.com/paulsp94/omacosy/pull/100) | OPEN | fix(omniwm): ignore the live config directory, keep the shipped file |
 | [#98](https://github.com/paulsp94/omacosy/pull/98) | OPEN | fix(bar): resolve a display by number when its localized name differs |
 | [#95](https://github.com/paulsp94/omacosy/pull/95) | OPEN | feat(launcher): choose and toggle the Super+Space launcher |
 | [#93](https://github.com/paulsp94/omacosy/pull/93) | OPEN | fix(bar): the bar hides in a native fullscreen space |
