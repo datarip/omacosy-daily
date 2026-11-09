@@ -1,5 +1,8 @@
-# OmniWM settings for omacosy — FULL canonical file, schemaVersion 3
-# (0.6.8). Upgrades migrate automatically (backups: settings.toml.pre-v*).
+# OmniWM settings for omacosy — FULL canonical file, schemaVersion 5
+# (0.8.0). Upgrades migrate automatically (backups: settings.toml.pre-v*).
+# Kept at OmniWM's current schema so a fresh install is seeded as-is: an
+# older schema is migrated on its first launch, which writes a
+# settings.toml.pre-v<N> backup the user never asked for.
 # Hyper+arrows bind moveColumn.* — on dwindle that is the true tile
 # SWAP; plain move.* (Ctrl+Opt+Shift+arrows) STACKS into the neighbor
 # as a group. Migration strips comments and reorders tables: the repo
@@ -13,7 +16,7 @@ monitorDwindleOverrides = []
 monitorGapOverrides = []
 monitorNiriOverrides = []
 monitorOrientationOverrides = []
-schemaVersion = 3
+schemaVersion = 5
 
 [appearance]
 mode = "dark"
@@ -894,27 +897,27 @@ id = "resetWindowSecondarySpan"
 
 [[hotkeys]]
 binding = "Option+Minus"
-id = "setContainerPrimarySpan.decrease10Percent"
+id = "resizeContainerPrimarySpan.shrink"
 
 [[hotkeys]]
 binding = "Option+Equal"
-id = "setContainerPrimarySpan.increase10Percent"
+id = "resizeContainerPrimarySpan.grow"
 
 [[hotkeys]]
 binding = "Unassigned"
-id = "setWindowPrimarySpan.decrease10Percent"
+id = "resizeWindowPrimarySpan.shrink"
 
 [[hotkeys]]
 binding = "Unassigned"
-id = "setWindowPrimarySpan.increase10Percent"
+id = "resizeWindowPrimarySpan.grow"
 
 [[hotkeys]]
 binding = "Option+Shift+Minus"
-id = "setWindowSecondarySpan.decrease10Percent"
+id = "resizeWindowSecondarySpan.shrink"
 
 [[hotkeys]]
 binding = "Option+Shift+Equal"
-id = "setWindowSecondarySpan.increase10Percent"
+id = "resizeWindowSecondarySpan.grow"
 
 [[hotkeys]]
 binding = "Option+Shift+B"
@@ -999,6 +1002,14 @@ id = "closeFocusedWindow"
 [[hotkeys]]
 binding = "Control+Option+M"
 id = "openMenuAnywhere"
+
+[[hotkeys]]
+binding = "Unassigned"
+id = "setWindowMark"
+
+[[hotkeys]]
+binding = "Unassigned"
+id = "removeWindowMark"
 
 [[hotkeys]]
 binding = "Unassigned"
