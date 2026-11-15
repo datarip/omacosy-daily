@@ -30,6 +30,12 @@ OMNI="$HOME/.local/bin/omacosy-omni"
 HELPER="$HOME/.local/bin/omacosy-helper"
 DISMISS="/tmp/omacosy-bar-dismiss"
 OMNIWMCTL="$(command -v omniwmctl 2>/dev/null || echo /opt/homebrew/bin/omniwmctl)"
+# Tinycast 0.12.15 (2026-11-14) renamed its bundle identifier from
+# com.tinycast.app to com.abueammar.tinycast. The id is read from the
+# installed app, so a rename cannot leave Super+Space opening another
+# launcher; this constant is only the fallback for a copy that cannot be read.
+TINYCAST_APP="/Applications/Tinycast.app"
+TINYCAST_ID="com.abueammar.tinycast"
 
 valid() {
   case "$1" in
@@ -50,10 +56,22 @@ omniwm_active() {
   [ -x "$OMNI" ] && "$OMNI" active >/dev/null 2>&1
 }
 
+tinycast_id() {
+  local id=""
+  # plutil, not PlistBuddy: PlistBuddy prints "File Doesn't Exist, Will
+  # Create" on stdout for a missing path, which would become the bundle id.
+  id="$(plutil -extract CFBundleIdentifier raw -o - \
+    "$TINYCAST_APP/Contents/Info.plist" 2>/dev/null)" || id=""
+  printf '%s' "${id:-$TINYCAST_ID}"
+}
+
 installed() {
   case "$1" in
     raycast) mdfind "kMDItemCFBundleIdentifier == 'com.raycast.macos'" 2>/dev/null | grep -q . ;;
-    tinycast) mdfind "kMDItemCFBundleIdentifier == 'com.tinycast.app'" 2>/dev/null | grep -q . ;;
+    tinycast)
+      [ -d "$TINYCAST_APP" ] && return 0
+      mdfind "kMDItemCFBundleIdentifier == '$(tinycast_id)'" 2>/dev/null | grep -q .
+      ;;
     alfred) mdfind "kMDItemCFBundleIdentifier == 'com.runningwithcrayons.Alfred'" 2>/dev/null | grep -q . ;;
     omniwm) [ -d /Applications/OmniWM.app ] ;;
     *) return 1 ;;
@@ -116,7 +134,7 @@ open_one() {
       fi
       # -g is the difference from the URL's activate path: the app behind
       # keeps focus, exactly like Tinycast's own Option+Space shortcut.
-      open -g -b com.tinycast.app "tinycast://" >/dev/null 2>&1
+      open -g -b "$(tinycast_id)" "tinycast://" >/dev/null 2>&1
       ;;
     alfred)
       installed alfred || return 1
