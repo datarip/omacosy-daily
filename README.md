@@ -973,7 +973,8 @@ an update replaces omacosy's file and keeps yours.
 | `term-palette.env` | the palette of the theme on screen, `OMACOSY_BG`, `OMACOSY_P0` … `OMACOSY_P15` |
 | `ghostty-theme.conf` | Ghostty, through `config-file = ?…` in the shipped config. The `?` makes it optional |
 | `starship.toml` | Starship, generated from `config/starship-omacosy.template.toml`, whose colors are named by role |
-| `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, `BAT_THEME=ansi` for bat and delta, `LG_CONFIG_FILE` for lazygit, a `fastfetch` function with the colors, and, when omacosy owns the prompt, `STARSHIP_CONFIG` and fzf's colors. Your own values come back on a stock theme |
+| `starship-ansi.toml` | the same prompt with every role naming an ANSI slot, used in an editor terminal so the editor theme colors it |
+| `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, `BAT_THEME=ansi` for bat and delta, `LG_CONFIG_FILE` for lazygit, a `fastfetch` function with the colors, and, when omacosy owns the prompt, `STARSHIP_CONFIG` (hex, or the slot file in an editor terminal) and fzf's colors. Your own values come back on a stock theme |
 | `lazygit-theme.yml` | lazygit's theme keys only, added after your own `config.yml` |
 | `tmux-theme.conf` | tmux, for the band behind the bar |
 | `delta.gitconfig` | delta's line strips |

@@ -181,7 +181,8 @@ when another tool is the applier, because no terminal palette reaches them:
 | --- | --- |
 | `ghostty-theme.conf` | Ghostty, through `config-file = ?~/.config/omacosy/ghostty-theme.conf` in the shipped config |
 | `starship.toml` | Starship, generated from `config/starship-omacosy.template.toml` plus the palette |
-| `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, `BAT_THEME=ansi` (bat and delta then draw in the 16 colours), `STARSHIP_CONFIG`, fzf's `--color` added to your own `FZF_DEFAULT_OPTS`, `LG_CONFIG_FILE` for lazygit, and a `fastfetch` function that adds the colours as options. Your own values are kept and put back on a stock theme, and a `fastfetch` function of your own is never replaced |
+| `starship-ansi.toml` | Starship in an editor terminal: the same prompt with every role naming an ANSI slot, which the editor's theme fills in |
+| `term-env.sh` | `zsh/zshrc`: `EZA_COLORS`, `LS_COLORS`, `BAT_THEME=ansi` (bat and delta then draw in the 16 colours), `STARSHIP_CONFIG` (the hex palette, or `starship-ansi.toml` in an editor terminal), fzf's `--color` added to your own `FZF_DEFAULT_OPTS`, `LG_CONFIG_FILE` for lazygit, and a `fastfetch` function that adds the colours as options. Your own values are kept and put back on a stock theme, and a `fastfetch` function of your own is never replaced |
 | `lazygit-theme.yml` | lazygit, as the last file in `LG_CONFIG_FILE`: only the `gui.theme` keys, so your own `config.yml` keeps everything else. lazygit refuses to start when a named file is missing, so your `config.yml` is named only when it exists. *Both* |
 | `delta.gitconfig` | delta's line strips, through an include in `~/.gitconfig`. *Both* |
 | `tmux-theme.conf` | tmux, through `source-file -q` at the end of `tmux.conf`. *Both* |
@@ -192,6 +193,14 @@ when another tool is the applier, because no terminal palette reaches them:
 The `?` makes Ghostty's include optional, so a machine that never turns this on
 reads no such file. Your own config is read after it, so a color you set by hand
 still wins.
+
+**Editor terminals ignore Ghostty's config.** VS Code, VSCodium, Zed and the
+JetBrains IDEs draw the terminal's 16 colours from the editor theme, so
+`ghostty-theme.conf` means nothing there. `term-env.sh` checks `TERM_PROGRAM`
+and `TERMINAL_EMULATOR`. It points `STARSHIP_CONFIG` at `starship-ansi.toml`,
+where each role names a slot instead of a hex value. The prompt then follows
+the editor theme, and an editor switch to a light terminal gets light prompt
+colours. Everywhere else the hex palette stays exact.
 
 **Another tool as the applier.** omacosy runs `<command> <palette-file>
 <theme-label>` on a custom theme and `<command> --clear <theme-label>` on a
