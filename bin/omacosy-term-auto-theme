@@ -527,15 +527,41 @@ remove_yazi() {
   fi
 }
 
+# An editor's terminal takes its 16 colours and its background from the editor
+# theme, so the repaint must leave that tty alone. The sequences would fight
+# the theme, and a "set" the editor honours would outlive the switch. Walk from
+# the shell up through login to the app that started it, and match the app
+# bundle: VS Code's pty helper and JetBrains' launcher are not named after the
+# editor.
+is_editor_tty() {
+  local t="$1" pid n
+  pid="$(ps -t "$t" -o pid= 2>/dev/null | head -1 | tr -d ' ')"
+  [ -n "$pid" ] || return 1
+  for n in 1 2 3 4 5; do
+    pid="$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')"
+    [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
+    case "$(ps -p "$pid" -o comm= 2>/dev/null)" in
+      *"/Zed.app/"*|*"/Zed Preview.app/"*)
+        return 0 ;;
+      *"/Visual Studio Code.app/"*|*"/VSCodium.app/"*|*"/Cursor.app/"*|*"/Windsurf.app/"*)
+        return 0 ;;
+      *"/Sublime Text.app/"*|*"/Nova.app/"*)
+        return 0 ;;
+      *"/IntelliJ IDEA"*|*"/PyCharm"*|*"/WebStorm"*|*"/GoLand"*|*"/CLion"*)
+        return 0 ;;
+      *"/PhpStorm"*|*"/RubyMine"*|*"/Rider"*|*"/DataGrip"*|*"/DataSpell"*|*"/AppCode"*)
+        return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # Send $1 to the tty of every terminal we own, then make every program on it
 # draw again. The terminal consumes the escape sequences, so a shell running
 # vim or yazi is unharmed.
 #
-# EVERY tty we own, whatever is running on it. The earlier version listed
-# shells only, and a window running yazi or vim has the program in the
-# foreground, not a shell — so the one window that most needed repainting was
-# the one that never got the sequences. (A login shell is also called "-zsh",
-# not "zsh", which is what made the shell-only filter miss those too.)
+# EVERY tty we own, whatever is running on it, EXCEPT an editor's terminal:
+# there the editor owns the palette, so the sequences are skipped.
 to_ttys() {
   local osc="$1" t w
   # a keybinding may run with no USER set, and set -u would stop here
@@ -544,6 +570,7 @@ to_ttys() {
     sort -u |
     while read -r t; do
       [ -w "/dev/$t" ] || continue
+      is_editor_tty "$t" && continue
       if [ -n "$osc" ]; then
         # A terminal that reads nothing would block this write, and the theme
         # switch with it, so the write runs aside and is stopped after 2 s.

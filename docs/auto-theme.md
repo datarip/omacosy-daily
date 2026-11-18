@@ -200,7 +200,8 @@ JetBrains IDEs draw the terminal's 16 colours from the editor theme, so
 and `TERMINAL_EMULATOR`. It points `STARSHIP_CONFIG` at `starship-ansi.toml`,
 where each role names a slot instead of a hex value. The prompt then follows
 the editor theme, and an editor switch to a light terminal gets light prompt
-colours. Everywhere else the hex palette stays exact.
+colours. The repaint skips those ttys as well, so no switch can overwrite the
+editor's palette from outside. Everywhere else the hex palette stays exact.
 
 **Another tool as the applier.** omacosy runs `<command> <palette-file>
 <theme-label>` on a custom theme and `<command> --clear <theme-label>` on a
@@ -302,7 +303,10 @@ switch took the colours Ghostty had at its start.
 A config file does not repaint a window that is open, so `omacosy-term-auto-theme`
 also writes the colors to the tty of every shell as escape sequences (OSC 4,
 10, 11 and 12). The terminal consumes them, so a shell running Neovim or yazi
-is unharmed.
+is unharmed. An editor's terminal is skipped. It draws the palette from its own
+theme, and a sequence the editor honours would outlive the switch. The skip
+walks the tty's process tree, so a VS Code pty helper or a JetBrains launcher
+counts, not only the app's own name.
 
 The prompt needs one more step. Starship builds its prompt string when it draws
 a prompt, so the one on screen keeps the old colors. `omacosy-term-auto-theme` sends
