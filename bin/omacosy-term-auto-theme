@@ -527,6 +527,25 @@ remove_yazi() {
   fi
 }
 
+# The app bundles whose terminal owns its palette. VS Code's pty helper and
+# JetBrains' launcher are not named after the editor, so the bundle path is
+# what identifies them.
+is_editor_app() {
+  case "$1" in
+    *"/Zed.app/"*|*"/Zed Preview.app/"*)
+      return 0 ;;
+    *"/Visual Studio Code.app/"*|*"/VSCodium.app/"*|*"/Cursor.app/"*|*"/Windsurf.app/"*)
+      return 0 ;;
+    *"/Sublime Text.app/"*|*"/Nova.app/"*)
+      return 0 ;;
+    *"/IntelliJ IDEA"*|*"/PyCharm"*|*"/WebStorm"*|*"/GoLand"*|*"/CLion"*)
+      return 0 ;;
+    *"/PhpStorm"*|*"/RubyMine"*|*"/Rider"*|*"/DataGrip"*|*"/DataSpell"*|*"/AppCode"*)
+      return 0 ;;
+  esac
+  return 1
+}
+
 # An editor's terminal takes its 16 colours and its background from the editor
 # theme, so the repaint must leave that tty alone. The sequences would fight
 # the theme, and a "set" the editor honours would outlive the switch. Walk from
@@ -540,18 +559,7 @@ is_editor_tty() {
   for n in 1 2 3 4 5; do
     pid="$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')"
     [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
-    case "$(ps -p "$pid" -o comm= 2>/dev/null)" in
-      *"/Zed.app/"*|*"/Zed Preview.app/"*)
-        return 0 ;;
-      *"/Visual Studio Code.app/"*|*"/VSCodium.app/"*|*"/Cursor.app/"*|*"/Windsurf.app/"*)
-        return 0 ;;
-      *"/Sublime Text.app/"*|*"/Nova.app/"*)
-        return 0 ;;
-      *"/IntelliJ IDEA"*|*"/PyCharm"*|*"/WebStorm"*|*"/GoLand"*|*"/CLion"*)
-        return 0 ;;
-      *"/PhpStorm"*|*"/RubyMine"*|*"/Rider"*|*"/DataGrip"*|*"/DataSpell"*|*"/AppCode"*)
-        return 0 ;;
-    esac
+    is_editor_app "$(ps -p "$pid" -o comm= 2>/dev/null)" && return 0
   done
   return 1
 }
