@@ -203,6 +203,14 @@ the editor theme, and an editor switch to a light terminal gets light prompt
 colours. The repaint skips those ttys as well, so no switch can overwrite the
 editor's palette from outside. Everywhere else the hex palette stays exact.
 
+**A theme without terminal colours gets a default.** The editor fills the gap
+with its own default and does not derive a palette from the theme. Zed refines
+the theme over One Dark or One Light, VS Code uses its registered ANSI
+defaults, and JetBrains uses the Terminal colour scheme setting. The prompt
+then follows that default. Adding the missing `terminal.*` keys restores the
+intended palette. Use `theme_overrides` in Zed, or
+`workbench.colorCustomizations` in VS Code.
+
 **Another tool as the applier.** omacosy runs `<command> <palette-file>
 <theme-label>` on a custom theme and `<command> --clear <theme-label>` on a
 stock one, and writes no terminal config of its own, not even a stale file
